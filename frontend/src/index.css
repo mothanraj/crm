@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --signal: #BAFF39; --signal-hover: #A9E82F; --signal-active: #97D629;
+  --signal-ink: #1A1D00; --signal-wash: #F4FBD9;
+  --graphite: #6E6E6E; --graphite-deep: #2B2E28; --graphite-hover: #5C5C5C;
+  --page: #F5F6F3; --card: #FFFFFF; --inset: #EFF0EA;
+  --ink: #1C1E1A; --body: #3F443B; --muted: #6E6E6E; --inverse: #FFFFFF;
+  --line: #E3E6DF; --input-border: #D8DBD2;
+  --success: #2F9E44; --warning: #E8890C; --error: #E03131; --info: #1971C2;
+}
+[data-theme="dark"] {
+  --page: #141613; --card: #1E211C; --inset: #24281F; --line: #2E332B;
+  --ink: #F2F4EE; --body: #B9BDB2; --muted: #8A8F83; --input-border: #3A3F36;
+}
+
+@layer base {
+  body {
+    @apply bg-graphite-50 text-graphite-900 antialiased;
+  }
+}
+
+@layer components {
+  .input {
+    @apply border border-graphite-300 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-500 bg-white text-graphite-900;
+  }
+  .btn-primary {
+    @apply bg-brand-400 hover:bg-brand-500 active:bg-brand-600 text-signalink font-semibold px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:bg-graphite-200 disabled:text-graphite-400;
+  }
+  .btn-secondary {
+    @apply bg-white border border-graphite-300 hover:bg-graphite-100 text-graphite-700 font-medium px-4 py-2 rounded-lg text-sm transition-colors;
+  }
+  .btn-danger {
+    @apply bg-[#E03131] hover:bg-[#C92A2A] text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors;
+  }
+  .card {
+    @apply bg-white rounded-xl shadow-card border border-graphite-200;
+  }
+  .th {
+    @apply text-left text-xs font-semibold uppercase tracking-wider text-graphite-500 px-4 py-3;
+  }
+  .td {
+    @apply px-4 py-3 text-sm border-t border-graphite-200;
+  }
+}
+
+/* slim scrollbars for sidebar / tables */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { @apply bg-graphite-300 rounded-full; }
