@@ -96,7 +96,7 @@ Quotation `H Parking Type` is cleaner — reuse its names as canonical hints.
 
 DV ranges `U2:U574,W2:W617,…` list 7 names (no Senthilkumaran); **only `U575`** lists 8 with Senthilkumaran. Actual `U`: Kanchana 208, Sundaram 44, Karthik 28, Archith 18, Rajesh 17, Ajith 5, Ram 2, `Ram kumar 1`, Senthilkumaran 1. `W`: Ram 25, Archith 8, Sundaram 5, Ajith 4, Karthik 1, Kanchana 1. `X` free text: Archith 8, Karthik 1, Sundaram 1, `Sundarm 1 [sic]`.
 
-**Seed users (8)**: Kanchana, Karthik, Rajesh, Archith, Sundaram, Ram (merge `Ram kumar`), Ajith, Senthilkumaran. `Sundarm→Sundaram` alias on import.
+**Historical Excel owners (analysis only — not seeded in the app)**: Kanchana, Karthik, Rajesh, Archith, Sundaram, Ram (merge `Ram kumar`), Ajith, Senthilkumaran. `Sundarm→Sundaram` alias on import name matching. Live employees are created by admin after install.
 
 ## 7. Dashboard formulas (must be replaced by PG queries)
 

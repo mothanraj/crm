@@ -1,4 +1,4 @@
-"""Excel import: preview, confirm, review skipped rows, promote wrongly flagged to leads."""
+"""Excel import: selected columns only + admin review of duplicate/invalid rows."""
 import os
 import re
 import tempfile
@@ -7,30 +7,44 @@ from uuid import UUID
 import openpyxl
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import admin_only
 from app.db.session import get_db
-from app.models import ImportBatch, ImportError, Lead, LeadStatus, LeadStatusHistory, User
+from app.models import (
+    ImportBatch, ImportError, Lead, LeadSource, LeadStatus, LeadStatusHistory,
+    Product, ProductAlias, User,
+)
 from app.services.lead_service import auto_assign, next_enquiry_number
-from app.services.normalize import norm_phone, parse_excel_date
+from app.services.normalize import (
+    PRODUCT_ALIASES, SOURCE_ALIASES, norm_key, parse_excel_date, parse_quantity,
+)
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 PENDING: dict[str, list[dict]] = {}
 
-TRACKER_MARKERS = {"enq no", "date received", "lead name", "contact no", "city"}
+# Tracker sheet detection (order-free).
+TRACKER_MARKERS = {"enq no", "date received", "lead name", "city", "lead source"}
+
+# Excel Leads Tracker column indexes (0-based)
+COL_ENQ, COL_DATE, COL_NAME, COL_COMPANY = 0, 1, 2, 3
+COL_CITY, COL_CARS, COL_SOURCE, COL_PRODUCT = 5, 6, 16, 19
 
 
 class ErrorUpdate(BaseModel):
     name: str | None = None
-    phone: str | None = None
     city: str | None = None
+    company: str | None = None
+    cars: str | None = None
+    source: str | None = None
+    product: str | None = None
     enq: str | int | float | None = None
     date: str | None = None
 
 
 class PromoteIn(BaseModel):
-    force: bool = False  # if true, drop conflicting legacy enquiry no and still create
+    force: bool = False
 
 
 def parse_legacy_enq(raw) -> int | None:
@@ -66,9 +80,35 @@ def _default_status(db: Session) -> LeadStatus:
     return st
 
 
+def _norm_source(db: Session, raw: str) -> LeadSource | None:
+    text = (raw or "").strip()
+    if not text:
+        text = "Others"
+    canon = SOURCE_ALIASES.get(norm_key(text), text)
+    src = db.query(LeadSource).filter(func.lower(LeadSource.name) == canon.lower()).first()
+    if src:
+        return src
+    return db.query(LeadSource).filter(func.lower(LeadSource.name) == "others").first()
+
+
+def _norm_product(db: Session, raw: str) -> Product | None:
+    if not raw or not str(raw).strip():
+        return None
+    k = norm_key(str(raw))
+    canon = PRODUCT_ALIASES.get(k, str(raw).strip())
+    p = db.query(Product).filter(func.lower(Product.name) == canon.lower()).first()
+    if p:
+        return p
+    al = db.query(ProductAlias).filter(func.lower(ProductAlias.alias) == k).first()
+    return db.get(Product, al.product_id) if al else None
+
+
+def _cell(r, idx):
+    return r[idx] if len(r) > idx else None
+
+
 def _json_safe_rec(rec: dict) -> dict:
     out = dict(rec)
-    # Ensure JSONB-friendly values
     if "date" in out and out["date"] is not None and not isinstance(out["date"], (str, int, float, bool)):
         out["date"] = str(out["date"])
     out.pop("dup", None)
@@ -84,49 +124,70 @@ def _serialize_error(e: ImportError) -> dict:
         "reason": e.reason,
         "error": e.error,
         "name": raw.get("name", ""),
-        "phone": raw.get("phone", ""),
         "city": raw.get("city", ""),
+        "company": raw.get("company", ""),
+        "cars": raw.get("cars", ""),
+        "source": raw.get("source", ""),
+        "product": raw.get("product", ""),
         "enq": raw.get("legacy_enq", raw.get("enq")),
         "date": raw.get("date"),
         "raw": raw,
     }
 
 
+def _row_issue_messages(db: Session, raw: dict) -> list[str]:
+    msgs: list[str] = []
+    if not str(raw.get("name") or "").strip():
+        msgs.append("missing name")
+    legacy = raw.get("legacy_enq")
+    if legacy is None:
+        legacy = parse_legacy_enq(raw.get("enq"))
+    if legacy is None:
+        msgs.append("missing/invalid enquiry no")
+    elif db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+        msgs.append("duplicate enquiry no")
+    return msgs
+
+
 def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
     name = str(raw.get("name") or "").strip()
-    phone = str(raw.get("phone") or "").strip()
-    city = str(raw.get("city") or "").strip()
     if not name:
         raise HTTPException(400, "Name is required")
-    if not phone:
-        raise HTTPException(400, "Phone is required")
-    phone_n = norm_phone(phone)
-    if not phone_n:
-        raise HTTPException(400, "Invalid phone number")
-    if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-        raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
 
     legacy = raw.get("legacy_enq")
     if legacy is None:
         legacy = parse_legacy_enq(raw.get("enq"))
+    if legacy is None and not force:
+        raise HTTPException(400, "Enquiry number is required — correct it first")
     if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
         if force:
-            legacy = None  # keep unique CRM enquiry; drop conflicting excel enq
+            legacy = None
         else:
             raise HTTPException(
                 400,
-                "Enquiry number already exists. Correct it, or promote with force to create without that Excel enquiry no.",
+                "Enquiry number already exists. Correct it, or Force add to create without that Excel enquiry no.",
             )
 
+    company = str(raw.get("company") or "").strip()
+    city = str(raw.get("city") or "").strip()
+    cars = str(raw.get("cars") or "").strip()
+    src = _norm_source(db, str(raw.get("source") or ""))
+    prod = _norm_product(db, str(raw.get("product") or ""))
     st = _default_status(db)
+
     lead = Lead(
         enquiry_number=next_enquiry_number(db),
         legacy_enquiry_no=legacy,
         enquiry_date=parse_excel_date(raw.get("date")),
         customer_name=name,
-        contact_number=phone,
-        contact_number_norm=phone_n,
+        company_name=company,
+        contact_number="",
+        contact_number_norm="",
         city=city,
+        quantity_raw=cars,
+        quantity_num=parse_quantity(cars),
+        source_id=src.id if src else None,
+        product_id=prod.id if prod else None,
         status_id=st.id,
         sla_state="PENDING",
         created_by=admin.id,
@@ -178,43 +239,36 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "Please select the tracker sheet.")
 
     preview, duplicates, invalids = [], [], []
-    seen_phones: set[str] = set()
     seen_enqs: set[int] = set()
     for i, r in enumerate(rows[1:], start=2):
         if not any(r):
             continue
+        date_v = _cell(r, COL_DATE)
+        if date_v is not None and not isinstance(date_v, (str, int, float, bool)):
+            date_v = str(date_v)
         rec = {
             "row": i,
-            "enq": r[0] if len(r) > 0 else None,
-            "date": r[1] if len(r) > 1 else None,
-            "name": str(r[2] or "").strip() if len(r) > 2 else "",
-            "phone": str(r[4] or "").strip() if len(r) > 4 else "",
-            "city": str(r[5] or "").strip() if len(r) > 5 else "",
+            "enq": _cell(r, COL_ENQ),
+            "date": date_v,
+            "name": str(_cell(r, COL_NAME) or "").strip(),
+            "company": str(_cell(r, COL_COMPANY) or "").strip(),
+            "city": str(_cell(r, COL_CITY) or "").strip(),
+            "cars": str(_cell(r, COL_CARS) or "").strip(),
+            "source": str(_cell(r, COL_SOURCE) or "").strip(),
+            "product": str(_cell(r, COL_PRODUCT) or "").strip(),
         }
-        errs: list[str] = []
-        if not rec["name"]:
-            errs.append("missing name")
-        if not rec["phone"]:
-            errs.append("missing phone")
-
-        phone_n = norm_phone(rec["phone"])
         legacy = parse_legacy_enq(rec["enq"])
         rec["legacy_enq"] = legacy
-        rec["phone_norm"] = phone_n
-        if rec["date"] is not None and not isinstance(rec["date"], (str, int, float, bool)):
-            rec["date"] = str(rec["date"])
 
+        errs: list[str] = []
         dup_reasons: list[str] = []
-        if phone_n:
-            if phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-                dup_reasons.append("duplicate phone")
+        if not rec["name"]:
+            errs.append("missing name")
+        if legacy is None:
+            errs.append("missing/invalid enquiry no")
         else:
-            errs.append("invalid phone")
-        if legacy is not None:
             if legacy in seen_enqs or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
                 dup_reasons.append("duplicate enquiry no")
-        else:
-            errs.append("missing/invalid enquiry no")
 
         if dup_reasons:
             rec["dup"] = True
@@ -224,10 +278,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             rec["errors"] = errs
             invalids.append(rec)
         else:
-            if phone_n:
-                seen_phones.add(phone_n)
-            if legacy is not None:
-                seen_enqs.add(legacy)
+            seen_enqs.add(legacy)  # type: ignore[arg-type]
         preview.append(rec)
 
     batch = ImportBatch(
@@ -241,11 +292,15 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
     return {
         "batch_id": str(batch.id), "sheets": names, "sheet": ws.title,
         "total": len(preview), "duplicates": len(duplicates), "invalid": len(invalids),
-        "valid": valid, "preview": [r for r in preview if not r.get("dup") and not r.get("errors")][:50],
+        "valid": valid,
+        "preview": [r for r in preview if not r.get("dup") and not r.get("errors")][:50],
         "duplicate_rows": duplicates,
         "invalid_rows": invalids,
-        "fields": ["enquiry no", "received date", "name", "phone", "city"],
-        "note": "Review duplicates/invalid below. After confirm you can still correct and add wrongly flagged rows as leads.",
+        "fields": [
+            "enquiry no", "received date", "name", "company/organisation (optional)",
+            "city", "no. of cars", "lead source", "product/type",
+        ],
+        "note": "Only listed columns are imported. Admin can review duplicates/invalid and Add to leads or Delete.",
     }
 
 
@@ -265,25 +320,30 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                 reason="DUPLICATE" if rec.get("dup") else "INVALID",
             ))
             continue
-        phone_n = rec.get("phone_norm") or norm_phone(rec["phone"])
-        if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-            db.add(ImportError(batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                               error="duplicate phone", reason="DUPLICATE"))
-            continue
         legacy = rec.get("legacy_enq")
         if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-            db.add(ImportError(batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                               error="duplicate enquiry no", reason="DUPLICATE"))
+            db.add(ImportError(
+                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                error="duplicate enquiry no", reason="DUPLICATE",
+            ))
             continue
 
+        cars = str(rec.get("cars") or "")
+        src = _norm_source(db, str(rec.get("source") or ""))
+        prod = _norm_product(db, str(rec.get("product") or ""))
         lead = Lead(
             enquiry_number=next_enquiry_number(db),
             legacy_enquiry_no=legacy,
-            enquiry_date=parse_excel_date(rec["date"]),
-            customer_name=str(rec["name"] or ""),
-            contact_number=str(rec["phone"] or ""),
-            contact_number_norm=phone_n,
-            city=str(rec["city"] or ""),
+            enquiry_date=parse_excel_date(rec.get("date")),
+            customer_name=str(rec.get("name") or ""),
+            company_name=str(rec.get("company") or ""),
+            contact_number="",
+            contact_number_norm="",
+            city=str(rec.get("city") or ""),
+            quantity_raw=cars,
+            quantity_num=parse_quantity(cars),
+            source_id=src.id if src else None,
+            product_id=prod.id if prod else None,
             status_id=st.id,
             sla_state="PENDING",
             created_by=admin.id,
@@ -350,33 +410,14 @@ def update_error(eid: UUID, body: ErrorUpdate, db: Session = Depends(get_db), _:
         raise HTTPException(404, "Skipped row not found")
     raw = dict(e.raw or {})
     data = body.model_dump(exclude_unset=True)
-    if "name" in data and data["name"] is not None:
-        raw["name"] = str(data["name"]).strip()
-    if "phone" in data and data["phone"] is not None:
-        raw["phone"] = str(data["phone"]).strip()
-        raw["phone_norm"] = norm_phone(raw["phone"])
-    if "city" in data and data["city"] is not None:
-        raw["city"] = str(data["city"]).strip()
-    if "date" in data and data["date"] is not None:
-        raw["date"] = data["date"]
+    for key in ("name", "city", "company", "cars", "source", "product", "date"):
+        if key in data and data[key] is not None:
+            raw[key] = str(data[key]).strip() if key != "date" else data[key]
     if "enq" in data and data["enq"] is not None:
         raw["enq"] = data["enq"]
         raw["legacy_enq"] = parse_legacy_enq(data["enq"])
     e.raw = raw
-    # refresh error message after edit
-    msgs = []
-    phone_n = raw.get("phone_norm") or norm_phone(raw.get("phone", ""))
-    legacy = raw.get("legacy_enq")
-    if not raw.get("name"):
-        msgs.append("missing name")
-    if not phone_n:
-        msgs.append("invalid phone")
-    elif db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-        msgs.append("duplicate phone")
-    if legacy is None:
-        msgs.append("missing/invalid enquiry no")
-    elif db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-        msgs.append("duplicate enquiry no")
+    msgs = _row_issue_messages(db, raw)
     e.error = ", ".join(msgs) if msgs else "ready to add"
     e.reason = "DUPLICATE" if any("duplicate" in m for m in msgs) else ("INVALID" if msgs else e.reason)
     db.commit()

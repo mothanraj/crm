@@ -12,7 +12,7 @@
 
 ### users (= employees)
 `id, name, email UNIQUE, password_hash, phone, department, role_id→roles, is_active, created_at, updated_at`
-Seed: 8 Excel employees (auto `firstname@crm.local`, temp password, must reset) + admin from env. Merge `Ram kumar→Ram`.
+Seed: **admin only** (from env). Staff employees are created by admin in the Employees portal (per-environment database; not synced via Git).
 
 ### lead_sources (seed 11)
 `id, name UNIQUE, is_active, sort_order` — Facebook/Instagram, Google Ads, India Mart, Direct Call, Referral, WhatsApp, Email Campaign, Email Enquiry, SEO, Others, Expo/Stall.

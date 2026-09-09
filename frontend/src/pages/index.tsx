@@ -218,16 +218,17 @@ export function Leads() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px]">
               <thead className="bg-graphite-50"><tr>
-                <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th>
-                <th className="th">City</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
+                <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
+                <th className="th">City</th><th className="th">Source</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
                   <tr key={l.id} className="hover:bg-brand-50/50">
                     <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                     <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
-                    <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                    <td className="td">{l.company_name || '—'}</td>
                     <td className="td">{l.city || '—'}</td>
+                    <td className="td">{nameOf('sources', l.source_id)}</td>
                     <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
                     <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
                     <td className="td"><SlaBadge value={l.sla_state} /></td>
@@ -304,11 +305,13 @@ export function LeadDetail({ id }: { id: string }) {
               <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />
               {l.pending_assignment && <span className="text-xs font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 px-2 py-0.5 rounded-full">Unassigned</span>}
             </div>
-            <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'}</p>
+            <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-graphite-500">
-              <span>📞 {l.contact_number || '—'}</span>
               <span>📍 {l.city || '—'}</span>
               <span>📅 {l.enquiry_date || '—'}</span>
+              <span>🚗 {l.quantity_raw || '—'}</span>
+              <span>🏷 {nameOf('sources', l.source_id)}</span>
+              <span>📦 {nameOf('products', l.product_id)}</span>
               <span>👤 {nameOf('employees', l.primary_employee_id)}</span>
               {l.sla_deadline && <span>⏱ Contact by {l.sla_deadline.slice(0, 16).replace('T', ' ')}</span>}
             </div>
@@ -412,17 +415,27 @@ export function ImportPage() {
   const [res, setRes] = useState<any>(null);
   const [done, setDone] = useState<any>(null);
   const [errors, setErrors] = useState<any[]>([]);
+  const [batches, setBatches] = useState<any[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', phone: '', city: '', enq: '', date: '' });
+  const [editForm, setEditForm] = useState({
+    name: '', city: '', company: '', cars: '', source: '', product: '', enq: '', date: '',
+  });
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'duplicates' | 'invalid'>('duplicates');
   const errMsg = (e: any) => e?.response?.data?.detail || 'Upload failed. Is the backend running?';
 
+  const loadBatches = () => api.get('/import/batches').then((r) => setBatches(r.data || [])).catch(() => {});
+  useEffect(() => { loadBatches(); }, []);
+
   const loadErrors = async (batchId: string) => {
     const { data } = await api.get(`/import/${batchId}/errors`);
     setErrors(data.items || []);
+    setDone((d: any) => ({ ...(d || {}), batch_id: batchId }));
+    if ((data.items || []).length) {
+      setTab(data.items.some((x: any) => x.reason === 'DUPLICATE') ? 'duplicates' : 'invalid');
+    }
   };
 
   const up = async (withSheet?: string) => {
@@ -451,6 +464,7 @@ export function ImportPage() {
       setDone(data);
       setErrors(data.errors || []);
       setRes(null);
+      loadBatches();
       if ((data.errors || []).length) setTab(data.errors.some((x: any) => x.reason === 'DUPLICATE') ? 'duplicates' : 'invalid');
     } catch (e: any) { setError(errMsg(e)); }
   };
@@ -463,8 +477,11 @@ export function ImportPage() {
     setEditId(row.id);
     setEditForm({
       name: row.name || '',
-      phone: row.phone || '',
       city: row.city || '',
+      company: row.company || '',
+      cars: row.cars || '',
+      source: row.source || '',
+      product: row.product || '',
       enq: row.enq != null ? String(row.enq) : '',
       date: row.date != null ? String(row.date).slice(0, 10) : '',
     });
@@ -488,6 +505,7 @@ export function ImportPage() {
       const { data } = await api.post(`/import/errors/${id}/promote`, { force });
       setErrors((prev) => prev.filter((e) => e.id !== id));
       setOkMsg(`Added as ${data.enquiry_number}${data.assigned ? ' (assigned)' : ' (pending assignment)'}`);
+      loadBatches();
     } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
   };
 
@@ -496,7 +514,8 @@ export function ImportPage() {
     try {
       await api.delete(`/import/errors/${id}`);
       setErrors((prev) => prev.filter((e) => e.id !== id));
-      setOkMsg('Removed from skipped list');
+      setOkMsg('Deleted from skipped list');
+      loadBatches();
     } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
   };
 
@@ -509,11 +528,12 @@ export function ImportPage() {
   const SkippedTable = ({ rows, mode }: { rows: any[]; mode: 'preview' | 'review' }) => (
     rows.length === 0 ? <EmptyState title="None" hint={mode === 'preview' ? 'No rows in this category.' : 'All cleared.'} /> : (
       <div className="overflow-x-auto -mx-5 px-5">
-        <table className="w-full min-w-[800px]">
+        <table className="w-full min-w-[980px]">
           <thead className="bg-graphite-50">
             <tr>
               <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th>
-              <th className="th">Phone</th><th className="th">City</th><th className="th">Reason</th>
+              <th className="th">Company</th><th className="th">City</th><th className="th">Cars</th>
+              <th className="th">Source</th><th className="th">Product</th><th className="th">Reason</th>
               {mode === 'review' && <th className="th text-right">Actions</th>}
             </tr>
           </thead>
@@ -523,15 +543,18 @@ export function ImportPage() {
                 <td className="td">{r.row_number ?? r.row}</td>
                 <td className="td">{r.enq ?? r.legacy_enq ?? '—'}</td>
                 <td className="td">{r.name || '—'}</td>
-                <td className="td">{r.phone || '—'}</td>
+                <td className="td">{r.company || '—'}</td>
                 <td className="td">{r.city || '—'}</td>
+                <td className="td">{r.cars || '—'}</td>
+                <td className="td">{r.source || '—'}</td>
+                <td className="td">{r.product || '—'}</td>
                 <td className="td text-xs text-red-700">{r.error || (r.errors || []).join(', ') || '—'}</td>
                 {mode === 'review' && (
                   <td className="td text-right whitespace-nowrap space-x-1">
                     <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => openEdit(r)}>Correct</button>
                     <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
-                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id, true)} title="Create even if Excel enquiry no conflicts">Force add</button>
-                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => dismiss(r.id)}>Remove</button>
+                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id, true)} title="Create even if enquiry no conflicts">Force add</button>
+                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => dismiss(r.id)}>Delete</button>
                   </td>
                 )}
               </tr>
@@ -543,8 +566,11 @@ export function ImportPage() {
   );
 
   return (
-    <div className="space-y-5 max-w-5xl">
-      <PageHeader title="Import from Excel" subtitle="Import Enq no, date, name, phone, city. Review duplicates & invalid rows — correct and add to leads if wrongly flagged." />
+    <div className="space-y-5 max-w-6xl">
+      <PageHeader
+        title="Import from Excel"
+        subtitle="Columns: Enq no, Received date, Name, Company (optional), City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
+      />
       {error && <div className="bg-[#E03131]/10 border border-[#E03131]/40 text-[#B32727] text-sm rounded-xl px-4 py-3">❌ {error}</div>}
       {okMsg && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">✓ {okMsg}</div>}
 
@@ -583,11 +609,23 @@ export function ImportPage() {
             </div>
             <p className="text-sm text-graphite-600 mb-3">Ready rows (first 50):</p>
             <div className="overflow-x-auto -mx-5 px-5 mb-4">
-              <table className="w-full min-w-[640px]"><thead className="bg-graphite-50"><tr>
-                <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th><th className="th">Phone</th><th className="th">City</th>
+              <table className="w-full min-w-[900px]"><thead className="bg-graphite-50"><tr>
+                <th className="th">Row</th><th className="th">Enq</th><th className="th">Date</th><th className="th">Name</th>
+                <th className="th">Company</th><th className="th">City</th><th className="th">Cars</th>
+                <th className="th">Source</th><th className="th">Product</th>
               </tr></thead>
                 <tbody>{(res.preview || []).map((r: any) => (
-                  <tr key={r.row}><td className="td">{r.row}</td><td className="td">{r.legacy_enq ?? '—'}</td><td className="td">{r.name}</td><td className="td">{r.phone}</td><td className="td">{r.city || '—'}</td></tr>
+                  <tr key={r.row}>
+                    <td className="td">{r.row}</td>
+                    <td className="td">{r.legacy_enq ?? '—'}</td>
+                    <td className="td">{r.date != null ? String(r.date).slice(0, 10) : '—'}</td>
+                    <td className="td">{r.name}</td>
+                    <td className="td">{r.company || '—'}</td>
+                    <td className="td">{r.city || '—'}</td>
+                    <td className="td">{r.cars || '—'}</td>
+                    <td className="td">{r.source || '—'}</td>
+                    <td className="td">{r.product || '—'}</td>
+                  </tr>
                 ))}</tbody>
               </table>
             </div>
@@ -597,7 +635,7 @@ export function ImportPage() {
           </Card>
 
           {(previewDups.length > 0 || previewInvalid.length > 0) && (
-            <Card title="Skipped in this preview (will be saved for review after confirm)">
+            <Card title="Duplicates & invalid (saved for admin review after confirm)">
               <div className="flex gap-2 mb-3 text-sm font-medium">
                 <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>
                   Duplicates ({previewDups.length})
@@ -615,15 +653,14 @@ export function ImportPage() {
       {done && (
         <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 rounded-xl p-5 text-sm">
           <b>Import complete:</b> {done.imported} imported · {done.assigned ?? 0} assigned · {done.pending ?? 0} pending · {done.duplicates} duplicates · {done.invalid} invalid.
-          {done.batch_id && errors.length === 0 && (
-            <button type="button" className="ml-3 underline" onClick={() => loadErrors(done.batch_id)}>Reload skipped list</button>
-          )}
         </div>
       )}
 
       {showReview && (
-        <Card title="Review skipped rows — correct & add to leads">
-          <p className="text-sm text-graphite-500 mb-3">If a row was wrongly marked duplicate/invalid, correct the fields and click <b>Add to leads</b>. Use <b>Force add</b> only when Excel enquiry no conflicts but the customer is still new (phone must be unique).</p>
+        <Card title="Admin review — Add to leads or Delete">
+          <p className="text-sm text-graphite-500 mb-3">
+            View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. Use <b>Force add</b> if enquiry no conflicts but it should still become a lead. <b>Delete</b> removes it from this list.
+          </p>
           <div className="flex gap-2 mb-3 text-sm font-medium">
             <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>
               Duplicates ({skippedDups.length})
@@ -636,9 +673,36 @@ export function ImportPage() {
         </Card>
       )}
 
+      {batches.length > 0 && (
+        <Card title="Recent import batches">
+          <div className="overflow-x-auto -mx-5 px-5">
+            <table className="w-full min-w-[640px]">
+              <thead className="bg-graphite-50"><tr>
+                <th className="th">File</th><th className="th">Status</th><th className="th text-right">Imported</th>
+                <th className="th text-right">Dup</th><th className="th text-right">Invalid</th><th className="th text-right">Actions</th>
+              </tr></thead>
+              <tbody>
+                {batches.filter((b) => b.status === 'DONE').slice(0, 10).map((b) => (
+                  <tr key={b.id} className="hover:bg-graphite-50">
+                    <td className="td text-sm">{b.file_name}<div className="text-xs text-graphite-400">{b.sheet_name}</div></td>
+                    <td className="td">{b.status}</td>
+                    <td className="td text-right">{b.imported}</td>
+                    <td className="td text-right">{b.duplicates}</td>
+                    <td className="td text-right">{b.invalid}</td>
+                    <td className="td text-right">
+                      <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => loadErrors(b.id)}>View skipped</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       {editId && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditId(null)}>
-          <div className="card p-6 w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
+          <div className="card p-6 w-full max-w-lg space-y-3" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-graphite-900">Correct row</h3>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
@@ -646,20 +710,32 @@ export function ImportPage() {
                 <input className="input mt-1" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
               </div>
               <div>
-                <label className="text-xs font-medium text-graphite-600">Phone</label>
-                <input className="input mt-1" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
-              </div>
-              <div>
                 <label className="text-xs font-medium text-graphite-600">Enquiry no</label>
                 <input className="input mt-1" value={editForm.enq} onChange={(e) => setEditForm({ ...editForm, enq: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Received date</label>
+                <input className="input mt-1" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Company (optional)</label>
+                <input className="input mt-1" value={editForm.company} onChange={(e) => setEditForm({ ...editForm, company: e.target.value })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-graphite-600">City</label>
                 <input className="input mt-1" value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} />
               </div>
               <div>
-                <label className="text-xs font-medium text-graphite-600">Date</label>
-                <input className="input mt-1" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
+                <label className="text-xs font-medium text-graphite-600">No. of cars</label>
+                <input className="input mt-1" value={editForm.cars} onChange={(e) => setEditForm({ ...editForm, cars: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Lead source</label>
+                <input className="input mt-1" value={editForm.source} onChange={(e) => setEditForm({ ...editForm, source: e.target.value })} />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-graphite-600">Product / type</label>
+                <input className="input mt-1" value={editForm.product} onChange={(e) => setEditForm({ ...editForm, product: e.target.value })} />
               </div>
             </div>
             <div className="flex gap-2 justify-end">
