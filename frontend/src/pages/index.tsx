@@ -428,9 +428,25 @@ export function ImportPage() {
 }
 
 /* ================= REPORTS ================= */
-function BarCard({ title, data, x, y }: { title: string; data: any[]; x: string; y: string }) {
+async function downloadReport(path: string, filename: string) {
+  const { data } = await api.get(path, { responseType: 'blob' });
+  const url = URL.createObjectURL(data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function BarCard({ title, data, x, y, onDownload }: {
+  title: string; data: any[]; x: string; y: string; onDownload?: () => void;
+}) {
   return (
-    <Card title={title}>
+    <Card title={title} action={onDownload && (
+      <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={onDownload}>
+        Download Excel
+      </button>
+    )}>
       {data.length === 0 ? <EmptyState title="No data" /> : (
         <div className="h-72">
           <ResponsiveContainer>
@@ -459,10 +475,25 @@ export function Reports() {
   }, []);
   return (
     <div className="space-y-5">
-      <PageHeader title="Reports" subtitle="Product, source and workload analysis from live data." />
+      <PageHeader
+        title="Reports"
+        subtitle="Product-wise (e.g. Tower Parking) and lead-source-wise (e.g. Instagram, Facebook) counts from live data."
+      />
       <div className="grid lg:grid-cols-2 gap-4">
-        <BarCard title="Product-wise leads" data={prod} x="product" y="leads" />
-        <BarCard title="Source-wise leads" data={srcrep} x="source" y="leads" />
+        <BarCard
+          title="Product-wise leads"
+          data={prod}
+          x="product"
+          y="leads"
+          onDownload={() => downloadReport('/reports/product-wise/export', 'product-wise-report.xlsx')}
+        />
+        <BarCard
+          title="Source-wise leads"
+          data={srcrep}
+          x="source"
+          y="leads"
+          onDownload={() => downloadReport('/reports/source-wise/export', 'source-wise-report.xlsx')}
+        />
       </div>
       <Card title="Employee workload">
         {emp.length === 0 ? <EmptyState title="No data" /> : (

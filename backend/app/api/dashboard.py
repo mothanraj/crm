@@ -1,4 +1,8 @@
+from io import BytesIO
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -7,6 +11,23 @@ from app.db.session import get_db
 from app.models import Lead, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
+
+def _xlsx_download(filename: str, headers: list[str], rows: list[list]):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Report"
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _kpis(db: Session):
@@ -45,20 +66,50 @@ def by_source(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return out
 
 
-@router.get("/reports/product-wise")
-def product_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+def _product_wise_rows(db: Session):
     return [{"product": p or "Unmapped", "leads": c} for p, c in
             db.query(Product.name, func.count(Lead.id)).join(
                 Lead, Lead.product_id == Product.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(Product.name).all()]
+            .filter(Lead.is_active.is_(True)).group_by(Product.name)
+            .order_by(func.count(Lead.id).desc()).all()]
+
+
+def _source_wise_rows(db: Session):
+    return [{"source": s or "Unknown", "leads": c} for s, c in
+            db.query(LeadSource.name, func.count(Lead.id)).join(
+                Lead, Lead.source_id == LeadSource.id, isouter=True)
+            .filter(Lead.is_active.is_(True)).group_by(LeadSource.name)
+            .order_by(func.count(Lead.id).desc()).all()]
+
+
+@router.get("/reports/product-wise")
+def product_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _product_wise_rows(db)
+
+
+@router.get("/reports/product-wise/export")
+def product_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _product_wise_rows(db)
+    return _xlsx_download(
+        "product-wise-report.xlsx",
+        ["Product", "Leads"],
+        [[r["product"], r["leads"]] for r in rows],
+    )
 
 
 @router.get("/reports/source-wise")
 def source_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return [{"source": s or "Unknown", "leads": c} for s, c in
-            db.query(LeadSource.name, func.count(Lead.id)).join(
-                Lead, Lead.source_id == LeadSource.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(LeadSource.name).all()]
+    return _source_wise_rows(db)
+
+
+@router.get("/reports/source-wise/export")
+def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _source_wise_rows(db)
+    return _xlsx_download(
+        "source-wise-report.xlsx",
+        ["Lead Source", "Leads"],
+        [[r["source"], r["leads"]] for r in rows],
+    )
 
 
 @router.get("/reports/employee-wise")
