@@ -30,15 +30,24 @@ TRACKER_COLS = ["enq", "date", "name", "company", "phone", "city", "cars", "inpu
 
 def _serialize(l: Lead, db: Session) -> dict:
     return {
-        "id": str(l.id), "enquiry_number": l.enquiry_number, "enquiry_date": str(l.enquiry_date) if l.enquiry_date else None,
+        "id": str(l.id), "enquiry_number": l.enquiry_number,
+        "legacy_enquiry_no": l.legacy_enquiry_no,
+        "enquiry_date": str(l.enquiry_date) if l.enquiry_date else None,
         "customer_name": l.customer_name, "contact_number": l.contact_number, "email": l.email,
         "company_name": l.company_name, "city": l.city, "quantity_raw": l.quantity_raw,
         "source_id": str(l.source_id) if l.source_id else None,
         "product_id": str(l.product_id) if l.product_id else None,
-        "status_id": str(l.status_id), "primary_employee_id": str(l.primary_employee_id) if l.primary_employee_id else None,
-        "sla_state": l.sla_state, "sla_deadline": l.sla_deadline.isoformat() if l.sla_deadline else None,
+        "status_id": str(l.status_id),
+        "primary_employee_id": str(l.primary_employee_id) if l.primary_employee_id else None,
+        "sla_state": l.sla_state,
+        "sla_deadline": l.sla_deadline.isoformat() if l.sla_deadline else None,
+        "first_contact_at": l.first_contact_at.isoformat() if l.first_contact_at else None,
+        "first_contact_method": l.first_contact_method or "",
+        "first_contact_result": l.first_contact_result or "",
+        "first_contact_notes": l.first_contact_notes or "",
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
+        "pending_assignment": l.primary_employee_id is None,
     }
 
 
@@ -51,7 +60,8 @@ def _lookup(db, model, name: str):
 @router.get("")
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
-               employee: str = "", sla: str = "", page: int = 1, size: int = 20):
+               employee: str = "", sla: str = "", unassigned: str = "",
+               page: int = 1, size: int = 20):
     q = db.query(Lead).filter(Lead.is_active.is_(True))
     if u.role and u.role.name == "EMPLOYEE":
         q = q.filter(Lead.primary_employee_id == u.id)
@@ -69,6 +79,8 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         q = q.filter(Lead.primary_employee_id == employee)
     if sla:
         q = q.filter(Lead.sla_state == sla)
+    if unassigned in ("1", "true", "yes"):
+        q = q.filter(Lead.primary_employee_id.is_(None))
     total = q.count()
     rows = q.order_by(Lead.updated_at.desc()).offset((page - 1) * size).limit(size).all()
     return {"total": total, "items": [_serialize(r, db) for r in rows]}
@@ -76,37 +88,10 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
 
 @router.post("")
 def create_lead(body: LeadCreate, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    src = db.get(LeadSource, body.source_id) if body.source_id else (_lookup(db, LeadSource, body.source_name) if body.source_name else None)
-    prod = None
-    if body.product_id:
-        prod = db.get(Product, body.product_id)
-    elif body.product_name:
-        from app.models import ProductAlias
-        prod = _lookup(db, Product, body.product_name)
-        if not prod:
-            al = db.query(ProductAlias).filter(func.lower(ProductAlias.alias) == norm_key(body.product_name)).first()
-            prod = db.get(Product, al.product_id) if al else None
-    st = _lookup(db, LeadStatus, STATUS_ALIASES.get(norm_key(body.status_name), body.status_name)) or _lookup(db, LeadStatus, "New Lead")
-    lead = Lead(enquiry_number=next_enquiry_number(db), enquiry_date=body.enquiry_date,
-                customer_name=body.customer_name, contact_number=body.contact_number,
-                contact_number_norm=norm_phone(body.contact_number), alternate_contact=body.alternate_contact,
-                email=body.email, company_name=body.company_name, location=body.location, city=body.city,
-                source_id=src.id if src else None, product_id=prod.id if prod else None,
-                requirement=body.requirement, quantity_raw=body.quantity_raw,
-                quantity_num=parse_quantity(body.quantity_raw), priority=body.priority,
-                status_id=st.id, created_by=u.id)
-    db.add(lead)
-    db.flush()
-    db.add(LeadStatusHistory(lead_id=lead.id, old_status_id=None, new_status_id=st.id, changed_by=u.id, reason="created"))
-    if body.primary_employee_id:
-        emp = db.get(User, body.primary_employee_id)
-        if emp:
-            assign(db, lead, emp, "PRIMARY", u)
-    else:
-        auto_assign(db, lead, u)
-    db.commit()
-    db.refresh(lead)
-    return _serialize(lead, db)
+    raise HTTPException(
+        403,
+        "Leads can only be created by importing the Excel tracker. Use Import in the admin portal.",
+    )
 
 
 @router.get("/{lid}")
@@ -152,10 +137,13 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
 
 @router.post("/{lid}/assign")
 def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
+    from app.services.lead_service import open_workload
     lead = db.get(Lead, lid)
     emp = db.get(User, body.employee_id)
     if not lead or not emp:
         raise HTTPException(404, "Not found")
+    if body.role == "PRIMARY" and open_workload(db, emp.id) >= max(1, int(settings.OPEN_LEAD_LIMIT)):
+        raise HTTPException(400, "Employee already has an open customer. Finish first contact before assigning another.")
     assign(db, lead, emp, body.role, admin)
     db.commit()
     return {"ok": True}
@@ -164,9 +152,15 @@ def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin:
 @router.post("/{lid}/contact")
 def first_contact(lid: UUID, body: ContactIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
     lead = db.get(Lead, lid)
+    if not lead:
+        raise HTTPException(404, "Not found")
+    if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
+        raise HTTPException(403, "Not assigned to you")
+    if not (body.notes or "").strip() and not (body.result or "").strip():
+        raise HTTPException(400, "Please enter what you talked about with the customer")
     record_first_contact(db, lead, u, body.method, body.result, body.notes)
     db.commit()
-    return {"sla_state": lead.sla_state}
+    return {"sla_state": lead.sla_state, "ok": True}
 
 
 @router.post("/{lid}/activities")

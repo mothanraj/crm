@@ -65,7 +65,7 @@ export function Login() {
             <input className="input mt-1" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
           </div>
           <button className="btn-primary w-full !py-2.5" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          <p className="text-xs text-graphite-400 text-center">Demo: admin@crm.local / Admin123! · staff use name@crm.local / Temp123!</p>
+          <p className="text-xs text-graphite-400 text-center">Admin: admin@crm.local / Admin123! — employees are created by admin</p>
         </form>
       </div>
     </div>
@@ -180,23 +180,24 @@ export function Leads() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [sla, setSla] = useState('');
+  const [unassigned, setUnassigned] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const size = 15;
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, []);
   useEffect(() => {
     setLoading(true);
-    api.get('/leads', { params: { search, status, sla, page, size } })
+    api.get('/leads', { params: { search, status, sla, unassigned: unassigned ? '1' : '', page, size } })
       .then((r) => { setItems(r.data.items); setTotal(r.data.total); })
       .finally(() => setLoading(false));
-  }, [search, status, sla, page]);
+  }, [search, status, sla, unassigned, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   return (
     <div>
-      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found`} />
-      <div className="card p-4 mb-4 flex flex-wrap gap-3">
-        <input className="input !w-64" placeholder="🔍 Search name, company, phone…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · 1 open customer per employee`} />
+      <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
+        <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
           {masters?.statuses?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -207,24 +208,28 @@ export function Leads() {
           <option value="OVERDUE">Overdue</option>
           <option value="COMPLETED">Completed</option>
         </select>
+        <label className="inline-flex items-center gap-2 text-sm text-graphite-600 cursor-pointer">
+          <input type="checkbox" checked={unassigned} onChange={(e) => { setUnassigned(e.target.checked); setPage(1); }} />
+          Pending assignment only
+        </label>
       </div>
       <div className="card overflow-hidden">
-        {loading ? <Spinner /> : items.length === 0 ? <EmptyState title="No leads match" hint="Adjust filters or import the Excel tracker." /> : (
+        {loading ? <Spinner /> : items.length === 0 ? <EmptyState title="No leads match" hint="Import the Excel tracker or adjust filters." /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px]">
               <thead className="bg-graphite-50"><tr>
-                <th className="th">Enquiry</th><th className="th">Customer / Company</th><th className="th">Contact</th>
-                <th className="th">Source</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
+                <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th>
+                <th className="th">City</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
                   <tr key={l.id} className="hover:bg-brand-50/50">
                     <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                    <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div><div className="text-xs text-graphite-500">{l.company_name}</div></td>
+                    <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                     <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
-                    <td className="td">{nameOf('sources', l.source_id)}</td>
+                    <td className="td">{l.city || '—'}</td>
                     <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
-                    <td className="td">{nameOf('employees', l.primary_employee_id)}</td>
+                    <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
                     <td className="td"><SlaBadge value={l.sla_state} /></td>
                   </tr>
                 ))}
@@ -249,15 +254,43 @@ export function LeadDetail({ id }: { id: string }) {
   const [l, setL] = useState<any>(null);
   const [masters, setMasters] = useState<any>(null);
   const [note, setNote] = useState('');
-  const [tab, setTab] = useState<'timeline' | 'quotes' | 'visits' | 'docs' | 'history'>('timeline');
+  const [method, setMethod] = useState('Call');
+  const [result, setResult] = useState('Connected');
+  const [talkNotes, setTalkNotes] = useState('');
+  const [assignEmp, setAssignEmp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [tab, setTab] = useState<'timeline' | 'history'>('timeline');
+  const role = localStorage.getItem('role') || 'EMPLOYEE';
   const reload = () => api.get(`/leads/${id}`).then((r) => setL(r.data));
   useEffect(() => { reload(); api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, [id]);
   if (!l) return <Spinner />;
   const nameOf = (kind: string, v?: string) => masters?.[kind]?.find((x: any) => x.id === v)?.name ?? (v ?? '—');
-  const add = async () => {
+  const needsContact = !l.first_contact_at && !!l.primary_employee_id;
+  const addNote = async () => {
     if (!note.trim()) return;
     await api.post(`/leads/${id}/activities`, { activity_type: 'Note', notes: note });
     setNote(''); reload();
+  };
+  const saveContact = async () => {
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/leads/${id}/contact`, { method, result, notes: talkNotes });
+      setTalkNotes('');
+      reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not save contact');
+    } finally { setBusy(false); }
+  };
+  const doAssign = async () => {
+    if (!assignEmp) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/leads/${id}/assign`, { employee_id: assignEmp, role: 'PRIMARY' });
+      reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Assign failed');
+    } finally { setBusy(false); }
   };
   return (
     <div className="space-y-5">
@@ -266,38 +299,91 @@ export function LeadDetail({ id }: { id: string }) {
           <div>
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-graphite-900">{l.enquiry_number}</h1>
+              {l.legacy_enquiry_no != null && <span className="text-sm text-graphite-500">Excel #{l.legacy_enquiry_no}</span>}
               <StatusBadge value={nameOf('statuses', l.status_id)} />
-              <SlaBadge value={l.sla_state} />
+              <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />
+              {l.pending_assignment && <span className="text-xs font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 px-2 py-0.5 rounded-full">Unassigned</span>}
             </div>
-            <p className="text-graphite-600 mt-1 text-lg">{l.customer_name} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
+            <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-graphite-500">
               <span>📞 {l.contact_number || '—'}</span>
-              <span>✉️ {l.email || '—'}</span>
               <span>📍 {l.city || '—'}</span>
-              <span>🏷 {nameOf('sources', l.source_id)}</span>
-              <span>📦 {nameOf('products', l.product_id)}</span>
+              <span>📅 {l.enquiry_date || '—'}</span>
+              <span>👤 {nameOf('employees', l.primary_employee_id)}</span>
+              {l.sla_deadline && <span>⏱ Contact by {l.sla_deadline.slice(0, 16).replace('T', ' ')}</span>}
             </div>
           </div>
           <Link to="/leads" className="btn-secondary">← All leads</Link>
         </div>
       </div>
+      {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{err}</div>}
+
+      {role === 'ADMIN' && l.pending_assignment && (
+        <Card title="Assign to employee">
+          <div className="flex flex-wrap gap-3 items-end">
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-xs font-medium text-graphite-600">Employee (must be free — 1 open lead max)</label>
+              <select className="input mt-1" value={assignEmp} onChange={(e) => setAssignEmp(e.target.value)}>
+                <option value="">Select…</option>
+                {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </div>
+            <button className="btn-primary" disabled={!assignEmp || busy} onClick={doAssign}>Assign</button>
+          </div>
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-4">
-        <Card title="Log follow-up" className="lg:col-span-1">
-          <textarea className="input min-h-[110px]" placeholder="Call outcome, customer response…" value={note} onChange={(e) => setNote(e.target.value)} />
-          <button onClick={add} className="btn-primary w-full mt-3">Add to timeline</button>
-        </Card>
+        <div className="space-y-4 lg:col-span-1">
+          {needsContact && (
+            <Card title="Did you talk to the customer?">
+              <p className="text-xs text-graphite-500 mb-3">Within 3 days of assignment. Record what you discussed — this completes the SLA.</p>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">Method</label>
+                  <select className="input mt-1" value={method} onChange={(e) => setMethod(e.target.value)}>
+                    {['Call', 'WhatsApp', 'Email', 'Meeting', 'Other'].map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">Result</label>
+                  <select className="input mt-1" value={result} onChange={(e) => setResult(e.target.value)}>
+                    {['Connected', 'RNR', 'Busy', 'Wrong number', 'Interested', 'Not interested'].map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">What did you talk about?</label>
+                  <textarea className="input mt-1 min-h-[100px]" required placeholder="Customer response, next step…" value={talkNotes} onChange={(e) => setTalkNotes(e.target.value)} />
+                </div>
+                <button onClick={saveContact} disabled={busy || !talkNotes.trim()} className="btn-primary w-full">
+                  {busy ? 'Saving…' : 'Yes — save contact update'}
+                </button>
+              </div>
+            </Card>
+          )}
+          {l.first_contact_at && (
+            <Card title="First contact recorded">
+              <p className="text-sm text-graphite-700"><b>{l.first_contact_method}</b> · {l.first_contact_result}</p>
+              <p className="text-xs text-graphite-400 mt-1">{l.first_contact_at.slice(0, 16).replace('T', ' ')}</p>
+              {l.first_contact_notes && <p className="text-sm mt-2 whitespace-pre-wrap">{l.first_contact_notes}</p>}
+            </Card>
+          )}
+          <Card title="Add note">
+            <textarea className="input min-h-[90px]" placeholder="Later follow-up note…" value={note} onChange={(e) => setNote(e.target.value)} />
+            <button onClick={addNote} className="btn-secondary w-full mt-3">Add to timeline</button>
+          </Card>
+        </div>
         <div className="card lg:col-span-2">
           <div className="flex gap-1 border-b border-graphite-200 px-4 pt-3 text-sm font-medium">
-            {(['timeline', 'quotes', 'visits', 'docs', 'history'] as const).map((t) => (
+            {(['timeline', 'history'] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)}
                 className={`px-3 py-2 capitalize rounded-t-lg ${tab === t ? 'text-brand-700 border-b-2 border-brand-600 -mb-px bg-brand-50/50' : 'text-graphite-500 hover:text-graphite-800'}`}>
-                {t} ({t === 'timeline' ? l.activities?.length ?? 0 : t === 'quotes' ? l.quotations?.length ?? 0 : t === 'visits' ? l.visits?.length ?? 0 : t === 'docs' ? l.documents?.length ?? 0 : l.history?.length ?? 0})
+                {t} ({t === 'timeline' ? l.activities?.length ?? 0 : l.history?.length ?? 0})
               </button>
             ))}
           </div>
           <div className="p-5">
-            {tab === 'timeline' && ((l.activities || []).length === 0 ? <EmptyState title="No activity yet" hint="Log the first follow-up above." /> : (
+            {tab === 'timeline' && ((l.activities || []).length === 0 ? <EmptyState title="No activity yet" hint="Record first contact or add a note." /> : (
               <ol className="relative border-l-2 border-graphite-200 ml-2 space-y-5">
                 {(l.activities || []).map((a: any) => (
                   <li key={a.id} className="ml-5">
@@ -307,16 +393,6 @@ export function LeadDetail({ id }: { id: string }) {
                   </li>
                 ))}
               </ol>
-            ))}
-            {tab === 'quotes' && ((l.quotations || []).length === 0 ? <EmptyState title="No quotations" /> : (
-              <table className="w-full"><thead><tr><th className="th">Number</th><th className="th text-right">Total</th></tr></thead>
-                <tbody>{l.quotations.map((q: any) => <tr key={q.id}><td className="td font-medium">{q.number}</td><td className="td text-right">{q.total ?? '—'}</td></tr>)}</tbody></table>
-            ))}
-            {tab === 'visits' && ((l.visits || []).length === 0 ? <EmptyState title="No site visits" /> : (
-              l.visits.map((v: any) => <div key={v.id} className="border-b py-2 text-sm"><b>{v.status}</b><div className="text-graphite-600">{v.notes}</div></div>)
-            ))}
-            {tab === 'docs' && ((l.documents || []).length === 0 ? <EmptyState title="No documents" /> : (
-              l.documents.map((x: any) => <div key={x.id} className="border-b py-2 text-sm">📎 {x.name}</div>)
             ))}
             {tab === 'history' && ((l.history || []).length === 0 ? <EmptyState title="No status changes" /> : (
               l.history.map((h: any) => <div key={h.id} className="border-b py-2 text-sm">{nameOf('statuses', h.old)} → <b>{nameOf('statuses', h.new)}</b>{h.reason && <span className="text-graphite-500"> — {h.reason}</span>}</div>)
@@ -335,12 +411,23 @@ export function ImportPage() {
   const [sheet, setSheet] = useState('');
   const [res, setRes] = useState<any>(null);
   const [done, setDone] = useState<any>(null);
+  const [errors, setErrors] = useState<any[]>([]);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', city: '', enq: '', date: '' });
   const [error, setError] = useState('');
+  const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<'duplicates' | 'invalid'>('duplicates');
   const errMsg = (e: any) => e?.response?.data?.detail || 'Upload failed. Is the backend running?';
+
+  const loadErrors = async (batchId: string) => {
+    const { data } = await api.get(`/import/${batchId}/errors`);
+    setErrors(data.items || []);
+  };
+
   const up = async (withSheet?: string) => {
     if (!file) return;
-    setBusy(true); setDone(null); setError('');
+    setBusy(true); setDone(null); setError(''); setOkMsg(''); setErrors([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -348,28 +435,119 @@ export function ImportPage() {
       const { data } = await api.post('/import/excel', fd);
       if (data.batch_id) {
         setRes(data);
+        setTab(data.duplicates ? 'duplicates' : 'invalid');
       } else {
-        // sheet discovery response
         setSheets(data.sheets || []);
         setSheet(data.suggested || '');
         setRes(null);
       }
     } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
   };
+
   const confirm = async () => {
-    setError('');
+    setError(''); setOkMsg('');
     try {
       const { data } = await api.post(`/import/${res.batch_id}/confirm`);
       setDone(data);
+      setErrors(data.errors || []);
+      setRes(null);
+      if ((data.errors || []).length) setTab(data.errors.some((x: any) => x.reason === 'DUPLICATE') ? 'duplicates' : 'invalid');
     } catch (e: any) { setError(errMsg(e)); }
   };
+
   const pickFile = (f: File | null) => {
-    setFile(f); setSheets([]); setSheet(''); setRes(null); setDone(null); setError('');
+    setFile(f); setSheets([]); setSheet(''); setRes(null); setDone(null); setErrors([]); setError(''); setOkMsg('');
   };
+
+  const openEdit = (row: any) => {
+    setEditId(row.id);
+    setEditForm({
+      name: row.name || '',
+      phone: row.phone || '',
+      city: row.city || '',
+      enq: row.enq != null ? String(row.enq) : '',
+      date: row.date != null ? String(row.date).slice(0, 10) : '',
+    });
+    setError(''); setOkMsg('');
+  };
+
+  const saveEdit = async () => {
+    if (!editId) return;
+    setBusy(true); setError('');
+    try {
+      const { data } = await api.patch(`/import/errors/${editId}`, editForm);
+      setErrors((prev) => prev.map((e) => (e.id === editId ? data : e)));
+      setEditId(null);
+      setOkMsg('Row updated — you can add it to leads now');
+    } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  const promote = async (id: string, force = false) => {
+    setBusy(true); setError(''); setOkMsg('');
+    try {
+      const { data } = await api.post(`/import/errors/${id}/promote`, { force });
+      setErrors((prev) => prev.filter((e) => e.id !== id));
+      setOkMsg(`Added as ${data.enquiry_number}${data.assigned ? ' (assigned)' : ' (pending assignment)'}`);
+    } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  const dismiss = async (id: string) => {
+    setBusy(true); setError('');
+    try {
+      await api.delete(`/import/errors/${id}`);
+      setErrors((prev) => prev.filter((e) => e.id !== id));
+      setOkMsg('Removed from skipped list');
+    } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  const previewDups = res?.duplicate_rows || [];
+  const previewInvalid = res?.invalid_rows || [];
+  const skippedDups = errors.filter((e) => e.reason === 'DUPLICATE');
+  const skippedInvalid = errors.filter((e) => e.reason === 'INVALID');
+  const showReview = errors.length > 0;
+
+  const SkippedTable = ({ rows, mode }: { rows: any[]; mode: 'preview' | 'review' }) => (
+    rows.length === 0 ? <EmptyState title="None" hint={mode === 'preview' ? 'No rows in this category.' : 'All cleared.'} /> : (
+      <div className="overflow-x-auto -mx-5 px-5">
+        <table className="w-full min-w-[800px]">
+          <thead className="bg-graphite-50">
+            <tr>
+              <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th>
+              <th className="th">Phone</th><th className="th">City</th><th className="th">Reason</th>
+              {mode === 'review' && <th className="th text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r: any) => (
+              <tr key={r.id || r.row} className="bg-red-50/40 hover:bg-red-50/70">
+                <td className="td">{r.row_number ?? r.row}</td>
+                <td className="td">{r.enq ?? r.legacy_enq ?? '—'}</td>
+                <td className="td">{r.name || '—'}</td>
+                <td className="td">{r.phone || '—'}</td>
+                <td className="td">{r.city || '—'}</td>
+                <td className="td text-xs text-red-700">{r.error || (r.errors || []).join(', ') || '—'}</td>
+                {mode === 'review' && (
+                  <td className="td text-right whitespace-nowrap space-x-1">
+                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => openEdit(r)}>Correct</button>
+                    <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
+                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id, true)} title="Create even if Excel enquiry no conflicts">Force add</button>
+                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => dismiss(r.id)}>Remove</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  );
+
   return (
-    <div className="space-y-5 max-w-4xl">
-      <PageHeader title="Import from Excel" subtitle="Upload → pick sheet → preview & validate → confirm. Nothing is written until you confirm." />
+    <div className="space-y-5 max-w-5xl">
+      <PageHeader title="Import from Excel" subtitle="Import Enq no, date, name, phone, city. Review duplicates & invalid rows — correct and add to leads if wrongly flagged." />
       {error && <div className="bg-[#E03131]/10 border border-[#E03131]/40 text-[#B32727] text-sm rounded-xl px-4 py-3">❌ {error}</div>}
+      {okMsg && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">✓ {okMsg}</div>}
+
       <Card title="1 · Upload workbook">
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex-1 min-w-[240px] border-2 border-dashed border-graphite-300 rounded-xl px-4 py-6 text-center cursor-pointer hover:border-brand-400 hover:bg-brand-50/50 transition-colors">
@@ -380,6 +558,7 @@ export function ImportPage() {
           <button onClick={() => up()} disabled={!file || busy} className="btn-primary">{busy ? 'Reading…' : 'List sheets'}</button>
         </div>
       </Card>
+
       {sheets.length > 0 && (
         <Card title="2 · Choose sheet">
           <div className="flex flex-wrap items-center gap-3">
@@ -390,37 +569,104 @@ export function ImportPage() {
           </div>
         </Card>
       )}
+
       {res && (
-        <Card title={`3 · Preview — ${res.sheet || ''}`}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-            {[['Total rows', res.total, 'slate'], ['Duplicates', res.duplicates, 'amber'], ['Invalid', res.invalid, 'red'], ['Ready', res.valid, 'green']].map(([k, v, t]: any) => (
-              <div key={k} className="bg-graphite-50 border rounded-lg p-3 text-center">
-                <div className={`text-2xl font-bold ${t === 'red' ? 'text-[#E03131]' : t === 'amber' ? 'text-[#E8890C]' : t === 'green' ? 'text-[#2F9E44]' : ''}`}>{v}</div>
-                <div className="text-xs text-graphite-500 uppercase tracking-wide">{k}</div>
+        <>
+          <Card title={`3 · Preview — ${res.sheet || ''}`}>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              {[['Total rows', res.total, 'slate'], ['Duplicates', res.duplicates, 'amber'], ['Invalid', res.invalid, 'red'], ['Ready', res.valid, 'green']].map(([k, v, t]: any) => (
+                <div key={k} className="bg-graphite-50 border rounded-lg p-3 text-center">
+                  <div className={`text-2xl font-bold ${t === 'red' ? 'text-[#E03131]' : t === 'amber' ? 'text-[#E8890C]' : t === 'green' ? 'text-[#2F9E44]' : ''}`}>{v}</div>
+                  <div className="text-xs text-graphite-500 uppercase tracking-wide">{k}</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-sm text-graphite-600 mb-3">Ready rows (first 50):</p>
+            <div className="overflow-x-auto -mx-5 px-5 mb-4">
+              <table className="w-full min-w-[640px]"><thead className="bg-graphite-50"><tr>
+                <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th><th className="th">Phone</th><th className="th">City</th>
+              </tr></thead>
+                <tbody>{(res.preview || []).map((r: any) => (
+                  <tr key={r.row}><td className="td">{r.row}</td><td className="td">{r.legacy_enq ?? '—'}</td><td className="td">{r.name}</td><td className="td">{r.phone}</td><td className="td">{r.city || '—'}</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <button onClick={confirm} disabled={!res.valid && !res.duplicates && !res.invalid} className="btn-primary">
+              4 · Confirm import ({res.valid} leads){res.duplicates || res.invalid ? ` · keep ${res.duplicates + res.invalid} for review` : ''}
+            </button>
+          </Card>
+
+          {(previewDups.length > 0 || previewInvalid.length > 0) && (
+            <Card title="Skipped in this preview (will be saved for review after confirm)">
+              <div className="flex gap-2 mb-3 text-sm font-medium">
+                <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>
+                  Duplicates ({previewDups.length})
+                </button>
+                <button type="button" onClick={() => setTab('invalid')} className={`px-3 py-1.5 rounded-lg ${tab === 'invalid' ? 'bg-red-100 text-red-900' : 'bg-graphite-100 text-graphite-600'}`}>
+                  Invalid ({previewInvalid.length})
+                </button>
               </div>
-            ))}
-          </div>
-          <div className="overflow-x-auto -mx-5 px-5">
-            <table className="w-full min-w-[640px]"><thead className="bg-graphite-50"><tr>
-              <th className="th">Row</th><th className="th">Name</th><th className="th">Phone</th><th className="th">Source</th><th className="th">Status</th><th className="th">Flags</th>
-            </tr></thead>
-              <tbody>{(res.preview || []).slice(0, 15).map((r: any) => (
-                <tr key={r.row} className={r.dup || r.errors ? 'bg-red-50/60' : ''}>
-                  <td className="td">{r.row}</td><td className="td">{r.name || '—'}</td><td className="td">{r.phone || '—'}</td>
-                  <td className="td">{r.source || '—'}</td><td className="td">{r.status || '—'}</td>
-                  <td className="td text-xs">{r.dup ? '⚠ duplicate ' : ''}{r.errors ? `❌ ${r.errors.join(', ')}` : '✓ ok'}</td>
-                </tr>
-              ))}</tbody></table>
-          </div>
-          <button onClick={confirm} disabled={!res.valid} className="btn-primary mt-4">
-            4 · Confirm import ({res.valid} leads)
-          </button>
-          {!res.valid && <p className="text-xs text-graphite-500 mt-2">No valid rows to import — duplicates and invalid rows are skipped.</p>}
-        </Card>
+              <SkippedTable rows={tab === 'duplicates' ? previewDups : previewInvalid} mode="preview" />
+            </Card>
+          )}
+        </>
       )}
+
       {done && (
         <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 rounded-xl p-5 text-sm">
-          <b>Import complete:</b> {done.imported} imported · {done.duplicates} duplicates · {done.invalid} invalid · {done.skipped} skipped (of {done.total}).
+          <b>Import complete:</b> {done.imported} imported · {done.assigned ?? 0} assigned · {done.pending ?? 0} pending · {done.duplicates} duplicates · {done.invalid} invalid.
+          {done.batch_id && errors.length === 0 && (
+            <button type="button" className="ml-3 underline" onClick={() => loadErrors(done.batch_id)}>Reload skipped list</button>
+          )}
+        </div>
+      )}
+
+      {showReview && (
+        <Card title="Review skipped rows — correct & add to leads">
+          <p className="text-sm text-graphite-500 mb-3">If a row was wrongly marked duplicate/invalid, correct the fields and click <b>Add to leads</b>. Use <b>Force add</b> only when Excel enquiry no conflicts but the customer is still new (phone must be unique).</p>
+          <div className="flex gap-2 mb-3 text-sm font-medium">
+            <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>
+              Duplicates ({skippedDups.length})
+            </button>
+            <button type="button" onClick={() => setTab('invalid')} className={`px-3 py-1.5 rounded-lg ${tab === 'invalid' ? 'bg-red-100 text-red-900' : 'bg-graphite-100 text-graphite-600'}`}>
+              Invalid ({skippedInvalid.length})
+            </button>
+          </div>
+          <SkippedTable rows={tab === 'duplicates' ? skippedDups : skippedInvalid} mode="review" />
+        </Card>
+      )}
+
+      {editId && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditId(null)}>
+          <div className="card p-6 w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-graphite-900">Correct row</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-graphite-600">Name</label>
+                <input className="input mt-1" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Phone</label>
+                <input className="input mt-1" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Enquiry no</label>
+                <input className="input mt-1" value={editForm.enq} onChange={(e) => setEditForm({ ...editForm, enq: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">City</label>
+                <input className="input mt-1" value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Date</label>
+                <input className="input mt-1" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button type="button" className="btn-secondary" onClick={() => setEditId(null)}>Cancel</button>
+              <button type="button" className="btn-primary" disabled={busy} onClick={saveEdit}>Save</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -470,6 +716,154 @@ export function Reports() {
             <tbody>{emp.map((e: any) => <tr key={e.employee} className="hover:bg-graphite-50"><td className="td font-medium">{e.employee}</td><td className="td text-right font-bold">{e.assigned}</td></tr>)}</tbody></table>
         )}
       </Card>
+    </div>
+  );
+}
+
+/* ================= EMPLOYEES (ADMIN) ================= */
+export function EmployeesPage() {
+  const empty = { name: '', email: '', password: '', phone: '' };
+  const [items, setItems] = useState<any[]>([]);
+  const [form, setForm] = useState(empty);
+  const [error, setError] = useState('');
+  const [ok, setOk] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [resetId, setResetId] = useState<string | null>(null);
+  const [resetPw, setResetPw] = useState('');
+  const load = () => api.get('/employees').then((r) => setItems(r.data)).catch(() => setError('Failed to load employees'));
+  useEffect(() => { load(); }, []);
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true); setError(''); setOk('');
+    const emailOk = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(form.email.trim());
+    const digits = form.phone.replace(/\D/g, '').replace(/^91/, '').slice(-10);
+    const phoneOk = /^[6-9]\d{9}$/.test(digits);
+    if (!emailOk) {
+      setError('Enter a valid email address (e.g. name@company.com)');
+      setBusy(false);
+      return;
+    }
+    if (!phoneOk) {
+      setError('Enter a valid 10-digit Indian mobile number (starts with 6–9)');
+      setBusy(false);
+      return;
+    }
+    try {
+      await api.post('/employees', { ...form, phone: digits, role: 'EMPLOYEE', department: '' });
+      setForm(empty);
+      setOk('Employee created');
+      load();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Create failed');
+    } finally { setBusy(false); }
+  };
+  const toggleActive = async (emp: any) => {
+    setError(''); setOk('');
+    try {
+      await api.patch(`/employees/${emp.id}`, { is_active: !emp.is_active });
+      setOk(emp.is_active ? 'Employee deactivated' : 'Employee activated');
+      load();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Update failed');
+    }
+  };
+  const resetPassword = async () => {
+    if (!resetId || resetPw.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+    setError(''); setOk('');
+    try {
+      await api.post(`/employees/${resetId}/reset-password`, { password: resetPw });
+      setResetId(null); setResetPw('');
+      setOk('Password updated');
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Reset failed');
+    }
+  };
+  return (
+    <div className="space-y-5 max-w-5xl">
+      <PageHeader title="Employees" subtitle="Only admins can create staff accounts and reset passwords." />
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{error}</div>}
+      {ok && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">{ok}</div>}
+      <Card title="Create employee">
+        <form onSubmit={create} className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Name</label>
+            <input className="input mt-1" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Email</label>
+            <input className="input mt-1" type="email" required placeholder="name@company.com" pattern="[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}" title="Valid email like name@company.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Password</label>
+            <input className="input mt-1" type="password" required minLength={6} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Phone</label>
+            <input className="input mt-1" required inputMode="tel" placeholder="9876543210" pattern="[6-9][0-9]{9}" title="10-digit Indian mobile starting with 6–9" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            <p className="text-[11px] text-graphite-400 mt-1">10-digit mobile (6–9…), optional +91</p>
+          </div>
+          <div className="sm:col-span-2">
+            <button className="btn-primary" disabled={busy}>{busy ? 'Creating…' : 'Create employee'}</button>
+          </div>
+        </form>
+      </Card>
+      <Card title={`Staff (${items.length})`}>
+        {items.length === 0 ? (
+          <EmptyState title="No employees yet" hint="Create the first employee above." />
+        ) : (
+          <div className="overflow-x-auto -mx-5 px-5">
+            <table className="w-full min-w-[640px]">
+              <thead className="bg-graphite-50">
+                <tr>
+                  <th className="th">Name</th>
+                  <th className="th">Email</th>
+                  <th className="th">Phone</th>
+                  <th className="th">Status</th>
+                  <th className="th text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((emp) => (
+                  <tr key={emp.id} className="hover:bg-graphite-50">
+                    <td className="td font-medium">{emp.name}</td>
+                    <td className="td">{emp.email}</td>
+                    <td className="td">{emp.phone || '—'}</td>
+                    <td className="td">
+                      <span className={`text-xs font-medium ${emp.is_active ? 'text-[#2F9E44]' : 'text-graphite-400'}`}>
+                        {emp.is_active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="td text-right space-x-2 whitespace-nowrap">
+                      <button type="button" className="btn-secondary !px-2.5 !py-1 text-xs" onClick={() => { setResetId(emp.id); setResetPw(''); setError(''); setOk(''); }}>
+                        Reset password
+                      </button>
+                      <button type="button" className="btn-secondary !px-2.5 !py-1 text-xs" onClick={() => toggleActive(emp)}>
+                        {emp.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      {resetId && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setResetId(null)}>
+          <div className="card p-6 w-full max-w-sm space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-graphite-900">Assign new password</h3>
+            <p className="text-sm text-graphite-500">Set a temporary password and share it with the employee.</p>
+            <input className="input" type="password" minLength={6} placeholder="New password (min 6)" value={resetPw} onChange={(e) => setResetPw(e.target.value)} />
+            <div className="flex gap-2 justify-end">
+              <button type="button" className="btn-secondary" onClick={() => setResetId(null)}>Cancel</button>
+              <button type="button" className="btn-primary" onClick={resetPassword}>Save password</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

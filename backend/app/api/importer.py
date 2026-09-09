@@ -1,4 +1,4 @@
-"""Excel import: upload → preview/validate/dedup → confirm. Never direct-insert."""
+"""Excel import: preview, confirm, review skipped rows, promote wrongly flagged to leads."""
 import os
 import re
 import tempfile
@@ -6,24 +6,34 @@ from uuid import UUID
 
 import openpyxl
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import admin_only
 from app.db.session import get_db
-from app.models import ImportBatch, ImportError, Lead, LeadActivity, LeadSource, LeadStatus, LeadStatusHistory, Product, ProductAlias, User
+from app.models import ImportBatch, ImportError, Lead, LeadStatus, LeadStatusHistory, User
 from app.services.lead_service import auto_assign, next_enquiry_number
-from app.services.normalize import SOURCE_ALIASES, STATUS_ALIASES, norm_key, norm_phone, parse_excel_date, parse_quantity
+from app.services.normalize import norm_phone, parse_excel_date
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 PENDING: dict[str, list[dict]] = {}
 
-# Header signature of the Leads Tracker sheet (normalised, order-free).
-TRACKER_MARKERS = {"enq no", "date received", "lead name", "contact no", "lead source"}
+TRACKER_MARKERS = {"enq no", "date received", "lead name", "contact no", "city"}
+
+
+class ErrorUpdate(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    city: str | None = None
+    enq: str | int | float | None = None
+    date: str | None = None
+
+
+class PromoteIn(BaseModel):
+    force: bool = False  # if true, drop conflicting legacy enquiry no and still create
 
 
 def parse_legacy_enq(raw) -> int | None:
-    """Excel gives enquiry numbers as floats (1.0) or ints — handle both."""
     if raw is None or raw == "":
         return None
     try:
@@ -42,7 +52,6 @@ def suggest_sheet(names: list[str]) -> str:
 
 def header_score(header: list[str]) -> int:
     normed = {re.sub(r"\s+", " ", (h or "").strip().lower()) for h in header}
-    # fuzzy: marker matches if it appears inside any header cell
     hits = 0
     for m in TRACKER_MARKERS:
         if any(m in h or h in m for h in normed if h):
@@ -50,27 +59,86 @@ def header_score(header: list[str]) -> int:
     return hits
 
 
-def _norm_source(db: Session, raw: str):
-    canon = SOURCE_ALIASES.get(norm_key(raw), (raw or "").strip())
-    return db.query(LeadSource).filter(func.lower(LeadSource.name) == canon.lower()).first()
+def _default_status(db: Session) -> LeadStatus:
+    st = db.query(LeadStatus).filter(LeadStatus.name == "New Lead").first()
+    if not st:
+        raise HTTPException(500, "New Lead status missing — run seed")
+    return st
 
 
-def _norm_status(db: Session, raw: str):
-    canon = STATUS_ALIASES.get(norm_key(raw), (raw or "").strip() or "New Lead")
-    return db.query(LeadStatus).filter(func.lower(LeadStatus.name) == canon.lower()).first()
+def _json_safe_rec(rec: dict) -> dict:
+    out = dict(rec)
+    # Ensure JSONB-friendly values
+    if "date" in out and out["date"] is not None and not isinstance(out["date"], (str, int, float, bool)):
+        out["date"] = str(out["date"])
+    out.pop("dup", None)
+    return out
 
 
-def _norm_product(db: Session, raw: str):
-    from app.services.normalize import PRODUCT_ALIASES
-    if not raw or not str(raw).strip():
-        return None
-    k = norm_key(str(raw))
-    canon = PRODUCT_ALIASES.get(k, str(raw).strip())
-    p = db.query(Product).filter(func.lower(Product.name) == canon.lower()).first()
-    if not p:
-        al = db.query(ProductAlias).filter(func.lower(ProductAlias.alias) == k).first()
-        p = db.get(Product, al.product_id) if al else None
-    return p
+def _serialize_error(e: ImportError) -> dict:
+    raw = e.raw or {}
+    return {
+        "id": str(e.id),
+        "batch_id": str(e.batch_id),
+        "row_number": e.row_number,
+        "reason": e.reason,
+        "error": e.error,
+        "name": raw.get("name", ""),
+        "phone": raw.get("phone", ""),
+        "city": raw.get("city", ""),
+        "enq": raw.get("legacy_enq", raw.get("enq")),
+        "date": raw.get("date"),
+        "raw": raw,
+    }
+
+
+def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
+    name = str(raw.get("name") or "").strip()
+    phone = str(raw.get("phone") or "").strip()
+    city = str(raw.get("city") or "").strip()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if not phone:
+        raise HTTPException(400, "Phone is required")
+    phone_n = norm_phone(phone)
+    if not phone_n:
+        raise HTTPException(400, "Invalid phone number")
+    if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
+
+    legacy = raw.get("legacy_enq")
+    if legacy is None:
+        legacy = parse_legacy_enq(raw.get("enq"))
+    if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+        if force:
+            legacy = None  # keep unique CRM enquiry; drop conflicting excel enq
+        else:
+            raise HTTPException(
+                400,
+                "Enquiry number already exists. Correct it, or promote with force to create without that Excel enquiry no.",
+            )
+
+    st = _default_status(db)
+    lead = Lead(
+        enquiry_number=next_enquiry_number(db),
+        legacy_enquiry_no=legacy,
+        enquiry_date=parse_excel_date(raw.get("date")),
+        customer_name=name,
+        contact_number=phone,
+        contact_number_norm=phone_n,
+        city=city,
+        status_id=st.id,
+        sla_state="PENDING",
+        created_by=admin.id,
+    )
+    db.add(lead)
+    db.flush()
+    db.add(LeadStatusHistory(
+        lead_id=lead.id, old_status_id=None, new_status_id=st.id,
+        changed_by=admin.id, reason="import review promote",
+    ))
+    auto_assign(db, lead, admin)
+    return lead
 
 
 @router.post("/excel")
@@ -95,7 +163,6 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
     names = wb.sheetnames
     if sheet and sheet not in names:
         raise HTTPException(400, f"Sheet '{sheet}' not found. Available: {', '.join(names)}")
-    # Sheet discovery mode: no sheet chosen → return sheet list + suggestion, parse nothing.
     if not sheet:
         return {"batch_id": None, "sheets": names, "suggested": suggest_sheet(names)}
     ws = wb[sheet]
@@ -109,41 +176,77 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             f"Sheet '{sheet}' does not look like the Leads Tracker "
             f"(found headers: {', '.join(h for h in header if h)[:120]}). "
             "Please select the tracker sheet.")
-    preview, dup, invalid = [], 0, 0
-    seen_phones = set()
+
+    preview, duplicates, invalids = [], [], []
+    seen_phones: set[str] = set()
+    seen_enqs: set[int] = set()
     for i, r in enumerate(rows[1:], start=2):
         if not any(r):
             continue
-        rec = {"row": i, "enq": r[0], "date": r[1], "name": r[2], "company": r[3],
-               "phone": str(r[4] or ""), "city": r[5], "cars": r[6], "status": r[13],
-               "source": r[16], "product": r[19], "owner": r[20], "email": r[29]}
-        errs = []
-        if not rec["name"] and not rec["phone"]:
-            errs.append("missing name+phone")
+        rec = {
+            "row": i,
+            "enq": r[0] if len(r) > 0 else None,
+            "date": r[1] if len(r) > 1 else None,
+            "name": str(r[2] or "").strip() if len(r) > 2 else "",
+            "phone": str(r[4] or "").strip() if len(r) > 4 else "",
+            "city": str(r[5] or "").strip() if len(r) > 5 else "",
+        }
+        errs: list[str] = []
+        if not rec["name"]:
+            errs.append("missing name")
+        if not rec["phone"]:
+            errs.append("missing phone")
+
         phone_n = norm_phone(rec["phone"])
-        if phone_n and (db.query(Lead).filter_by(contact_number_norm=phone_n).first() or phone_n in seen_phones):
-            rec["dup"] = True
-            dup += 1
         legacy = parse_legacy_enq(rec["enq"])
         rec["legacy_enq"] = legacy
-        if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-            rec["dup"] = True
-            dup += 1
-        if errs:
-            rec["errors"] = errs
-            invalid += 1
+        rec["phone_norm"] = phone_n
+        if rec["date"] is not None and not isinstance(rec["date"], (str, int, float, bool)):
+            rec["date"] = str(rec["date"])
+
+        dup_reasons: list[str] = []
         if phone_n:
-            seen_phones.add(phone_n)
+            if phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+                dup_reasons.append("duplicate phone")
+        else:
+            errs.append("invalid phone")
+        if legacy is not None:
+            if legacy in seen_enqs or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+                dup_reasons.append("duplicate enquiry no")
+        else:
+            errs.append("missing/invalid enquiry no")
+
+        if dup_reasons:
+            rec["dup"] = True
+            rec["errors"] = dup_reasons
+            duplicates.append(rec)
+        elif errs:
+            rec["errors"] = errs
+            invalids.append(rec)
+        else:
+            if phone_n:
+                seen_phones.add(phone_n)
+            if legacy is not None:
+                seen_enqs.add(legacy)
         preview.append(rec)
-    batch = ImportBatch(file_name=safe_name, sheet_name=ws.title, total_rows=len(preview),
-                        duplicates=dup, invalid=invalid, status="PREVIEW", created_by=admin.id)
+
+    batch = ImportBatch(
+        file_name=safe_name, sheet_name=ws.title, total_rows=len(preview),
+        duplicates=len(duplicates), invalid=len(invalids), status="PREVIEW", created_by=admin.id,
+    )
     db.add(batch)
     db.commit()
     PENDING[str(batch.id)] = preview
-    valid = len(preview) - dup - invalid
-    return {"batch_id": str(batch.id), "sheets": names, "sheet": ws.title,
-            "total": len(preview), "duplicates": dup, "invalid": invalid,
-            "valid": valid, "preview": preview[:50]}
+    valid = len(preview) - len(duplicates) - len(invalids)
+    return {
+        "batch_id": str(batch.id), "sheets": names, "sheet": ws.title,
+        "total": len(preview), "duplicates": len(duplicates), "invalid": len(invalids),
+        "valid": valid, "preview": [r for r in preview if not r.get("dup") and not r.get("errors")][:50],
+        "duplicate_rows": duplicates,
+        "invalid_rows": invalids,
+        "fields": ["enquiry no", "received date", "name", "phone", "city"],
+        "note": "Review duplicates/invalid below. After confirm you can still correct and add wrongly flagged rows as leads.",
+    }
 
 
 @router.post("/{bid}/confirm")
@@ -152,34 +255,165 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
     rows = PENDING.get(str(bid), [])
     if not batch or not rows:
         raise HTTPException(404, "Batch expired — re-upload")
-    ok = 0
+    st = _default_status(db)
+    ok = assigned = pending = 0
     for rec in rows:
         if rec.get("dup") or rec.get("errors"):
-            db.add(ImportError(batch_id=bid, row_number=rec["row"], raw=rec,
-                               error=",".join(rec.get("errors", ["duplicate"])),
-                               reason="DUPLICATE" if rec.get("dup") else "INVALID"))
+            db.add(ImportError(
+                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                error=",".join(rec.get("errors", ["duplicate"])),
+                reason="DUPLICATE" if rec.get("dup") else "INVALID",
+            ))
             continue
-        src = _norm_source(db, str(rec["source"] or "Others"))
-        st = _norm_status(db, str(rec["status"] or "New Lead"))
-        prod = _norm_product(db, str(rec["product"] or ""))
-        phone_n = norm_phone(rec["phone"])
-        lead = Lead(enquiry_number=next_enquiry_number(db),
-                    legacy_enquiry_no=rec.get("legacy_enq"),
-                    enquiry_date=parse_excel_date(rec["date"]),
-                    customer_name=str(rec["name"] or ""), company_name=str(rec["company"] or ""),
-                    contact_number=str(rec["phone"] or ""), contact_number_norm=phone_n,
-                    city=str(rec["city"] or ""), email=str(rec["email"] or ""),
-                    quantity_raw=str(rec["cars"] or ""), quantity_num=parse_quantity(str(rec["cars"] or "")),
-                    source_id=src.id if src else None, product_id=prod.id if prod else None,
-                    status_id=st.id, created_by=admin.id)
+        phone_n = rec.get("phone_norm") or norm_phone(rec["phone"])
+        if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+            db.add(ImportError(batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                               error="duplicate phone", reason="DUPLICATE"))
+            continue
+        legacy = rec.get("legacy_enq")
+        if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+            db.add(ImportError(batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                               error="duplicate enquiry no", reason="DUPLICATE"))
+            continue
+
+        lead = Lead(
+            enquiry_number=next_enquiry_number(db),
+            legacy_enquiry_no=legacy,
+            enquiry_date=parse_excel_date(rec["date"]),
+            customer_name=str(rec["name"] or ""),
+            contact_number=str(rec["phone"] or ""),
+            contact_number_norm=phone_n,
+            city=str(rec["city"] or ""),
+            status_id=st.id,
+            sla_state="PENDING",
+            created_by=admin.id,
+        )
         db.add(lead)
         db.flush()
-        db.add(LeadStatusHistory(lead_id=lead.id, old_status_id=None, new_status_id=st.id,
-                                 changed_by=admin.id, reason="excel import"))
-        auto_assign(db, lead, admin)
+        db.add(LeadStatusHistory(
+            lead_id=lead.id, old_status_id=None, new_status_id=st.id,
+            changed_by=admin.id, reason="excel import",
+        ))
+        emp = auto_assign(db, lead, admin)
+        if emp:
+            assigned += 1
+        else:
+            pending += 1
         ok += 1
     batch.imported = ok
     batch.status = "DONE"
     db.commit()
-    return {"total": batch.total_rows, "imported": ok, "duplicates": batch.duplicates,
-            "invalid": batch.invalid, "skipped": batch.total_rows - ok - batch.duplicates - batch.invalid}
+    errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
+    return {
+        "batch_id": str(bid),
+        "total": batch.total_rows,
+        "imported": ok,
+        "assigned": assigned,
+        "pending": pending,
+        "duplicates": batch.duplicates,
+        "invalid": batch.invalid,
+        "skipped": len(errors),
+        "errors": [_serialize_error(e) for e in errors],
+    }
+
+
+@router.get("/batches")
+def list_batches(db: Session = Depends(get_db), _: User = Depends(admin_only), limit: int = 20):
+    rows = db.query(ImportBatch).order_by(ImportBatch.created_at.desc()).limit(limit).all()
+    return [{
+        "id": str(b.id), "file_name": b.file_name, "sheet_name": b.sheet_name,
+        "status": b.status, "total_rows": b.total_rows, "imported": b.imported,
+        "duplicates": b.duplicates, "invalid": b.invalid,
+        "created_at": b.created_at.isoformat() if b.created_at else None,
+    } for b in rows]
+
+
+@router.get("/{bid}/errors")
+def list_errors(bid: UUID, reason: str = "", db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    q = db.query(ImportError).filter_by(batch_id=bid)
+    if reason:
+        q = q.filter(ImportError.reason == reason.upper())
+    rows = q.order_by(ImportError.row_number).all()
+    return {
+        "batch_id": str(bid),
+        "total": len(rows),
+        "duplicates": sum(1 for e in rows if e.reason == "DUPLICATE"),
+        "invalid": sum(1 for e in rows if e.reason == "INVALID"),
+        "items": [_serialize_error(e) for e in rows],
+    }
+
+
+@router.patch("/errors/{eid}")
+def update_error(eid: UUID, body: ErrorUpdate, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    e = db.get(ImportError, eid)
+    if not e:
+        raise HTTPException(404, "Skipped row not found")
+    raw = dict(e.raw or {})
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        raw["name"] = str(data["name"]).strip()
+    if "phone" in data and data["phone"] is not None:
+        raw["phone"] = str(data["phone"]).strip()
+        raw["phone_norm"] = norm_phone(raw["phone"])
+    if "city" in data and data["city"] is not None:
+        raw["city"] = str(data["city"]).strip()
+    if "date" in data and data["date"] is not None:
+        raw["date"] = data["date"]
+    if "enq" in data and data["enq"] is not None:
+        raw["enq"] = data["enq"]
+        raw["legacy_enq"] = parse_legacy_enq(data["enq"])
+    e.raw = raw
+    # refresh error message after edit
+    msgs = []
+    phone_n = raw.get("phone_norm") or norm_phone(raw.get("phone", ""))
+    legacy = raw.get("legacy_enq")
+    if not raw.get("name"):
+        msgs.append("missing name")
+    if not phone_n:
+        msgs.append("invalid phone")
+    elif db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        msgs.append("duplicate phone")
+    if legacy is None:
+        msgs.append("missing/invalid enquiry no")
+    elif db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+        msgs.append("duplicate enquiry no")
+    e.error = ", ".join(msgs) if msgs else "ready to add"
+    e.reason = "DUPLICATE" if any("duplicate" in m for m in msgs) else ("INVALID" if msgs else e.reason)
+    db.commit()
+    db.refresh(e)
+    return _serialize_error(e)
+
+
+@router.post("/errors/{eid}/promote")
+def promote_error(eid: UUID, body: PromoteIn | None = None, db: Session = Depends(get_db),
+                  admin: User = Depends(admin_only)):
+    e = db.get(ImportError, eid)
+    if not e:
+        raise HTTPException(404, "Skipped row not found")
+    force = bool(body and body.force)
+    lead = _create_lead_from_raw(db, e.raw or {}, admin, force=force)
+    batch = db.get(ImportBatch, e.batch_id)
+    if batch:
+        batch.imported = (batch.imported or 0) + 1
+        if e.reason == "DUPLICATE" and batch.duplicates:
+            batch.duplicates = max(0, batch.duplicates - 1)
+        if e.reason == "INVALID" and batch.invalid:
+            batch.invalid = max(0, batch.invalid - 1)
+    db.delete(e)
+    db.commit()
+    return {
+        "ok": True,
+        "lead_id": str(lead.id),
+        "enquiry_number": lead.enquiry_number,
+        "assigned": bool(lead.primary_employee_id),
+    }
+
+
+@router.delete("/errors/{eid}")
+def dismiss_error(eid: UUID, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    e = db.get(ImportError, eid)
+    if not e:
+        raise HTTPException(404, "Skipped row not found")
+    db.delete(e)
+    db.commit()
+    return {"ok": True}

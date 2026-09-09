@@ -10,6 +10,28 @@ class LoginIn(BaseModel):
     password: str
 
 
+class EmployeeCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    phone: str = ""
+    department: str = "Sales"
+    role: str = "EMPLOYEE"  # EMPLOYEE | MANAGER
+
+
+class EmployeeUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PasswordReset(BaseModel):
+    password: str
+
+
 class LeadCreate(BaseModel):
     customer_name: str = ""
     contact_number: str = ""
