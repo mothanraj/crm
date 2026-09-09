@@ -2,12 +2,22 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-  ResponsiveContainer, Legend, LineChart, Line,
+  ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
-import { Card, EmptyState, KpiCard, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
+import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
+
+async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
+  const { data } = await api.get(path, { responseType: 'blob', params });
+  const url = URL.createObjectURL(data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 /* ================= LOGIN ================= */
 export function Login() {
@@ -82,92 +92,137 @@ export function Dashboard() {
     api.get('/dashboard/by-source').then((r) => setSrc(r.data));
     api.get('/reports/monthly').then((r) => setMonthly(r.data)).catch(() => {});
   }, []);
-  const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })), [src]);
+  const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => b.total - a.total), [src]);
+  const srcTotals = useMemo(() => {
+    const t = { total: 0, follow: 0, prospect: 0, rnr: 0, notInt: 0, converted: 0 };
+    for (const r of srcRows as any[]) {
+      t.total += r.total || 0;
+      t.follow += r['In Followup'] || 0;
+      t.prospect += r['A - Prospect'] || 0;
+      t.rnr += r['RNR / Not reachable'] || 0;
+      t.notInt += (r['Not Interested'] || 0) + (r['Not Interested/Spam'] || 0);
+      t.converted += r.Converted || 0;
+    }
+    return t;
+  }, [srcRows]);
   if (!d) return <Spinner />;
+  const f = d.funnel || {};
+  const tiles = [
+    { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
+    { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#c0392b]', text: 'text-white' },
+    { label: 'Prospect / A', value: f.prospect ?? 0, bg: 'bg-[#27ae60]', text: 'text-white' },
+    { label: 'RNR / Not Resp.', value: f.rnr ?? 0, bg: 'bg-[#e67e22]', text: 'text-white' },
+    { label: 'Pipeline / A+', value: f.pipeline ?? 0, bg: 'bg-[#1e8449]', text: 'text-white' },
+    { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
+    { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#196f3d]', text: 'text-white' },
+    { label: 'New Lead', value: f.new_lead ?? 0, bg: 'bg-[#1c2833]', text: 'text-white' },
+  ];
   return (
-    <div className="space-y-6">
-      <PageHeader title="Leads funnel" subtitle="Live view — calculated from the database, never hard-coded." />
+    <div className="space-y-5">
+      <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and monthly volume from live database data." />
       {d.warning && (
-        <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
-          <span>⚠</span> {d.warning} Showing capped value below — click through to Leads for the full list.
-        </div>
+        <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Total leads" value={d.total} icon="◧" tone="blue" />
-        <KpiCard label="New leads" value={<>{d.new_lead_display}{d.new_lead_capped && <span className="text-brand-500">+</span>}</>} sub={d.new_lead_capped ? `actual ${d.new_lead_actual} — over threshold` : 'within threshold'} icon="✦" tone={d.new_lead_capped ? 'amber' : 'slate'} />
-        <KpiCard label="SLA overdue" value={d.sla_overdue} icon="⏰" tone={d.sla_overdue ? 'red' : 'slate'} sub="needs first contact" />
-        <KpiCard label="Unassigned" value={d.unassigned} icon="👤" tone={d.unassigned ? 'amber' : 'slate'} />
-        <KpiCard label="Quotations" value={d.quotations} icon="🧾" />
-        <KpiCard label="Site visits" value={d.visits} icon="📍" />
-        <KpiCard label="Converted" value={d.by_status?.Converted ?? 0} icon="🏆" tone="green"
-          sub={d.total ? `${(((d.by_status?.Converted ?? 0) / d.total) * 100).toFixed(1)}% conversion` : undefined} />
-      </div>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {tiles.map((t) => (
+              <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="bg-graphite-100 text-graphite-700 rounded-lg px-3 py-2 text-sm flex justify-between">
+            <span className="font-medium">Other / Unmapped status</span>
+            <span className="font-bold tabular-nums">{f.other ?? 0}</span>
+          </div>
 
-      <Card title="Pipeline by status">
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(d.by_status || {}).map(([k, v]: any) => (
-            <span key={k} className="inline-flex items-center gap-2 bg-graphite-50 border border-graphite-200 rounded-lg px-3 py-1.5 text-sm">
-              <StatusBadge value={k} /><b>{v}</b>
-            </span>
-          ))}
-          {Object.keys(d.by_status || {}).length === 0 && <EmptyState title="No leads yet" hint="Import the Excel tracker to populate the funnel." />}
-        </div>
-      </Card>
-
-      <div className="grid lg:grid-cols-2 gap-4">
-        <Card title="Leads by source">
-          {pie.length === 0 ? <EmptyState title="No data" /> : (
-            <div className="h-72">
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie data={pie} dataKey="value" nameKey="name" outerRadius={105} labelLine={false}>
-                    {pie.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip /><Legend />
-                </PieChart>
-              </ResponsiveContainer>
+          <Card title="Leads by Source">
+            <div className="overflow-x-auto -mx-5 px-5">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="bg-[#0e7490] text-white">
+                    <th className="th !text-white !bg-transparent">Source</th>
+                    <th className="th text-right !text-white !bg-transparent">Total</th>
+                    <th className="th text-right !text-white !bg-transparent">In Followup</th>
+                    <th className="th text-right !text-white !bg-transparent">Prospect</th>
+                    <th className="th text-right !text-white !bg-transparent">RNR</th>
+                    <th className="th text-right !text-white !bg-transparent">Not Int.</th>
+                    <th className="th text-right !text-white !bg-transparent">Converted</th>
+                    <th className="th text-right !text-white !bg-transparent">Conv.%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {srcRows.map((r: any, i: number) => (
+                    <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+                      <td className="td font-medium">{r.name}</td>
+                      <td className="td text-right font-bold">{r.total}</td>
+                      <td className="td text-right">{r['In Followup'] ?? 0}</td>
+                      <td className="td text-right">{r['A - Prospect'] ?? 0}</td>
+                      <td className="td text-right">{r['RNR / Not reachable'] ?? 0}</td>
+                      <td className="td text-right">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                      <td className="td text-right">{r.Converted ?? 0}</td>
+                      <td className="td text-right">{r.total ? (((r.Converted ?? 0) / r.total) * 100).toFixed(1) : '0.0'}%</td>
+                    </tr>
+                  ))}
+                  {srcRows.length > 0 && (
+                    <tr className="bg-graphite-100 font-bold">
+                      <td className="td">TOTAL</td>
+                      <td className="td text-right">{srcTotals.total}</td>
+                      <td className="td text-right">{srcTotals.follow}</td>
+                      <td className="td text-right">{srcTotals.prospect}</td>
+                      <td className="td text-right">{srcTotals.rnr}</td>
+                      <td className="td text-right">{srcTotals.notInt}</td>
+                      <td className="td text-right">{srcTotals.converted}</td>
+                      <td className="td text-right">{srcTotals.total ? ((srcTotals.converted / srcTotals.total) * 100).toFixed(1) : '0.0'}%</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {srcRows.length === 0 && <EmptyState title="No source data" hint="Import leads to populate the funnel." />}
             </div>
-          )}
-        </Card>
-        <Card title="Monthly volume">
-          {monthly.length === 0 ? <EmptyState title="No dated leads" /> : (
-            <div className="h-72">
-              <ResponsiveContainer>
-                <LineChart data={monthly}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                  <Tooltip /><Legend />
-                  <Line type="monotone" dataKey="leads" stroke="#65A30D" strokeWidth={2} dot={false} name="Leads" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <Card title="Source summary">
-        <div className="overflow-x-auto -mx-5 px-5">
-          <table className="w-full min-w-[720px]">
-            <thead><tr><th className="th">Source</th><th className="th text-right">Total</th><th className="th text-right">In Followup</th><th className="th text-right">Prospect</th><th className="th text-right">RNR</th><th className="th text-right">Not Int.</th><th className="th text-right">Converted</th><th className="th text-right">Conv. %</th></tr></thead>
-            <tbody>
-              {srcRows.map((r: any) => (
-                <tr key={r.name} className="hover:bg-graphite-50">
-                  <td className="td font-medium">{r.name}</td>
-                  <td className="td text-right font-bold">{r.total}</td>
-                  <td className="td text-right">{r['In Followup'] ?? 0}</td>
-                  <td className="td text-right">{r['A - Prospect'] ?? 0}</td>
-                  <td className="td text-right">{r['RNR / Not reachable'] ?? 0}</td>
-                  <td className="td text-right">{r['Not Interested'] ?? 0}</td>
-                  <td className="td text-right">{r.Converted ?? 0}</td>
-                  <td className="td text-right">{r.total ? (((r.Converted ?? 0) / r.total) * 100).toFixed(1) : '0.0'}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          </Card>
         </div>
-      </Card>
+
+        <div className="space-y-5">
+          <Card title="Leads by Source">
+            {pie.length === 0 ? <EmptyState title="No data" /> : (
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <PieChart>
+                    <Pie data={pie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(percent * 100).toFixed(0)}%`}>
+                      {pie.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip /><Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </Card>
+          <Card title="Monthly Lead Volume" action={
+            <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => downloadReport('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
+              Download
+            </button>
+          }>
+            {monthly.length === 0 ? <EmptyState title="No dated leads" /> : (
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <BarChart data={monthly}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                    <Tooltip /><Legend />
+                    <Bar dataKey="leads" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="converted" fill="#c0392b" name="Converted" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -256,31 +311,43 @@ export function LeadDetail({ id }: { id: string }) {
   const [masters, setMasters] = useState<any>(null);
   const [note, setNote] = useState('');
   const [method, setMethod] = useState('Call');
-  const [result, setResult] = useState('Connected');
-  const [talkNotes, setTalkNotes] = useState('');
+  const [progressId, setProgressId] = useState('');
+  const [remarks, setRemarks] = useState('');
   const [assignEmp, setAssignEmp] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [okMsg, setOkMsg] = useState('');
   const [tab, setTab] = useState<'timeline' | 'history'>('timeline');
   const role = localStorage.getItem('role') || 'EMPLOYEE';
   const reload = () => api.get(`/leads/${id}`).then((r) => setL(r.data));
   useEffect(() => { reload(); api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, [id]);
+  useEffect(() => {
+    if (l?.status_id) setProgressId(l.status_id);
+  }, [l?.status_id]);
   if (!l) return <Spinner />;
   const nameOf = (kind: string, v?: string) => masters?.[kind]?.find((x: any) => x.id === v)?.name ?? (v ?? '—');
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
+  const canUpdateProgress = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id);
   const addNote = async () => {
     if (!note.trim()) return;
     await api.post(`/leads/${id}/activities`, { activity_type: 'Note', notes: note });
     setNote(''); reload();
   };
-  const saveContact = async () => {
-    setBusy(true); setErr('');
+  const saveProgress = async () => {
+    if (!progressId) { setErr('Select work progress'); return; }
+    if (!remarks.trim()) { setErr('Enter remarks about the conversation'); return; }
+    setBusy(true); setErr(''); setOkMsg('');
     try {
-      await api.post(`/leads/${id}/contact`, { method, result, notes: talkNotes });
-      setTalkNotes('');
+      await api.post(`/leads/${id}/status`, {
+        new_status_id: progressId,
+        reason: remarks.trim(),
+        method,
+      });
+      setRemarks('');
+      setOkMsg('Work progress saved');
       reload();
     } catch (e: any) {
-      setErr(e?.response?.data?.detail || 'Could not save contact');
+      setErr(e?.response?.data?.detail || 'Could not save work progress');
     } finally { setBusy(false); }
   };
   const doAssign = async () => {
@@ -304,6 +371,7 @@ export function LeadDetail({ id }: { id: string }) {
               <StatusBadge value={nameOf('statuses', l.status_id)} />
               <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />
               {l.pending_assignment && <span className="text-xs font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 px-2 py-0.5 rounded-full">Unassigned</span>}
+              {needsContact && <span className="text-xs font-medium text-sky-800 bg-sky-50 ring-1 ring-sky-200 px-2 py-0.5 rounded-full">Speak to customer</span>}
             </div>
             <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-graphite-500">
@@ -320,6 +388,7 @@ export function LeadDetail({ id }: { id: string }) {
         </div>
       </div>
       {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{err}</div>}
+      {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3">{okMsg}</div>}
 
       {role === 'ADMIN' && l.pending_assignment && (
         <Card title="Assign to employee">
@@ -338,28 +407,40 @@ export function LeadDetail({ id }: { id: string }) {
 
       <div className="grid lg:grid-cols-3 gap-4">
         <div className="space-y-4 lg:col-span-1">
-          {needsContact && (
-            <Card title="Did you talk to the customer?">
-              <p className="text-xs text-graphite-500 mb-3">Within 3 days of assignment. Record what you discussed — this completes the SLA.</p>
+          {canUpdateProgress && (
+            <Card title="Update work progress">
+              <p className="text-xs text-graphite-500 mb-3">
+                {needsContact
+                  ? 'After you speak to the assigned customer, set progress and add remarks. This also completes the 3-day contact SLA.'
+                  : 'After each follow-up call, update progress and add remarks.'}
+              </p>
               <div className="space-y-2">
+                {needsContact && (
+                  <div>
+                    <label className="text-xs font-medium text-graphite-600">Contact method</label>
+                    <select className="input mt-1" value={method} onChange={(e) => setMethod(e.target.value)}>
+                      {['Call', 'WhatsApp', 'Email', 'Meeting', 'Other'].map((m) => <option key={m}>{m}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Method</label>
-                  <select className="input mt-1" value={method} onChange={(e) => setMethod(e.target.value)}>
-                    {['Call', 'WhatsApp', 'Email', 'Meeting', 'Other'].map((m) => <option key={m}>{m}</option>)}
+                  <label className="text-xs font-medium text-graphite-600">Work progress</label>
+                  <select className="input mt-1" value={progressId} onChange={(e) => setProgressId(e.target.value)}>
+                    <option value="">Select progress…</option>
+                    {masters?.statuses?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Result</label>
-                  <select className="input mt-1" value={result} onChange={(e) => setResult(e.target.value)}>
-                    {['Connected', 'RNR', 'Busy', 'Wrong number', 'Interested', 'Not interested'].map((m) => <option key={m}>{m}</option>)}
-                  </select>
+                  <label className="text-xs font-medium text-graphite-600">Remarks</label>
+                  <textarea
+                    className="input mt-1 min-h-[110px]"
+                    placeholder="What did the customer say? Next step…"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                  />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-graphite-600">What did you talk about?</label>
-                  <textarea className="input mt-1 min-h-[100px]" required placeholder="Customer response, next step…" value={talkNotes} onChange={(e) => setTalkNotes(e.target.value)} />
-                </div>
-                <button onClick={saveContact} disabled={busy || !talkNotes.trim()} className="btn-primary w-full">
-                  {busy ? 'Saving…' : 'Yes — save contact update'}
+                <button onClick={saveProgress} disabled={busy || !progressId || !remarks.trim()} className="btn-primary w-full">
+                  {busy ? 'Saving…' : needsContact ? 'Save progress & complete contact' : 'Save work progress'}
                 </button>
               </div>
             </Card>
@@ -371,10 +452,12 @@ export function LeadDetail({ id }: { id: string }) {
               {l.first_contact_notes && <p className="text-sm mt-2 whitespace-pre-wrap">{l.first_contact_notes}</p>}
             </Card>
           )}
-          <Card title="Add note">
-            <textarea className="input min-h-[90px]" placeholder="Later follow-up note…" value={note} onChange={(e) => setNote(e.target.value)} />
-            <button onClick={addNote} className="btn-secondary w-full mt-3">Add to timeline</button>
-          </Card>
+          {role !== 'EMPLOYEE' && (
+            <Card title="Add note">
+              <textarea className="input min-h-[90px]" placeholder="Later follow-up note…" value={note} onChange={(e) => setNote(e.target.value)} />
+              <button onClick={addNote} className="btn-secondary w-full mt-3">Add to timeline</button>
+            </Card>
+          )}
         </div>
         <div className="card lg:col-span-2">
           <div className="flex gap-1 border-b border-graphite-200 px-4 pt-3 text-sm font-medium">
@@ -386,7 +469,7 @@ export function LeadDetail({ id }: { id: string }) {
             ))}
           </div>
           <div className="p-5">
-            {tab === 'timeline' && ((l.activities || []).length === 0 ? <EmptyState title="No activity yet" hint="Record first contact or add a note." /> : (
+            {tab === 'timeline' && ((l.activities || []).length === 0 ? <EmptyState title="No activity yet" hint="Speak to the customer and update work progress." /> : (
               <ol className="relative border-l-2 border-graphite-200 ml-2 space-y-5">
                 {(l.activities || []).map((a: any) => (
                   <li key={a.id} className="ml-5">
@@ -750,9 +833,19 @@ export function ImportPage() {
 }
 
 /* ================= REPORTS ================= */
-function BarCard({ title, data, x, y }: { title: string; data: any[]; x: string; y: string }) {
+function money(n: number) {
+  return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
+function BarCard({ title, data, x, y, onDownload }: {
+  title: string; data: any[]; x: string; y: string; onDownload?: () => void;
+}) {
   return (
-    <Card title={title}>
+    <Card title={title} action={onDownload && (
+      <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={onDownload}>
+        Download Excel
+      </button>
+    )}>
       {data.length === 0 ? <EmptyState title="No data" /> : (
         <div className="h-72">
           <ResponsiveContainer>
@@ -771,21 +864,168 @@ function BarCard({ title, data, x, y }: { title: string; data: any[]; x: string;
 }
 
 export function Reports() {
+  const today = new Date();
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
   const [prod, setProd] = useState<any[]>([]);
-  const [srcrep, setSrcrep] = useState<any[]>([]);
   const [emp, setEmp] = useState<any[]>([]);
+  const [mode, setMode] = useState<'custom' | 'month'>('custom');
+  const [month, setMonth] = useState(defaultMonth);
+  const [fromDate, setFromDate] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`);
+  const [toDate, setToDate] = useState(today.toISOString().slice(0, 10));
+  const [details, setDetails] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
   useEffect(() => {
     api.get('/reports/product-wise').then((r) => setProd(r.data)).catch(() => {});
-    api.get('/reports/source-wise').then((r) => setSrcrep(r.data)).catch(() => {});
     api.get('/reports/employee-wise').then((r) => setEmp(r.data)).catch(() => {});
   }, []);
+
+  const filterParams = () => {
+    if (mode === 'month') return { mode: 'month', month };
+    return { mode: 'custom', from_date: fromDate, to_date: toDate };
+  };
+
+  const loadDetails = async () => {
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.get('/reports/source-details', { params: filterParams() });
+      setDetails(data);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Failed to load details report');
+    } finally { setBusy(false); }
+  };
+
+  useEffect(() => { loadDetails(); }, []);
+
+  const downloadDetails = async () => {
+    const p = filterParams();
+    const name = mode === 'month'
+      ? `leads-by-source-${month}.xlsx`
+      : `leads-by-source-${fromDate}_to_${toDate}.xlsx`;
+    await downloadReport('/reports/source-details/export', name, p);
+  };
+
   return (
     <div className="space-y-5">
-      <PageHeader title="Reports" subtitle="Product, source and workload analysis from live data." />
-      <div className="grid lg:grid-cols-2 gap-4">
-        <BarCard title="Product-wise leads" data={prod} x="product" y="leads" />
-        <BarCard title="Source-wise leads" data={srcrep} x="source" y="leads" />
+      <PageHeader
+        title="Reports"
+        subtitle="Details report by lead source (date range / month), product-wise counts, and monthly volume downloads."
+      />
+
+      <div className="card overflow-hidden">
+        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">
+          DETAILS REPORT — LEADS BY SOURCE
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Report Mode</label>
+              <select className="input mt-1" value={mode} onChange={(e) => setMode(e.target.value as 'custom' | 'month')}>
+                <option value="custom">Custom Date Range</option>
+                <option value="month">Month-wise</option>
+              </select>
+            </div>
+            {mode === 'month' ? (
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Select Month</label>
+                <input type="month" className="input mt-1" value={month} onChange={(e) => setMonth(e.target.value)} />
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">Custom From Date</label>
+                  <input type="date" className="input mt-1" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">Custom To Date</label>
+                  <input type="date" className="input mt-1" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+                </div>
+              </>
+            )}
+            <div className="flex items-end gap-2">
+              <button type="button" className="btn-primary" disabled={busy} onClick={loadDetails}>{busy ? 'Loading…' : 'Apply'}</button>
+              <button type="button" className="btn-secondary" disabled={!details} onClick={downloadDetails}>Download Excel</button>
+            </div>
+          </div>
+
+          {details && (
+            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+              <span><b>Effective From:</b> {details.effective_from || 'All time'}</span>
+              <span><b>Effective To:</b> {details.effective_to || 'All time'}</span>
+            </div>
+          )}
+          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[960px] text-sm">
+              <thead>
+                <tr className="bg-[#1e3a5f] text-white">
+                  <th className="th !text-white !bg-transparent">Lead Source</th>
+                  <th className="th text-right !text-white !bg-transparent">Total</th>
+                  <th className="th text-right !text-white !bg-transparent">In Followup</th>
+                  <th className="th text-right !text-white !bg-transparent">Prospect</th>
+                  <th className="th text-right !text-white !bg-transparent">RNR</th>
+                  <th className="th text-right !text-white !bg-transparent">Not Int.</th>
+                  <th className="th text-right !text-white !bg-transparent">Quote Sent</th>
+                  <th className="th text-right !text-white !bg-transparent">Project Value (Rs.)</th>
+                  <th className="th text-right !text-white !bg-transparent">Converted</th>
+                  <th className="th text-right !text-white !bg-transparent">Sales Amount (Rs.)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(details?.rows || []).map((r: any, i: number) => (
+                  <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
+                    <td className="td font-medium">{r.source}</td>
+                    <td className="td text-right font-bold">{r.total}</td>
+                    <td className="td text-right">{r.in_followup}</td>
+                    <td className="td text-right">{r.prospect}</td>
+                    <td className="td text-right">{r.rnr}</td>
+                    <td className="td text-right">{r.not_interested}</td>
+                    <td className="td text-right">{r.quote_sent}</td>
+                    <td className="td text-right">{money(r.project_value)}</td>
+                    <td className="td text-right">{r.converted}</td>
+                    <td className="td text-right">{money(r.sales_amount)}</td>
+                  </tr>
+                ))}
+                {details?.totals && (
+                  <tr className="bg-graphite-100 font-bold">
+                    <td className="td">TOTAL</td>
+                    <td className="td text-right">{details.totals.total}</td>
+                    <td className="td text-right">{details.totals.in_followup}</td>
+                    <td className="td text-right">{details.totals.prospect}</td>
+                    <td className="td text-right">{details.totals.rnr}</td>
+                    <td className="td text-right">{details.totals.not_interested}</td>
+                    <td className="td text-right">{details.totals.quote_sent}</td>
+                    <td className="td text-right">{money(details.totals.project_value)}</td>
+                    <td className="td text-right">{details.totals.converted}</td>
+                    <td className="td text-right">{money(details.totals.sales_amount)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            {!details && !busy && <EmptyState title="Apply a date range to load the report" />}
+          </div>
+        </div>
       </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <BarCard
+          title="Product-wise leads"
+          data={prod}
+          x="product"
+          y="leads"
+          onDownload={() => downloadReport('/reports/product-wise/export', 'product-wise-report.xlsx')}
+        />
+        <Card title="Monthly lead volume" action={
+          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => downloadReport('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
+            Download monthly Excel
+          </button>
+        }>
+          <p className="text-sm text-graphite-600">Download total leads and converted counts for every month with a valid enquiry date.</p>
+        </Card>
+      </div>
+
       <Card title="Employee workload">
         {emp.length === 0 ? <EmptyState title="No data" /> : (
           <table className="w-full"><thead className="bg-graphite-50"><tr><th className="th">Employee</th><th className="th text-right">Assigned leads</th></tr></thead>

@@ -1,26 +1,125 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from calendar import monthrange
+from datetime import date, datetime
+from io import BytesIO
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
 from app.models import Lead, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
+from app.services.normalize import CANONICAL_SOURCES
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
+# Status buckets used by Excel Details Report / Live Dashboard
+STATUS_PROSPECT = "A - Prospect"
+STATUS_FOLLOWUP = "In Followup"
+STATUS_RNR = "RNR / Not reachable"
+STATUS_NOT_INT = ("Not Interested", "Not Interested/Spam")
+STATUS_QUOTE = "Quotation sent"
+STATUS_CONVERTED = "Converted"
+STATUS_PIPELINE = "A+ - Immediate"
+STATUS_NEW = "New Lead"
+DASHBOARD_MAPPED = {
+    STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
+    "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
+}
+
+
+def _xlsx_download(filename: str, headers: list[str], rows: list[list], title: str = "Report"):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _parse_date(value: str | None, field: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid {field}. Use YYYY-MM-DD") from exc
+
+
+def _resolve_range(
+    mode: str = "custom",
+    month: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> tuple[date | None, date | None, str]:
+    mode_l = (mode or "custom").lower().strip()
+    if mode_l in ("month", "month-wise", "monthly"):
+        if not month:
+            today = date.today()
+            month = f"{today.year:04d}-{today.month:02d}"
+        try:
+            y, m = map(int, month.split("-")[:2])
+            start = date(y, m, 1)
+            end = date(y, m, monthrange(y, m)[1])
+        except Exception as exc:
+            raise HTTPException(400, "Invalid month. Use YYYY-MM") from exc
+        return start, end, "month"
+    start = _parse_date(from_date, "from_date")
+    end = _parse_date(to_date, "to_date")
+    if start and end and start > end:
+        raise HTTPException(400, "from_date must be on or before to_date")
+    return start, end, "custom"
+
+
+def _date_filter(start: date | None, end: date | None):
+    clauses = [Lead.is_active.is_(True)]
+    if start:
+        clauses.append(Lead.enquiry_date >= start)
+    if end:
+        clauses.append(Lead.enquiry_date <= end)
+    return and_(*clauses)
 
 
 def _kpis(db: Session):
     total = db.query(Lead).filter(Lead.is_active.is_(True)).count()
     by_status = dict(db.query(LeadStatus.name, func.count(Lead.id)).join(
         Lead, Lead.status_id == LeadStatus.id).filter(Lead.is_active.is_(True)).group_by(LeadStatus.name).all())
-    new_lead = by_status.get("New Lead", 0)
+    new_lead = by_status.get(STATUS_NEW, 0)
     overdue = db.query(Lead).filter(Lead.sla_state == "OVERDUE", Lead.is_active.is_(True)).count()
     unassigned = db.query(Lead).filter(Lead.primary_employee_id.is_(None), Lead.is_active.is_(True)).count()
-    return {"total": total, "by_status": by_status,
-            "new_lead_actual": new_lead, "new_lead_display": min(new_lead, 5),
-            "new_lead_capped": new_lead > 5, "sla_overdue": overdue,
-            "unassigned": unassigned,
-            "quotations": db.query(Quotation).count(), "visits": db.query(SiteVisit).count()}
+    mapped = sum(by_status.get(s, 0) for s in DASHBOARD_MAPPED)
+    return {
+        "total": total,
+        "by_status": by_status,
+        "funnel": {
+            "total": total,
+            "in_followup": by_status.get(STATUS_FOLLOWUP, 0),
+            "prospect": by_status.get(STATUS_PROSPECT, 0),
+            "rnr": by_status.get(STATUS_RNR, 0),
+            "pipeline": by_status.get(STATUS_PIPELINE, 0),
+            "not_interested": by_status.get("Not Interested", 0) + by_status.get("Not Interested/Spam", 0),
+            "converted": by_status.get(STATUS_CONVERTED, 0),
+            "new_lead": new_lead,
+            "other": max(0, total - mapped),
+        },
+        "new_lead_actual": new_lead,
+        "new_lead_display": min(new_lead, 5),
+        "new_lead_capped": new_lead > 5,
+        "sla_overdue": overdue,
+        "unassigned": unassigned,
+        "quotations": db.query(Quotation).count(),
+        "visits": db.query(SiteVisit).count(),
+    }
 
 
 @router.get("/dashboard")
@@ -31,34 +130,211 @@ def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return d
 
 
-@router.get("/dashboard/by-source")
-def by_source(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    rows = db.query(LeadSource.name, LeadStatus.name, func.count(Lead.id)).join(
-        Lead, Lead.source_id == LeadSource.id, isouter=True).join(
-        LeadStatus, Lead.status_id == LeadStatus.id, isouter=True).filter(
-        Lead.is_active.is_(True)).group_by(LeadSource.name, LeadStatus.name).all()
+def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None) -> dict:
+    rows = db.query(LeadSource.name, LeadStatus.name, func.count(Lead.id)).outerjoin(
+        Lead, and_(Lead.source_id == LeadSource.id, _date_filter(start, end))
+    ).outerjoin(LeadStatus, Lead.status_id == LeadStatus.id).group_by(
+        LeadSource.name, LeadStatus.name
+    ).all()
     out: dict = {}
     for src, st, c in rows:
-        out.setdefault(src or "Unknown", {"total": 0})
-        out[src or "Unknown"][st] = c
-        out[src or "Unknown"]["total"] += c
+        name = src or "Unknown"
+        out.setdefault(name, {"total": 0})
+        if st:
+            out[name][st] = c
+            out[name]["total"] += c
+        elif c:
+            out[name]["total"] += c
+    # Leads with blank source in range
+    blank = db.query(LeadStatus.name, func.count(Lead.id)).join(
+        LeadStatus, Lead.status_id == LeadStatus.id
+    ).filter(_date_filter(start, end), Lead.source_id.is_(None)).group_by(LeadStatus.name).all()
+    if blank:
+        out.setdefault("Others", {"total": 0})
+        for st, c in blank:
+            out["Others"][st] = out["Others"].get(st, 0) + c
+            out["Others"]["total"] += c
     return out
+
+
+@router.get("/dashboard/by-source")
+def by_source(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _by_source_matrix(db)
+
+
+def _quote_sums_by_source(db: Session, start: date | None, end: date | None) -> dict[str, dict[str, float]]:
+    """project_value = all quote totals; sales_amount = quotes on Converted leads."""
+    q = (
+        db.query(
+            LeadSource.name,
+            LeadStatus.name,
+            func.coalesce(func.sum(Quotation.grand_total), 0),
+        )
+        .join(Lead, Quotation.lead_id == Lead.id)
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end))
+        .group_by(LeadSource.name, LeadStatus.name)
+        .all()
+    )
+    out: dict[str, dict[str, float]] = {}
+    for src, st, amt in q:
+        name = src or "Others"
+        bucket = out.setdefault(name, {"project_value": 0.0, "sales_amount": 0.0})
+        val = float(amt or 0)
+        bucket["project_value"] += val
+        if st == STATUS_CONVERTED:
+            bucket["sales_amount"] += val
+    return out
+
+
+def _ordered_sources(matrix: dict) -> list[str]:
+    seen = set()
+    ordered = []
+    for s in CANONICAL_SOURCES:
+        if s in matrix:
+            ordered.append(s)
+            seen.add(s)
+    for s in sorted(matrix.keys()):
+        if s not in seen:
+            ordered.append(s)
+    return ordered
+
+
+def _source_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
+    matrix = _by_source_matrix(db, start, end)
+    money = _quote_sums_by_source(db, start, end)
+    rows = []
+    totals = {
+        "total": 0, "in_followup": 0, "prospect": 0, "rnr": 0, "not_interested": 0,
+        "quote_sent": 0, "project_value": 0.0, "converted": 0, "sales_amount": 0.0,
+    }
+    for src in _ordered_sources(matrix):
+        m = matrix[src]
+        money_row = money.get(src, {"project_value": 0.0, "sales_amount": 0.0})
+        row = {
+            "source": src,
+            "total": int(m.get("total", 0)),
+            "in_followup": int(m.get(STATUS_FOLLOWUP, 0)),
+            "prospect": int(m.get(STATUS_PROSPECT, 0)),
+            "rnr": int(m.get(STATUS_RNR, 0)),
+            "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
+            "quote_sent": int(m.get(STATUS_QUOTE, 0)),
+            "project_value": round(float(money_row["project_value"]), 2),
+            "converted": int(m.get(STATUS_CONVERTED, 0)),
+            "sales_amount": round(float(money_row["sales_amount"]), 2),
+        }
+        row["conv_pct"] = round((row["converted"] / row["total"] * 100), 1) if row["total"] else 0.0
+        rows.append(row)
+        for k in totals:
+            totals[k] += row[k]
+    totals["project_value"] = round(totals["project_value"], 2)
+    totals["sales_amount"] = round(totals["sales_amount"], 2)
+    totals["conv_pct"] = round((totals["converted"] / totals["total"] * 100), 1) if totals["total"] else 0.0
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "rows": rows,
+        "totals": totals,
+    }
+
+
+@router.get("/reports/source-details")
+def source_details(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    return _source_details_payload(db, start, end, resolved)
+
+
+@router.get("/reports/source-details/export")
+def source_details_export(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    payload = _source_details_payload(db, start, end, resolved)
+    headers = [
+        "Lead Source", "Total", "In Followup", "Prospect", "RNR", "Not Int.",
+        "Quote Sent", "Project Value (Rs.)", "Converted", "Sales Amount (Rs.)", "Conv. %",
+    ]
+    body = []
+    for r in payload["rows"]:
+        body.append([
+            r["source"], r["total"], r["in_followup"], r["prospect"], r["rnr"],
+            r["not_interested"], r["quote_sent"], r["project_value"], r["converted"],
+            r["sales_amount"], r["conv_pct"],
+        ])
+    t = payload["totals"]
+    body.append([
+        "TOTAL", t["total"], t["in_followup"], t["prospect"], t["rnr"],
+        t["not_interested"], t["quote_sent"], t["project_value"], t["converted"],
+        t["sales_amount"], t["conv_pct"],
+    ])
+    # Meta sheet row for range
+    label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
+    return _xlsx_download(
+        f"leads-by-source-{label}.xlsx",
+        headers,
+        body,
+        title="Leads by Source",
+    )
+
+
+def _product_wise_rows(db: Session):
+    return [{"product": p or "Unmapped", "leads": c} for p, c in
+            db.query(Product.name, func.count(Lead.id)).join(
+                Lead, Lead.product_id == Product.id, isouter=True)
+            .filter(Lead.is_active.is_(True)).group_by(Product.name)
+            .order_by(func.count(Lead.id).desc()).all()]
+
+
+def _source_wise_rows(db: Session):
+    return [{"source": s or "Unknown", "leads": c} for s, c in
+            db.query(LeadSource.name, func.count(Lead.id)).join(
+                Lead, Lead.source_id == LeadSource.id, isouter=True)
+            .filter(Lead.is_active.is_(True)).group_by(LeadSource.name)
+            .order_by(func.count(Lead.id).desc()).all()]
 
 
 @router.get("/reports/product-wise")
 def product_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return [{"product": p or "Unmapped", "leads": c} for p, c in
-            db.query(Product.name, func.count(Lead.id)).join(
-                Lead, Lead.product_id == Product.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(Product.name).all()]
+    return _product_wise_rows(db)
+
+
+@router.get("/reports/product-wise/export")
+def product_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _product_wise_rows(db)
+    return _xlsx_download(
+        "product-wise-report.xlsx",
+        ["Product", "Leads"],
+        [[r["product"], r["leads"]] for r in rows],
+    )
 
 
 @router.get("/reports/source-wise")
 def source_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return [{"source": s or "Unknown", "leads": c} for s, c in
-            db.query(LeadSource.name, func.count(Lead.id)).join(
-                Lead, Lead.source_id == LeadSource.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(LeadSource.name).all()]
+    return _source_wise_rows(db)
+
+
+@router.get("/reports/source-wise/export")
+def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _source_wise_rows(db)
+    return _xlsx_download(
+        "source-wise-report.xlsx",
+        ["Lead Source", "Leads"],
+        [[r["source"], r["leads"]] for r in rows],
+    )
 
 
 @router.get("/reports/employee-wise")
@@ -68,12 +344,35 @@ def employee_wise(db: Session = Depends(get_db), u: User = Depends(current_user)
     return [{"employee": n, "assigned": c} for n, c in rows]
 
 
+def _monthly_rows(db: Session):
+    month_key = func.to_char(Lead.enquiry_date, "YYYY-MM")
+    month_label = func.to_char(Lead.enquiry_date, "Mon-YY")
+    converted = func.sum(case((LeadStatus.name == STATUS_CONVERTED, 1), else_=0))
+    rows = (
+        db.query(month_key, month_label, func.count(Lead.id), converted)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None))
+        .group_by(month_key, month_label)
+        .order_by(month_key)
+        .all()
+    )
+    return [{"month_key": k, "month": label, "leads": int(c), "converted": int(conv or 0)} for k, label, c, conv in rows]
+
+
 @router.get("/reports/monthly")
 def monthly(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    rows = db.query(func.to_char(Lead.enquiry_date, "Mon-YY"), func.count(Lead.id)).filter(
-        Lead.is_active.is_(True), Lead.enquiry_date.isnot(None)).group_by(
-        func.to_char(Lead.enquiry_date, "Mon-YY")).all()
-    return [{"month": m, "leads": c} for m, c in rows]
+    return _monthly_rows(db)
+
+
+@router.get("/reports/monthly/export")
+def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _monthly_rows(db)
+    return _xlsx_download(
+        "monthly-lead-volume.xlsx",
+        ["Month", "Total Leads", "Converted"],
+        [[r["month"], r["leads"], r["converted"]] for r in rows],
+        title="Monthly Volume",
+    )
 
 
 @router.get("/masters")

@@ -130,9 +130,26 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
 @router.post("/{lid}/status")
 def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: User = Depends(current_user)):
     lead = db.get(Lead, lid)
-    change_status(db, lead, body.new_status_id, u, body.reason)
+    if not lead:
+        raise HTTPException(404, "Not found")
+    if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
+        raise HTTPException(403, "Not assigned to you")
+    remarks = (body.reason or "").strip()
+    if not remarks:
+        raise HTTPException(400, "Remarks are required after speaking to the customer")
+    status = db.get(LeadStatus, body.new_status_id)
+    if not status:
+        raise HTTPException(400, "Invalid work progress status")
+    # First talk after assignment also completes the 3-day contact SLA
+    if not lead.first_contact_at and lead.primary_employee_id == u.id:
+        record_first_contact(db, lead, u, body.method or "Call", status.name, remarks)
+    change_status(db, lead, body.new_status_id, u, remarks)
+    db.add(LeadActivity(
+        lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
+        notes=remarks, outcome=status.name,
+    ))
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "sla_state": lead.sla_state, "status": status.name}
 
 
 @router.post("/{lid}/assign")

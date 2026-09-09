@@ -64,7 +64,8 @@ class LeadUpdate(BaseModel):
 
 class StatusChange(BaseModel):
     new_status_id: UUID
-    reason: str = ""
+    reason: str = ""  # remarks — required when employee updates work progress
+    method: str = "Call"  # used if this is also the first contact
 
 
 class AssignIn(BaseModel):
