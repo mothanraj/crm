@@ -1,10 +1,13 @@
-"""Seed roles, statuses, sources, products+aliases, employees, admin."""
+"""Seed roles, statuses, sources, products+aliases, and bootstrap admin only.
+
+Employees are created by admin via the Employees portal — never auto-seeded.
+"""
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models import AssignmentState, EnquirySequence, LeadSource, LeadStatus, Product, ProductAlias, Role, User
 from app.services.normalize import (
-    CANONICAL_SOURCES, CANONICAL_STATUSES, CANONICAL_PRODUCTS, PRODUCT_ALIASES, SEED_EMPLOYEES,
+    CANONICAL_SOURCES, CANONICAL_STATUSES, CANONICAL_PRODUCTS, PRODUCT_ALIASES,
 )
 
 
@@ -30,11 +33,6 @@ def run():
         for alias, canon in PRODUCT_ALIASES.items():
             if not db.query(ProductAlias).filter_by(alias=alias).first() and canon in pmap:
                 db.add(ProductAlias(product_id=pmap[canon].id, alias=alias))
-        for i, name in enumerate(SEED_EMPLOYEES):
-            email = f"{name.lower()}@crm.local"
-            if not db.query(User).filter_by(email=email).first():
-                db.add(User(name=name, email=email, password_hash=hash_password("Temp123!"),
-                            phone="", department="Sales", role_id=roles["EMPLOYEE"].id))
         if not db.query(User).filter_by(email=settings.ADMIN_EMAIL).first():
             db.add(User(name=settings.ADMIN_NAME, email=settings.ADMIN_EMAIL,
                         password_hash=hash_password(settings.ADMIN_PASSWORD),

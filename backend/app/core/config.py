@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     ADMIN_NAME: str = "Administrator"
     STORAGE_DIR: str = "../storage"
     MAX_UPLOAD_MB: int = 15
-    OPEN_LEAD_LIMIT: int = 60
+    OPEN_LEAD_LIMIT: int = 1
     CORS_ORIGINS: str = "http://localhost:5173"
 
     class Config:

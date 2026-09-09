@@ -4,6 +4,7 @@ const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
   { to: '/leads', label: 'Leads', icon: '☰', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
   { to: '/import', label: 'Import', icon: '⤴', roles: ['ADMIN'] },
+  { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
   { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
   { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
 ];

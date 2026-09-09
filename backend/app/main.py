@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, dashboard, importer, leads
+from app.api import auth, dashboard, employees, importer, leads
 from app.core.config import settings
 from app.workers.scheduler import start
 
@@ -12,6 +12,7 @@ app.include_router(auth.router)
 app.include_router(leads.router)
 app.include_router(importer.router)
 app.include_router(dashboard.router)
+app.include_router(employees.router)
 
 
 @app.on_event("startup")

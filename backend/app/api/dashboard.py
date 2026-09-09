@@ -129,11 +129,19 @@ def monthly(db: Session = Depends(get_db), u: User = Depends(current_user)):
 
 @router.get("/masters")
 def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    from app.models import Role
+    staff = (
+        db.query(User)
+        .join(Role)
+        .filter(User.is_active.is_(True), Role.name.in_(("EMPLOYEE", "MANAGER")))
+        .order_by(User.name)
+        .all()
+    )
     return {
         "sources": [{"id": str(s.id), "name": s.name} for s in db.query(LeadSource).filter_by(is_active=True).all()],
         "products": [{"id": str(p.id), "name": p.name} for p in db.query(Product).filter_by(is_active=True).all()],
         "statuses": [{"id": str(s.id), "name": s.name} for s in db.query(LeadStatus).order_by(LeadStatus.sort_order).all()],
-        "employees": [{"id": str(e.id), "name": e.name} for e in db.query(User).filter_by(is_active=True).all()],
+        "employees": [{"id": str(e.id), "name": e.name} for e in staff],
     }
 
 
