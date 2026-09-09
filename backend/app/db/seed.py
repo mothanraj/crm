@@ -20,8 +20,13 @@ def run():
         db.flush()
         roles = {r.name: r for r in db.query(Role).all()}
         for name, term, lost, order in CANONICAL_STATUSES:
-            if not db.query(LeadStatus).filter_by(name=name).first():
+            st = db.query(LeadStatus).filter_by(name=name).first()
+            if not st:
                 db.add(LeadStatus(name=name, is_terminal=term, is_lost=lost, sort_order=order))
+            else:
+                st.is_terminal = term
+                st.is_lost = lost
+                st.sort_order = order
         for i, s in enumerate(CANONICAL_SOURCES):
             if not db.query(LeadSource).filter_by(name=s).first():
                 db.add(LeadSource(name=s, sort_order=i))

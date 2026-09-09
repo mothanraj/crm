@@ -12,8 +12,12 @@ SOURCE_ALIASES = {
 }
 
 STATUS_ALIASES = {
-    "not interested/spam": "Not Interested", "not interested": "Not Interested",
+    "not interested/spam": "Not Interested/Spam",
+    "not interested": "Not Interested",
     "rnr / not reachable": "RNR / Not reachable",
+    "site visit": "Site Visit",
+    "quotation sent": "Quotation sent",
+    "quotation": "Quotation sent",
 }
 
 EMPLOYEE_ALIASES = {"ram kumar": "Ram", "sundarm": "Sundaram"}
@@ -47,13 +51,22 @@ CANONICAL_SOURCES = [
     "Facebook/Instagram", "Google Ads", "India Mart", "Direct Call", "Referral",
     "WhatsApp", "Email Campaign", "Email Enquiry", "SEO", "Others", "Expo/Stall",
 ]
+# Work-progress values used by employees after speaking to the customer (Excel "Staus" column + pipeline extras).
 CANONICAL_STATUSES = [
-    ("New Lead", False, False, 1), ("In Followup", False, False, 2),
-    ("A - Prospect", False, False, 3), ("A+ - Immediate", False, False, 4),
-    ("RNR / Not reachable", False, False, 5), ("Not Interested", False, True, 6),
-    ("Converted", True, False, 7), ("Duplicate", True, True, 8),
-    ("Investor", False, False, 9), ("Channel Partner", False, False, 10),
-    ("Approval Client", False, False, 11),
+    ("New Lead", False, False, 1),
+    ("In Followup", False, False, 2),
+    ("A - Prospect", False, False, 3),
+    ("A+ - Immediate", False, False, 4),
+    ("RNR / Not reachable", False, False, 5),
+    ("Site Visit", False, False, 6),
+    ("Quotation sent", False, False, 7),
+    ("Channel Partner", False, False, 8),
+    ("Approval Client", False, False, 9),
+    ("Investor", False, False, 10),
+    ("Not Interested", False, True, 11),
+    ("Not Interested/Spam", False, True, 12),
+    ("Converted", True, False, 13),
+    ("Duplicate", True, True, 14),
 ]
 def norm_phone(raw: str) -> str:
     d = re.sub(r"\D", "", raw or "")
