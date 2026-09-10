@@ -24,6 +24,7 @@ STATUS_QUOTE = "Quotation sent"
 STATUS_CONVERTED = "Converted"
 STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
+CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
 DASHBOARD_MAPPED = {
     STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
     "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
@@ -307,6 +308,23 @@ def _source_wise_rows(db: Session):
             .order_by(func.count(Lead.id).desc()).all()]
 
 
+def _customer_review_rows(db: Session):
+    rows = dict(
+        db.query(Lead.customer_review, func.count(Lead.id))
+        .filter(Lead.is_active.is_(True))
+        .group_by(Lead.customer_review)
+        .all()
+    )
+    out = [{"customer_review": label, "leads": int(rows.get(label, 0) or 0)} for label in CUSTOMER_REVIEW_ORDER]
+    other = sum(int(c or 0) for label, c in rows.items() if label and label not in CUSTOMER_REVIEW_ORDER)
+    blank = int(rows.get("", 0) or 0)
+    if other:
+        out.append({"customer_review": "Other", "leads": other})
+    if blank:
+        out.append({"customer_review": "Unreviewed", "leads": blank})
+    return out
+
+
 @router.get("/reports/product-wise")
 def product_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return _product_wise_rows(db)
@@ -334,6 +352,22 @@ def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_
         "source-wise-report.xlsx",
         ["Lead Source", "Leads"],
         [[r["source"], r["leads"]] for r in rows],
+    )
+
+
+@router.get("/reports/customer-review")
+def customer_review_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _customer_review_rows(db)
+
+
+@router.get("/reports/customer-review/export")
+def customer_review_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _customer_review_rows(db)
+    return _xlsx_download(
+        "customer-review-report.xlsx",
+        ["Customer Review", "Leads"],
+        [[r["customer_review"], r["leads"]] for r in rows],
+        title="Customer Review",
     )
 
 
@@ -389,6 +423,7 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
         "sources": [{"id": str(s.id), "name": s.name} for s in db.query(LeadSource).filter_by(is_active=True).all()],
         "products": [{"id": str(p.id), "name": p.name} for p in db.query(Product).filter_by(is_active=True).all()],
         "statuses": [{"id": str(s.id), "name": s.name} for s in db.query(LeadStatus).order_by(LeadStatus.sort_order).all()],
+        "customer_reviews": CUSTOMER_REVIEW_ORDER,
         "employees": [{"id": str(e.id), "name": e.name} for e in staff],
     }
 

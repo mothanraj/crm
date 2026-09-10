@@ -60,12 +60,15 @@ class LeadUpdate(BaseModel):
     city: Optional[str] = None
     requirement: Optional[str] = None
     next_followup_at: Optional[datetime] = None
+    customer_review: Optional[str] = None
 
 
 class StatusChange(BaseModel):
     new_status_id: UUID
     reason: str = ""  # remarks — required when employee updates work progress
     method: str = "Call"  # used if this is also the first contact
+    customer_review: str = ""
+    sla_state: Optional[str] = None
 
 
 class AssignIn(BaseModel):

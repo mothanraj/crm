@@ -32,6 +32,8 @@ export function Login() {
       const { data } = await api.post('/auth/login', { email, password });
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('role', data.user.role);
+      localStorage.setItem('user_id', data.user.id);
+      localStorage.setItem('user_name', data.user.name || data.user.email || data.user.role);
       location.href = '/dashboard';
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Cannot reach the server. Is the backend running on port 8000?');
@@ -229,6 +231,8 @@ export function Dashboard() {
 
 /* ================= LEADS ================= */
 export function Leads() {
+  const role = localStorage.getItem('role') || '';
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [masters, setMasters] = useState<any>(null);
@@ -238,6 +242,8 @@ export function Leads() {
   const [unassigned, setUnassigned] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string }>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
   const size = 15;
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, []);
   useEffect(() => {
@@ -248,6 +254,32 @@ export function Leads() {
   }, [search, status, sla, unassigned, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
+  const statusLabel = (lead: any) => {
+    const selectedStatus = nameOf('statuses', role === 'EMPLOYEE' ? draftFor(lead).progress : lead.status_id);
+    return selectedStatus === 'New Lead' && lead.primary_employee_id ? 'Assigned' : selectedStatus;
+  };
+  const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent'];
+  const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.status_id };
+  const saveLead = async (lead: any, done = false) => {
+    const draft = draftFor(lead);
+    if (!draft.remarks.trim() && !done) return;
+    setSavingId(lead.id);
+    try {
+      await api.post(`/leads/${lead.id}/status`, {
+        new_status_id: draft.progress || lead.status_id,
+        reason: draft.remarks.trim() || 'Lead completed',
+        method: 'Call',
+        customer_review: draft.review,
+        sla_state: done ? 'COMPLETED' : lead.sla_state,
+      });
+      setItems((current) => current.map((item) => item.id === lead.id
+        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: draft.remarks.trim() || 'Lead completed', customer_review: draft.review, sla_state: done ? 'COMPLETED' : 'PENDING' }
+        : item));
+      setDrafts((current) => { const next = { ...current }; delete next[lead.id]; return next; });
+    } catch (e: any) {
+      window.alert(e?.response?.data?.detail || 'Could not save lead remarks');
+    } finally { setSavingId(null); }
+  };
   return (
     <div>
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · 1 open customer per employee`} />
@@ -260,7 +292,6 @@ export function Leads() {
         <select className="input !w-44" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
           <option value="">All SLA states</option>
           <option value="PENDING">Pending</option>
-          <option value="OVERDUE">Overdue</option>
           <option value="COMPLETED">Completed</option>
         </select>
         <label className="inline-flex items-center gap-2 text-sm text-graphite-600 cursor-pointer">
@@ -271,21 +302,50 @@ export function Leads() {
       <div className="card overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title="No leads match" hint="Import the Excel tracker or adjust filters." /> : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1280px]">
               <thead className="bg-graphite-50"><tr>
-                <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th>
-                <th className="th">City</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
+                <th className="th">Action</th><th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th>
+                <th className="th">City</th><th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
-                  <tr key={l.id} className="hover:bg-brand-50/50">
+                  <tr key={l.id} className={l.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-brand-50/50'}>
+                    <td className="td">
+                      {role === 'EMPLOYEE' && <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={savingId === l.id} onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>{savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}</button>}
+                    </td>
                     <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                     <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                     <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
                     <td className="td">{l.city || '—'}</td>
-                    <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
-                    <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
-                    <td className="td"><SlaBadge value={l.sla_state} /></td>
+                    <td className="td"><StatusBadge value={statusLabel(l)} /></td>
+                    <td className="td min-w-[280px]">
+                      {role === 'EMPLOYEE' ? (
+                        <textarea className="input min-h-[64px] text-xs" disabled={!!l.employee_remarks} placeholder="Enter customer conversation remarks…"
+                          value={draftFor(l).remarks}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
+                      ) : <span className="block max-w-[240px] truncate" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}
+                    </td>
+                    <td className="td min-w-[190px]">
+                      {role === 'EMPLOYEE' ? (
+                        <select className="input text-xs" value={draftFor(l).review}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
+                          <option value="">Select category…</option>
+                          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      ) : (l.customer_review || '—')}
+                      {role === 'EMPLOYEE' && <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>}
+                    </td>
+                    <td className="td min-w-[190px]">
+                      {role === 'EMPLOYEE' ? (
+                        <select className="input text-xs" value={draftFor(l).progress}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
+                          {actionOptions.map((option) => {
+                            const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
+                            return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                          })}
+                        </select>
+                      ) : nameOf('statuses', l.status_id)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -368,7 +428,7 @@ export function LeadDetail({ id }: { id: string }) {
               <h1 className="text-2xl font-bold text-graphite-900">{l.enquiry_number}</h1>
               {l.legacy_enquiry_no != null && <span className="text-sm text-graphite-500">Excel #{l.legacy_enquiry_no}</span>}
               <StatusBadge value={nameOf('statuses', l.status_id)} />
-              <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />
+              {role === 'EMPLOYEE' ? <SlaBadge value={l.sla_state} /> : <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />}
               {l.pending_assignment && <span className="text-xs font-medium text-amber-700 bg-amber-50 ring-1 ring-amber-200 px-2 py-0.5 rounded-full">Unassigned</span>}
               {needsContact && <span className="text-xs font-medium text-sky-800 bg-sky-50 ring-1 ring-sky-200 px-2 py-0.5 rounded-full">Speak to customer</span>}
             </div>
@@ -447,6 +507,11 @@ export function LeadDetail({ id }: { id: string }) {
               <p className="text-sm text-graphite-700"><b>{l.first_contact_method}</b> · {l.first_contact_result}</p>
               <p className="text-xs text-graphite-400 mt-1">{l.first_contact_at.slice(0, 16).replace('T', ' ')}</p>
               {l.first_contact_notes && <p className="text-sm mt-2 whitespace-pre-wrap">{l.first_contact_notes}</p>}
+            </Card>
+          )}
+          {l.employee_remarks && (
+            <Card title="Latest employee remarks">
+              <p className="text-sm whitespace-pre-wrap">{l.employee_remarks}</p>
             </Card>
           )}
           {role !== 'EMPLOYEE' && (
@@ -970,8 +1035,24 @@ export function EmployeesPage() {
   const [busy, setBusy] = useState(false);
   const [resetId, setResetId] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState('');
+  const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
+  const [employeeLeads, setEmployeeLeads] = useState<any[]>([]);
+  const [leadMasters, setLeadMasters] = useState<any>(null);
+  const [loadingEmployeeLeads, setLoadingEmployeeLeads] = useState(false);
   const load = () => api.get('/employees').then((r) => setItems(r.data)).catch(() => setError('Failed to load employees'));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); api.get('/masters').then((r) => setLeadMasters(r.data)).catch(() => {}); }, []);
+  const viewEmployeeLeads = async (employee: any) => {
+    setSelectedEmployee(employee);
+    setLoadingEmployeeLeads(true);
+    try {
+      const { data } = await api.get('/leads', { params: { employee: employee.id, page: 1, size: 1000 } });
+      setEmployeeLeads(data.items || []);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Failed to load employee leads');
+      setEmployeeLeads([]);
+    } finally { setLoadingEmployeeLeads(false); }
+  };
+  const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(''); setOk('');
@@ -1068,7 +1149,7 @@ export function EmployeesPage() {
               <tbody>
                 {items.map((emp) => (
                   <tr key={emp.id} className="hover:bg-graphite-50">
-                    <td className="td font-medium">{emp.name}</td>
+                    <td className="td font-medium"><button type="button" className="text-brand-700 hover:underline font-semibold" onClick={() => viewEmployeeLeads(emp)}>{emp.name}</button></td>
                     <td className="td">{emp.email}</td>
                     <td className="td">{emp.phone || '—'}</td>
                     <td className="td">
@@ -1091,6 +1172,32 @@ export function EmployeesPage() {
           </div>
         )}
       </Card>
+      {selectedEmployee && (
+        <Card title={`${selectedEmployee.name} — Assigned leads (${employeeLeads.length})`} action={
+          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => setSelectedEmployee(null)}>Close</button>
+        }>
+          {loadingEmployeeLeads ? <Spinner /> : employeeLeads.length === 0 ? <EmptyState title="No leads assigned" /> : (
+            <div className="overflow-x-auto -mx-5 px-5">
+              <table className="w-full min-w-[1050px]">
+                <thead className="bg-graphite-50"><tr>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">City</th>
+                  <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Completion</th>
+                </tr></thead>
+                <tbody>{employeeLeads.map((lead) => (
+                  <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
+                    <td className="td font-semibold"><Link className="text-brand-700" to={`/leads/${lead.id}`}>{lead.enquiry_number}</Link></td>
+                    <td className="td">{lead.customer_name || '—'}</td><td className="td">{lead.contact_number || '—'}</td><td className="td">{lead.city || '—'}</td>
+                    <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
+                    <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
+                    <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>
+                    <td className="td">{lead.sla_state === 'COMPLETED' ? 'Completed' : 'Pending'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
       {resetId && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setResetId(null)}>
           <div className="card p-6 w-full max-w-sm space-y-3" onClick={(e) => e.stopPropagation()}>

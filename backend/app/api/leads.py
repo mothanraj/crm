@@ -45,6 +45,8 @@ def _serialize(l: Lead, db: Session) -> dict:
         "first_contact_method": l.first_contact_method or "",
         "first_contact_result": l.first_contact_result or "",
         "first_contact_notes": l.first_contact_notes or "",
+        "employee_remarks": l.employee_remarks or "",
+        "customer_review": l.customer_review or "",
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
         "pending_assignment": l.primary_employee_id is None,
@@ -60,7 +62,7 @@ def _lookup(db, model, name: str):
 @router.get("")
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
-               employee: str = "", sla: str = "", unassigned: str = "",
+               employee: str = "", sla: str = "", unassigned: str = "", customer_review: str = "",
                page: int = 1, size: int = 20):
     q = db.query(Lead).filter(Lead.is_active.is_(True))
     if u.role and u.role.name == "EMPLOYEE":
@@ -81,6 +83,8 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         q = q.filter(Lead.sla_state == sla)
     if unassigned in ("1", "true", "yes"):
         q = q.filter(Lead.primary_employee_id.is_(None))
+    if customer_review:
+        q = q.filter(Lead.customer_review == customer_review)
     total = q.count()
     rows = q.order_by(Lead.updated_at.desc()).offset((page - 1) * size).limit(size).all()
     return {"total": total, "items": [_serialize(r, db) for r in rows]}
@@ -140,10 +144,19 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     status = db.get(LeadStatus, body.new_status_id)
     if not status:
         raise HTTPException(400, "Invalid work progress status")
+    customer_review = (body.customer_review or "").strip()
+    if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"}:
+        raise HTTPException(400, "Invalid customer review")
+    if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
+        raise HTTPException(400, "Invalid SLA state")
     # First talk after assignment also completes the 3-day contact SLA
     if not lead.first_contact_at and lead.primary_employee_id == u.id:
         record_first_contact(db, lead, u, body.method or "Call", status.name, remarks)
     change_status(db, lead, body.new_status_id, u, remarks)
+    lead.employee_remarks = remarks
+    lead.customer_review = customer_review
+    if body.sla_state is not None:
+        lead.sla_state = body.sla_state
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
         notes=remarks, outcome=status.name,
