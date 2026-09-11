@@ -103,7 +103,7 @@ def _assignment_item(db, lead) -> dict:
         "company_name": lead.company_name or "",
         "city": lead.city or "",
         "source": src.name if src else "—",
-        "product": prod.name if prod else "—",
+        "product": (lead.product_raw or (prod.name if prod else "") or "—"),
         "quantity_raw": lead.quantity_raw or "",
         "deadline_str": lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—",
         "lead_url": _lead_url(lead),

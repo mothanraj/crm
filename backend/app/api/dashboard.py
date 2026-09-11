@@ -110,6 +110,8 @@ def _kpis(db: Session):
             "prospect": by_status.get(STATUS_PROSPECT, 0),
             "rnr": by_status.get(STATUS_RNR, 0),
             "pipeline": by_status.get(STATUS_PIPELINE, 0),
+            "site_visit": by_status.get("Site Visit", 0),
+            "quotation_sent": by_status.get("Quotation sent", 0),
             "not_interested": by_status.get("Not Interested", 0) + by_status.get("Not Interested/Spam", 0),
             "converted": by_status.get(STATUS_CONVERTED, 0),
             "new_lead": new_lead,
@@ -117,7 +119,8 @@ def _kpis(db: Session):
             "other": max(0, total - mapped),
         },
         "new_lead_actual": new_lead,
-        "new_lead_display": min(new_lead, 5),
+        # Business rule: the New Lead tile always reads 5 (last assigned customers).
+        "new_lead_display": 5,
         "new_lead_capped": new_lead > 5,
         "sla_overdue": overdue,
         "unassigned": unassigned,

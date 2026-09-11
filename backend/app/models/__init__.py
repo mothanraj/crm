@@ -96,6 +96,7 @@ class Lead(Base):
     source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("lead_sources.id"), nullable=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("products.id"), nullable=True)
     requirement: Mapped[str] = mapped_column(Text, default="")
+    product_raw: Mapped[str] = mapped_column(Text, default="")
     quantity_raw: Mapped[str] = mapped_column(Text, default="")
     quantity_num: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     priority: Mapped[str] = mapped_column(Text, default="")

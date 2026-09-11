@@ -14,6 +14,14 @@ function fmtDT(v: any, len = 16) {
   return String(v).slice(0, len).replace('T', ' ');
 }
 
+function prodName(l: any, nameOf: (kind: any, id?: string) => string) {
+  // Show the exact Excel Product/Type text as-is; mapped name is only a fallback.
+  if (l.product_raw) return l.product_raw;
+  if (l.product_name) return l.product_name;
+  const mapped = l.product_id ? nameOf('products', l.product_id) : '—';
+  return mapped || '—';
+}
+
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
   const res = await api.get(path, { responseType: 'blob', params });
   const ctype = res.headers?.['content-type'] || '';
@@ -164,13 +172,11 @@ export function Dashboard() {
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#c0392b]', text: 'text-white' },
-    { label: 'Prospect / A', value: f.prospect ?? 0, bg: 'bg-[#27ae60]', text: 'text-white' },
-    { label: 'RNR / Not Resp.', value: f.rnr ?? 0, bg: 'bg-[#e67e22]', text: 'text-white' },
-    { label: 'Pipeline / A+', value: f.pipeline ?? 0, bg: 'bg-[#1e8449]', text: 'text-white' },
+    { label: 'Site Visit', value: f.site_visit ?? 0, bg: 'bg-[#65A30D]', text: 'text-white' },
+    { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: 'bg-[#2F9E44]', text: 'text-white' },
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
-    { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#196f3d]', text: 'text-white' },
-    { label: 'New Lead', value: d.new_lead_display ?? Math.min(f.new_lead ?? 0, 5), bg: 'bg-[#1c2833]', text: 'text-white' },
     { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
+    { label: 'New Lead', value: d.new_lead_display ?? 5, bg: 'bg-[#1c2833]', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
@@ -295,8 +301,8 @@ export function Leads() {
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
   const [sla, setSla] = useState('');
-  const [unassigned, setUnassigned] = useState(false);
   const [page, setPage] = useState(1);
+  const STATUS_FILTERS = ['Assigned', 'In Followup', 'Site Visit', 'Quotation sent', 'Not Interested'];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string }>>({});
@@ -308,7 +314,7 @@ export function Leads() {
     const t = setTimeout(() => {
       setLoading(true); setError('');
       api.get('/leads', {
-        params: { search, status, source, sla, unassigned: unassigned ? '1' : '', page, size },
+        params: { search, status, source, sla, page, size },
         signal: ctrl.signal,
       })
         .then((r) => {
@@ -324,7 +330,7 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, sla, unassigned, page]);
+  }, [search, status, source, sla, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const statusLabel = (lead: any) => {
@@ -360,7 +366,9 @@ export function Leads() {
         <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
-          {masters?.statuses?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
         </select>
         <select className="input !w-52" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
           <option value="">All sources (Excel)</option>
@@ -369,13 +377,8 @@ export function Leads() {
         <select className="input !w-44" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
           <option value="">All SLA states</option>
           <option value="PENDING">Pending</option>
-          <option value="OVERDUE">Overdue</option>
           <option value="COMPLETED">Completed</option>
         </select>
-        <label className="inline-flex items-center gap-2 text-sm text-graphite-600 cursor-pointer">
-          <input type="checkbox" checked={unassigned} onChange={(e) => { setUnassigned(e.target.checked); setPage(1); }} />
-          Pending assignment only
-        </label>
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
       <div className="card overflow-hidden">
@@ -400,7 +403,7 @@ export function Leads() {
                     <td className="td">{l.city || '—'}</td>
                     <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
                     <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
-                    <td className="td">{l.product_name || nameOf('products', l.product_id)}</td>
+                    <td className="td">{prodName(l, nameOf)}</td>
                     <td className="td"><StatusBadge value={statusLabel(l)} /></td>
                     <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
                     <td className="td"><SlaBadge value={l.sla_state} /></td>
@@ -537,7 +540,7 @@ export function EmployeeLeads() {
                       <td className="td">{l.city || '—'}</td>
                       <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
                       <td className="td">{nameOf('sources', l.source_id)}</td>
-                      <td className="td">{nameOf('products', l.product_id)}</td>
+                      <td className="td">{prodName(l, nameOf)}</td>
                       <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
                       <td className="td"><SlaBadge value={l.sla_state} /></td>
                       <td className={`td whitespace-nowrap tabular-nums ${l.sla_state === 'OVERDUE' ? 'text-red-700 font-semibold' : ''}`}>{fmtDT(l.sla_deadline)}</td>
@@ -647,7 +650,7 @@ export function LeadDetail({ id }: { id: string }) {
               <span>📅 {l.enquiry_date || '—'}</span>
               <span>🚗 {l.quantity_raw || '—'}</span>
               <span>🏷 {nameOf('sources', l.source_id)}</span>
-              <span>📦 {nameOf('products', l.product_id)}</span>
+              <span>📦 {prodName(l, nameOf)}</span>
               <span>👤 {nameOf('employees', l.primary_employee_id)}</span>
               {l.sla_deadline && <span>⏱ Contact by {fmtDT(l.sla_deadline)}</span>}
             </div>
@@ -986,7 +989,7 @@ export function ImportPage() {
                     <td className="td">{r.city || '—'}</td>
                     <td className="td">{r.cars || '—'}</td>
                     <td className="td">{r.source || '—'}</td>
-                    <td className="td">{r.product || '—'}</td>
+                    <td className="td">{r.product || '—'}{r.product_unmapped && <span className="block text-[11px] text-amber-700 font-medium">⚠ not recognized — will show as-is</span>}</td>
                   </tr>
                 ))}</tbody>
               </table>

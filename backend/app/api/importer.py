@@ -237,7 +237,7 @@ def _lead_email_item_db(lead: Lead, src_map: dict, prod_map: dict, assign_map: d
         "company_name": lead.company_name or "",
         "city": lead.city or "",
         "source": src_map.get(lead.source_id, "—") if lead.source_id else "—",
-        "product": prod_map.get(lead.product_id, "—") if lead.product_id else "—",
+        "product": (lead.product_raw or prod_map.get(lead.product_id) or "—"),
         "quantity_raw": lead.quantity_raw or "",
         "deadline_str": deadline,
         "lead_url": f"{settings.FRONTEND_URL.rstrip('/')}/leads/{lead.id}",
@@ -261,7 +261,7 @@ def _lead_email_item(db: Session, lead: Lead) -> dict:
         "company_name": lead.company_name or "",
         "city": lead.city or "",
         "source": src.name if src else "—",
-        "product": prod.name if prod else "—",
+        "product": (lead.product_raw or (prod.name if prod else "") or "—"),
         "quantity_raw": lead.quantity_raw or "",
         "deadline_str": deadline,
         "lead_url": f"{settings.FRONTEND_URL.rstrip('/')}/leads/{lead.id}",
@@ -352,6 +352,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 alternate_contact=str(raw.get("alternate_contact") or "").strip(),
                 email=str(raw.get("email") or "").strip(),
                 city=city,
+                product_raw=str(raw.get("product") or "").strip(),
                 requirement=str(raw.get("requirement") or "").strip(),
                 quantity_raw=cars or str(raw.get("quantity") or "").strip(),
                 quantity_num=parse_quantity(cars or raw.get("quantity")),
@@ -443,6 +444,9 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
         legacy = parse_legacy_enq(rec["enq"])
         rec["legacy_enq"] = legacy
         rec["phone_norm"] = phone_n
+        # Non-blocking flag: product text the system can't map (shows raw text in Leads).
+        prod_raw = (rec.get("product") or "").strip()
+        rec["product_unmapped"] = bool(prod_raw) and _norm_product(db, prod_raw) is None
 
         errs: list[str] = []
         dup_reasons: list[str] = []
@@ -545,6 +549,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                     alternate_contact=str(rec.get("alternate_contact") or "").strip(),
                     email=str(rec.get("email") or "").strip(),
                     city=str(rec.get("city") or ""),
+                    product_raw=str(rec.get("product") or "").strip(),
                     requirement=str(rec.get("requirement") or "").strip(),
                     quantity_raw=cars or str(rec.get("quantity") or "").strip(),
                     quantity_num=parse_quantity(cars or rec.get("quantity")),
