@@ -108,6 +108,8 @@ class Lead(Base):
     first_contact_result: Mapped[str] = mapped_column(Text, default="")
     first_contact_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     first_contact_notes: Mapped[str] = mapped_column(Text, default="")
+    employee_remarks: Mapped[str] = mapped_column(Text, default="")
+    customer_review: Mapped[str] = mapped_column(Text, default="")
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sla_state: Mapped[str] = mapped_column(Text, default="PENDING")
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

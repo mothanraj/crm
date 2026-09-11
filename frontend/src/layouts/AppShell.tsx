@@ -16,23 +16,32 @@ export function AppShell() {
   const navigate = useNavigate();
   const role = localStorage.getItem('role') || 'EMPLOYEE';
   const [unread, setUnread] = useState(0);
+  const [userName, setUserName] = useState(localStorage.getItem('user_name') || role);
   useEffect(() => {
-    api.get('/notifications').then((r) => {
-      const items = Array.isArray(r.data) ? r.data : [];
-      setUnread(items.filter((n: any) => !n.is_read).length);
-    }).catch(() => {});
-    const t = setInterval(() => {
+    const loadUnread = () => {
       api.get('/notifications').then((r) => {
         const items = Array.isArray(r.data) ? r.data : [];
         setUnread(items.filter((n: any) => !n.is_read).length);
       }).catch(() => {});
-    }, 60000);
+    };
+    loadUnread();
+    const t = setInterval(loadUnread, 60000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (localStorage.getItem('user_name')) return;
+    api.get('/masters').then(({ data }) => {
+      const id = localStorage.getItem('user_id');
+      const name = data.employees?.find((employee: any) => employee.id === id)?.name;
+      if (name) { localStorage.setItem('user_name', name); setUserName(name); }
+    }).catch(() => {});
+  }, [role]);
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('role');
+    localStorage.removeItem('user_id');
+    localStorage.removeItem('user_name');
     navigate('/login', { replace: true });
   };
   return (
@@ -66,7 +75,7 @@ export function AppShell() {
         </nav>
         <div className="p-4 border-t border-white/10">
           <div className="text-[11px] text-graphite-200 uppercase tracking-wider mb-1">Signed in as</div>
-          <div className="text-sm font-medium text-white">{role}</div>
+          <div className="text-sm font-medium text-white">{userName}</div>
           <button onClick={logout} className="mt-3 text-xs text-graphite-200 hover:text-brand-400 underline underline-offset-2">
             Sign out
           </button>
@@ -94,10 +103,13 @@ export function AppShell() {
           <div className="text-sm text-graphite-500">
             {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
           </div>
-          <Link to="/notifications" className="relative text-xl" title="Notifications">
-            🔔
-            {unread > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#E03131] rounded-full" title={`${unread} unread`} />}
-          </Link>
+          <div className="flex items-center gap-4">
+            {role === 'EMPLOYEE' && <span className="text-sm font-semibold text-graphite-700">{userName}</span>}
+            <Link to="/notifications" className="relative text-xl" title="Notifications">
+              🔔
+              {unread > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#E03131] rounded-full" title={`${unread} unread`} />}
+            </Link>
+          </div>
         </header>
         <main className="p-6 max-w-[1400px] w-full mx-auto">
           <Outlet />

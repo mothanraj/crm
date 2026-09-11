@@ -61,6 +61,12 @@ def _resolve_cols(header: list[str]) -> dict[str, int]:
         "name": find(["lead name", "full name", "lead / full", "customer name", "name"], COL_NAME),
         "company": find(["company", "organisation", "organization"], COL_COMPANY),
         "phone": find(["contact no", "contact number", "phone", "mobile"], COL_PHONE),
+        "requirement": find(["requirement"], 6),
+        "quantity": find(["quantity"], 7),
+        "remarks": find(["remarks", "remark"], 8),
+        "priority": find(["priority"], 18),
+        "email": find(["email", "e-mail"], 29),
+        "alternate_contact": find(["alternate", "alt contact"], 30),
         "city": find(["city"], COL_CITY),
         "cars": find(["no. of cars", "no of cars", "cars"], COL_CARS),
         "source": find(["lead source", "source"], COL_SOURCE),
@@ -74,6 +80,12 @@ class ErrorUpdate(BaseModel):
     company: str | None = None
     phone: str | None = None
     cars: str | None = None
+    requirement: str | None = None
+    quantity: str | None = None
+    remarks: str | None = None
+    priority: str | None = None
+    email: str | None = None
+    alternate_contact: str | None = None
     source: str | None = None
     product: str | None = None
     enq: str | int | float | None = None
@@ -162,6 +174,12 @@ def _serialize_error(e: ImportError) -> dict:
         "company": raw.get("company", ""),
         "phone": raw.get("phone", ""),
         "cars": raw.get("cars", ""),
+        "requirement": raw.get("requirement", ""),
+        "quantity": raw.get("quantity", ""),
+        "remarks": raw.get("remarks", ""),
+        "priority": raw.get("priority", ""),
+        "email": raw.get("email", ""),
+        "alternate_contact": raw.get("alternate_contact", ""),
         "source": raw.get("source", ""),
         "product": raw.get("product", ""),
         "enq": raw.get("legacy_enq", raw.get("enq")),
@@ -174,6 +192,11 @@ def _row_issue_messages(db: Session, raw: dict) -> list[str]:
     msgs: list[str] = []
     if not str(raw.get("name") or "").strip():
         msgs.append("missing name")
+    phone_n = raw.get("phone_norm") or norm_phone(str(raw.get("phone") or ""))
+    if not phone_n:
+        msgs.append("missing/invalid phone")
+    elif db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        msgs.append("duplicate phone")
     legacy = raw.get("legacy_enq")
     if legacy is None:
         legacy = parse_legacy_enq(raw.get("enq"))
@@ -284,8 +307,16 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
 
 def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
     name = str(raw.get("name") or "").strip()
+    phone = str(raw.get("phone") or "").strip()
     if not name:
         raise HTTPException(400, "Name is required")
+    if not phone:
+        raise HTTPException(400, "Phone is required")
+    phone_n = norm_phone(phone)
+    if not phone_n:
+        raise HTTPException(400, "Invalid phone number")
+    if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
 
     legacy = raw.get("legacy_enq")
     if legacy is None:
@@ -303,7 +334,6 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
 
     company = str(raw.get("company") or "").strip()
     city = str(raw.get("city") or "").strip()
-    phone = str(raw.get("phone") or "").strip()
     cars = str(raw.get("cars") or "").strip()
     src = _norm_source(db, str(raw.get("source") or ""))
     prod = _norm_product(db, str(raw.get("product") or ""))
@@ -318,10 +348,15 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 customer_name=name,
                 company_name=company,
                 contact_number=phone,
-                contact_number_norm=norm_phone(phone),
+                contact_number_norm=phone_n,
+                alternate_contact=str(raw.get("alternate_contact") or "").strip(),
+                email=str(raw.get("email") or "").strip(),
                 city=city,
-                quantity_raw=cars,
-                quantity_num=parse_quantity(cars),
+                requirement=str(raw.get("requirement") or "").strip(),
+                quantity_raw=cars or str(raw.get("quantity") or "").strip(),
+                quantity_num=parse_quantity(cars or raw.get("quantity")),
+                priority=str(raw.get("priority") or "").strip(),
+                first_contact_notes=str(raw.get("remarks") or "").strip(),
                 source_id=src.id if src else None,
                 product_id=prod.id if prod else None,
                 status_id=st.id,
@@ -378,6 +413,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
 
     preview, duplicates, invalids = [], [], []
     seen_enqs: set[int] = set()
+    seen_phones: set[str] = set()
     cols = _resolve_cols(header)
     for i, r in enumerate(rows[1:], start=2):
         if not any(r):
@@ -394,16 +430,29 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "phone": str(_cell(r, cols["phone"]) or "").strip(),
             "city": str(_cell(r, cols["city"]) or "").strip(),
             "cars": str(_cell(r, cols["cars"]) or "").strip(),
+            "requirement": str(_cell(r, cols["requirement"]) or "").strip(),
+            "quantity": str(_cell(r, cols["quantity"]) or "").strip(),
+            "remarks": str(_cell(r, cols["remarks"]) or "").strip(),
+            "priority": str(_cell(r, cols["priority"]) or "").strip(),
+            "email": str(_cell(r, cols["email"]) or "").strip(),
+            "alternate_contact": str(_cell(r, cols["alternate_contact"]) or "").strip(),
             "source": str(_cell(r, cols["source"]) or "").strip(),
             "product": str(_cell(r, cols["product"]) or "").strip(),
         }
+        phone_n = norm_phone(rec["phone"])
         legacy = parse_legacy_enq(rec["enq"])
         rec["legacy_enq"] = legacy
+        rec["phone_norm"] = phone_n
 
         errs: list[str] = []
         dup_reasons: list[str] = []
         if not rec["name"]:
             errs.append("missing name")
+        if phone_n:
+            if phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+                dup_reasons.append("duplicate phone")
+        else:
+            errs.append("missing/invalid phone")
         if legacy is None:
             errs.append("missing/invalid enquiry no")
         else:
@@ -418,6 +467,8 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             rec["errors"] = errs
             invalids.append(rec)
         else:
+            if phone_n:
+                seen_phones.add(phone_n)
             seen_enqs.add(legacy)  # type: ignore[arg-type]
         preview.append(rec)
 
@@ -468,9 +519,17 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                 error="duplicate enquiry no", reason="DUPLICATE",
             ))
             continue
+        phone_n = rec.get("phone_norm") or norm_phone(str(rec.get("phone") or ""))
+        if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+            db.add(ImportError(
+                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                error="duplicate phone", reason="DUPLICATE",
+            ))
+            continue
 
         cars = str(rec.get("cars") or "")
         phone = str(rec.get("phone") or "")
+        phone_n = rec.get("phone_norm") or norm_phone(phone)
         src = _norm_source(db, str(rec.get("source") or ""))
         prod = _norm_product(db, str(rec.get("product") or ""))
         try:
@@ -482,10 +541,15 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                     customer_name=str(rec.get("name") or ""),
                     company_name=str(rec.get("company") or ""),
                     contact_number=phone,
-                    contact_number_norm=norm_phone(phone),
+                    contact_number_norm=phone_n,
+                    alternate_contact=str(rec.get("alternate_contact") or "").strip(),
+                    email=str(rec.get("email") or "").strip(),
                     city=str(rec.get("city") or ""),
-                    quantity_raw=cars,
-                    quantity_num=parse_quantity(cars),
+                    requirement=str(rec.get("requirement") or "").strip(),
+                    quantity_raw=cars or str(rec.get("quantity") or "").strip(),
+                    quantity_num=parse_quantity(cars or rec.get("quantity")),
+                    priority=str(rec.get("priority") or "").strip(),
+                    first_contact_notes=str(rec.get("remarks") or "").strip(),
                     source_id=src.id if src else None,
                     product_id=prod.id if prod else None,
                     status_id=st.id,
@@ -564,9 +628,12 @@ def update_error(eid: UUID, body: ErrorUpdate, db: Session = Depends(get_db), _:
         raise HTTPException(404, "Skipped row not found")
     raw = dict(e.raw or {})
     data = body.model_dump(exclude_unset=True)
-    for key in ("name", "city", "company", "phone", "cars", "source", "product", "date"):
+    for key in ("name", "city", "company", "phone", "cars", "requirement", "quantity",
+                "remarks", "priority", "email", "alternate_contact", "source", "product", "date"):
         if key in data and data[key] is not None:
             raw[key] = str(data[key]).strip() if key != "date" else data[key]
+    if "phone" in data and data["phone"] is not None:
+        raw["phone_norm"] = norm_phone(str(data["phone"]))
     if "enq" in data and data["enq"] is not None:
         raw["enq"] = data["enq"]
         raw["legacy_enq"] = parse_legacy_enq(data["enq"])

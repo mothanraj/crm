@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import current_user
 from app.db.session import get_db
 from app.models import Lead, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
-from app.services.normalize import CANONICAL_SOURCES
+from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -25,6 +25,7 @@ STATUS_CONVERTED = "Converted"
 STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
 STATUS_ASSIGNED = "Assigned"
+CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
 DASHBOARD_MAPPED = {
     STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
     "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
@@ -237,6 +238,52 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
     }
 
 
+def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
+    rows_by_product: dict[str, dict] = {}
+    query = (db.query(Product.name, LeadStatus.name, func.count(Lead.id))
+             .join(Lead, Lead.product_id == Product.id)
+             .join(LeadStatus, Lead.status_id == LeadStatus.id)
+             .filter(_date_filter(start, end))
+             .group_by(Product.name, LeadStatus.name).all())
+    for product, status, count in query:
+        row = rows_by_product.setdefault(product or "Unmapped", {"total": 0})
+        row[status] = int(count)
+        row["total"] += int(count)
+    ordered = [p for p in CANONICAL_PRODUCTS if p in rows_by_product]
+    ordered += sorted(p for p in rows_by_product if p not in ordered)
+    rows = []
+    totals = {"total": 0, "in_followup": 0, "prospect": 0, "rnr": 0, "not_interested": 0, "quote_sent": 0, "converted": 0}
+    for product in ordered:
+        data = rows_by_product[product]
+        row = {"product": product, "total": data.get("total", 0),
+               "in_followup": data.get(STATUS_FOLLOWUP, 0), "prospect": data.get(STATUS_PROSPECT, 0),
+               "rnr": data.get(STATUS_RNR, 0), "not_interested": sum(data.get(s, 0) for s in STATUS_NOT_INT),
+               "quote_sent": data.get(STATUS_QUOTE, 0), "converted": data.get(STATUS_CONVERTED, 0)}
+        row["conv_pct"] = round(row["converted"] / row["total"] * 100, 1) if row["total"] else 0.0
+        rows.append(row)
+        for key in totals: totals[key] += row[key]
+    totals["conv_pct"] = round(totals["converted"] / totals["total"] * 100, 1) if totals["total"] else 0.0
+    return {"mode": mode, "effective_from": start.isoformat() if start else None,
+            "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
+
+
+@router.get("/reports/product-details")
+def product_details(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, from_date: str | None = None, to_date: str | None = None):
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    return _product_details_payload(db, start, end, resolved)
+
+
+@router.get("/reports/product-details/export")
+def product_details_export(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, from_date: str | None = None, to_date: str | None = None):
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    payload = _product_details_payload(db, start, end, resolved)
+    headers = ["Product", "Total", "In Followup", "Prospect", "RNR", "Not Int.", "Quote Sent", "Converted", "Conv. %"]
+    body = [[r["product"], r["total"], r["in_followup"], r["prospect"], r["rnr"], r["not_interested"], r["quote_sent"], r["converted"], r["conv_pct"]] for r in payload["rows"]]
+    t = payload["totals"]
+    body.append(["TOTAL", t["total"], t["in_followup"], t["prospect"], t["rnr"], t["not_interested"], t["quote_sent"], t["converted"], t["conv_pct"]])
+    return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
+
+
 @router.get("/reports/source-details")
 def source_details(
     db: Session = Depends(get_db),
@@ -288,14 +335,19 @@ def source_details_export(
     )
 
 
-def _product_wise_rows(db: Session):
+def _product_wise_rows(db: Session, start: date | None = None, end: date | None = None):
+    filters = [Lead.is_active.is_(True)]
+    if start:
+        filters.append(Lead.enquiry_date >= start)
+    if end:
+        filters.append(Lead.enquiry_date <= end)
     rows = [{"product": p or "Unmapped", "leads": c} for p, c in
             db.query(Product.name, func.count(Lead.id)).outerjoin(
-                Lead, and_(Lead.product_id == Product.id, Lead.is_active.is_(True)))
+                Lead, and_(Lead.product_id == Product.id, *filters))
             .group_by(Product.name)
             .order_by(func.count(Lead.id).desc()).all()]
     unmapped = db.query(func.count(Lead.id)).filter(
-        Lead.is_active.is_(True), Lead.product_id.is_(None)).scalar() or 0
+        Lead.product_id.is_(None), *filters).scalar() or 0
     if unmapped:
         rows.append({"product": "Unmapped", "leads": unmapped})
         rows.sort(key=lambda r: r["leads"], reverse=True)
@@ -316,18 +368,46 @@ def _source_wise_rows(db: Session):
     return rows
 
 
+def _customer_review_rows(db: Session):
+    rows = dict(
+        db.query(Lead.customer_review, func.count(Lead.id))
+        .filter(Lead.is_active.is_(True))
+        .group_by(Lead.customer_review)
+        .all()
+    )
+    out = [{"customer_review": label, "leads": int(rows.get(label, 0) or 0)} for label in CUSTOMER_REVIEW_ORDER]
+    other = sum(int(c or 0) for label, c in rows.items() if label and label not in CUSTOMER_REVIEW_ORDER)
+    blank = int(rows.get("", 0) or 0)
+    if other:
+        out.append({"customer_review": "Other", "leads": other})
+    if blank:
+        out.append({"customer_review": "Unreviewed", "leads": blank})
+    return out
+
+
 @router.get("/reports/product-wise")
-def product_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return _product_wise_rows(db)
+def product_wise(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    mode: str = Query("custom"), month: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+):
+    start, end, _ = _resolve_range(mode, month, from_date, to_date)
+    return _product_wise_rows(db, start, end)
 
 
 @router.get("/reports/product-wise/export")
-def product_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    rows = _product_wise_rows(db)
+def product_wise_export(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    mode: str = Query("custom"), month: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+):
+    start, end, _ = _resolve_range(mode, month, from_date, to_date)
+    rows = _product_wise_rows(db, start, end)
     return _xlsx_download(
-        "product-wise-report.xlsx",
+        f"product-wise-report-{start or 'all'}-to-{end or 'all'}.xlsx",
         ["Product", "Leads"],
         [[r["product"], r["leads"]] for r in rows],
+        title="Product-wise Leads",
     )
 
 
@@ -343,6 +423,22 @@ def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_
         "source-wise-report.xlsx",
         ["Lead Source", "Leads"],
         [[r["source"], r["leads"]] for r in rows],
+    )
+
+
+@router.get("/reports/customer-review")
+def customer_review_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _customer_review_rows(db)
+
+
+@router.get("/reports/customer-review/export")
+def customer_review_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    rows = _customer_review_rows(db)
+    return _xlsx_download(
+        "customer-review-report.xlsx",
+        ["Customer Review", "Leads"],
+        [[r["customer_review"], r["leads"]] for r in rows],
+        title="Customer Review",
     )
 
 
@@ -400,6 +496,7 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
         "sources": [{"id": str(s.id), "name": s.name} for s in db.query(LeadSource).filter_by(is_active=True).all()],
         "products": [{"id": str(p.id), "name": p.name} for p in db.query(Product).filter_by(is_active=True).all()],
         "statuses": [{"id": str(s.id), "name": s.name} for s in db.query(LeadStatus).order_by(LeadStatus.sort_order).all()],
+        "customer_reviews": CUSTOMER_REVIEW_ORDER,
         "employees": [{"id": str(e.id), "name": e.name} for e in staff],
     }
 
