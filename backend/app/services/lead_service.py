@@ -65,32 +65,23 @@ def free_employees(db: Session) -> list[User]:
 
 
 def auto_assign(db: Session, lead: Lead, by: User | None = None) -> User | None:
-    """Assign one free employee. If none free, leave lead pending (unassigned)."""
+    """Assign the next employee in the ring. Every lead gets an owner — no pending queue."""
     if lead.primary_employee_id:
         return None
-    light = free_employees(db)
-    if not light:
-        return None  # stay pending
+    all_emps = eligible_employees(db)
+    if not all_emps:
+        return None  # no employees exist yet; stays pending until one is created
     st = db.query(AssignmentState).with_for_update().first()
     if not st:
         st = AssignmentState()
         db.add(st)
         db.flush()
-    ids = [u.id for u in light]
-    all_ids = [u.id for u in eligible_employees(db)]
+    all_ids = [u.id for u in all_emps]
     try:
         start = all_ids.index(st.last_employee_id) + 1 if st.last_employee_id in all_ids else 0
     except ValueError:
         start = 0
-    # Prefer next in ring among free employees
-    chosen = None
-    for k in range(len(all_ids)):
-        uid = all_ids[(start + k) % len(all_ids)]
-        match = next((u for u in light if u.id == uid), None)
-        if match:
-            chosen = match
-            break
-    chosen = chosen or light[0]
+    chosen = next(u for u in all_emps if u.id == all_ids[start % len(all_ids)])
     st.last_employee_id = chosen.id
     assign(db, lead, chosen, role="PRIMARY", by=by)
     return chosen

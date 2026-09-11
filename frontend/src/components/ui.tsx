@@ -5,6 +5,7 @@ const STATUS_STYLES: Record<string, string> = {
   'New Lead': 'bg-sky-100 text-sky-800 ring-sky-200',
   'Assigned': 'bg-blue-100 text-blue-800 ring-blue-200',
   'In Followup': 'bg-amber-100 text-amber-800 ring-amber-200',
+  'Meeting': 'bg-sky-100 text-sky-800 ring-sky-200',
   'A - Prospect': 'bg-violet-100 text-violet-800 ring-violet-200',
   'A+ - Immediate': 'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200',
   'RNR / Not reachable': 'bg-orange-100 text-orange-800 ring-orange-200',

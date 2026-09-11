@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
+from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -26,11 +26,12 @@ STATUS_CONVERTED = "Converted"
 STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
 STATUS_ASSIGNED = "Assigned"
+STATUS_MEETING = "Meeting"
 CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
 DASHBOARD_MAPPED = {
     STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
     "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
-    STATUS_ASSIGNED,
+    STATUS_ASSIGNED, STATUS_MEETING,
 }
 
 
@@ -102,6 +103,31 @@ def _kpis(db: Session):
     overdue = db.query(Lead).filter(Lead.sla_state == "OVERDUE", Lead.is_active.is_(True)).count()
     unassigned = db.query(Lead).filter(Lead.primary_employee_id.is_(None), Lead.is_active.is_(True)).count()
     mapped = sum(by_status.get(s, 0) for s in DASHBOARD_MAPPED)
+    latest_assignments = (
+        db.query(LeadAssignment)
+        .join(Lead, Lead.id == LeadAssignment.lead_id)
+        .filter(LeadAssignment.is_current.is_(True), Lead.is_active.is_(True))
+        .order_by(LeadAssignment.assigned_at.desc())
+        .limit(5)
+        .all()
+    )
+    latest_ids = [a.lead_id for a in latest_assignments]
+    latest_leads = {x.id: x for x in db.query(Lead).filter(Lead.id.in_(latest_ids)).all()} if latest_ids else {}
+    emp_ids = {x.primary_employee_id for x in latest_leads.values() if x.primary_employee_id}
+    emp_map = {u.id: u.name for u in db.query(User).filter(User.id.in_(emp_ids)).all()} if emp_ids else {}
+    latest_assigned = []
+    for a in latest_assignments:
+        lead = latest_leads.get(a.lead_id)
+        if not lead:
+            continue
+        latest_assigned.append({
+            "lead_id": str(lead.id),
+            "enquiry_number": lead.enquiry_number,
+            "customer_name": lead.customer_name or "—",
+            "contact_number": lead.contact_number or "—",
+            "employee": emp_map.get(lead.primary_employee_id, "—") if lead.primary_employee_id else "—",
+            "assigned_date": a.assigned_at.strftime("%d-%b-%Y") if a.assigned_at else "—",
+        })
     return {
         "total": total,
         "by_status": by_status,
@@ -112,6 +138,7 @@ def _kpis(db: Session):
             "rnr": by_status.get(STATUS_RNR, 0),
             "pipeline": by_status.get(STATUS_PIPELINE, 0),
             "site_visit": by_status.get("Site Visit", 0),
+            "meeting": by_status.get(STATUS_MEETING, 0),
             "quotation_sent": by_status.get("Quotation sent", 0),
             "not_interested": by_status.get("Not Interested", 0) + by_status.get("Not Interested/Spam", 0),
             "converted": by_status.get(STATUS_CONVERTED, 0),
@@ -122,6 +149,7 @@ def _kpis(db: Session):
         "new_lead_actual": new_lead,
         # Business rule: the New Lead tile always reads 5 (last assigned customers).
         "new_lead_display": 5,
+        "latest_assigned": latest_assigned,
         "new_lead_capped": new_lead > 5,
         "sla_overdue": overdue,
         "unassigned": unassigned,

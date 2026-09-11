@@ -120,6 +120,7 @@ export function Dashboard() {
   const [monthly, setMonthly] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [dlError, setDlError] = useState('');
+  const [showLatest, setShowLatest] = useState(false);
   const [loading, setLoading] = useState(true);
   const dl = async (path: string, filename: string, params?: Record<string, string>) => {
     setDlError('');
@@ -140,6 +141,12 @@ export function Dashboard() {
     }).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!showLatest) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowLatest(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showLatest]);
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
@@ -172,6 +179,7 @@ export function Dashboard() {
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#c0392b]', text: 'text-white' },
+    { label: 'Meeting', value: f.meeting ?? 0, bg: 'bg-[#0284c7]', text: 'text-white' },
     { label: 'Site Visit', value: f.site_visit ?? 0, bg: 'bg-[#65A30D]', text: 'text-white' },
     { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: 'bg-[#2F9E44]', text: 'text-white' },
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
@@ -191,12 +199,51 @@ export function Dashboard() {
         <div className="space-y-5">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {tiles.map((t) => (
-              <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
-              </div>
+              t.label === 'New Lead' ? (
+                <button key={t.label} type="button" onClick={() => setShowLatest(true)} title="Click to view the 5 customers"
+                  className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm text-left cursor-pointer hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-brand-400`}>
+                  <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label} ⓘ</div>
+                  <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+                </button>
+              ) : (
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
+                  <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                  <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+                </div>
+              )
             ))}
           </div>
+          {showLatest && (
+            <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowLatest(false)}>
+              <div className="card p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-graphite-900">New Lead — last 5 assigned customers</h3>
+                  <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => setShowLatest(false)}>✕ Close</button>
+                </div>
+                {(d.latest_assigned || []).length === 0 ? <EmptyState title="No assigned customers" /> : (
+                  <div className="overflow-x-auto -mx-6 px-6">
+                    <table className="w-full min-w-[560px] text-sm">
+                      <thead className="bg-graphite-50"><tr>
+                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Phone</th>
+                        <th className="th">Employee</th><th className="th">Assigned</th>
+                      </tr></thead>
+                      <tbody>
+                        {(d.latest_assigned || []).map((l: any) => (
+                          <tr key={l.lead_id} className="hover:bg-brand-50/50">
+                            <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
+                            <td className="td">{l.customer_name}</td>
+                            <td className="td whitespace-nowrap">{l.contact_number}</td>
+                            <td className="td">{l.employee}</td>
+                            <td className="td whitespace-nowrap">{l.assigned_date}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="bg-graphite-100 text-graphite-700 rounded-lg px-3 py-2 text-sm flex justify-between">
             <span className="font-medium">Other / Unmapped status</span>
             <span className="font-bold tabular-nums">{f.other ?? 0}</span>
@@ -402,7 +449,7 @@ export function Leads() {
   };
   return (
     <div>
-      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · 3 open customers per employee`} />
+      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
         <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
@@ -721,7 +768,7 @@ export function LeadDetail({ id }: { id: string }) {
         <Card title="Assign to employee">
           <div className="flex flex-wrap gap-3 items-end">
             <div className="flex-1 min-w-[200px]">
-              <label className="text-xs font-medium text-graphite-600">Employee (must be free — 3 open leads max)</label>
+              <label className="text-xs font-medium text-graphite-600">Employee</label>
               <select className="input mt-1" value={assignEmp} onChange={(e) => setAssignEmp(e.target.value)}>
                 <option value="">Select…</option>
                 {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}

@@ -206,13 +206,10 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
 
 @router.post("/{lid}/assign")
 def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
-    from app.services.lead_service import open_workload
     lead = db.get(Lead, lid)
     emp = db.get(User, body.employee_id)
     if not lead or not emp:
         raise HTTPException(404, "Not found")
-    if body.role == "PRIMARY" and open_workload(db, emp.id) >= max(1, int(settings.OPEN_LEAD_LIMIT)):
-        raise HTTPException(400, "Employee already has an open customer. Finish first contact before assigning another.")
     assign(db, lead, emp, body.role, admin)
     db.commit()
     # Immediate assignment email with full customer details (fail-open).
