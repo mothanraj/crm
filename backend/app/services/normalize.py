@@ -124,6 +124,7 @@ CANONICAL_STATUSES = [
     ("A+ - Immediate", False, False, 5),
     ("RNR / Not reachable", False, False, 6),
     ("Site Visit", False, False, 7),
+    ("Meeting", False, False, 7),
     ("Quotation sent", False, False, 8),
     ("Channel Partner", False, False, 9),
     ("Approval Client", False, False, 10),

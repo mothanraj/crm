@@ -156,6 +156,7 @@ class LeadActivity(Base):
     activity_at: Mapped[datetime] = _ts()
     notes: Mapped[str] = mapped_column(Text, default="")
     outcome: Mapped[str] = mapped_column(Text, default="")
+    customer_review: Mapped[str] = mapped_column(Text, default="")
     next_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _ts()
 
