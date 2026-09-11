@@ -1,9 +1,9 @@
-from app.services.normalize import norm_phone, parse_excel_date  # noqa
+from app.services.normalize import canonical_source, norm_phone, parse_excel_date  # noqa
 
 
 def test_phone():
     assert norm_phone("p:+919995910299") == "9995910299"
-    assert norm_phone("+9719847991258") == "+9719847991258".replace("+", "")[-10:] or True
+    assert norm_phone("+919876543210") == "9876543210"
 
 
 def test_date_serial():
@@ -13,4 +13,11 @@ def test_date_serial():
 
 def test_status_merge():
     from app.services.normalize import STATUS_ALIASES
-    assert STATUS_ALIASES["not interested/spam"] == "Not Interested"
+    assert STATUS_ALIASES["not interested/spam"] == "Not Interested/Spam"
+
+
+def test_canonical_source_variants():
+    assert canonical_source("facebook/ instagram") == "Facebook/Instagram"
+    assert canonical_source("Meta") == "Facebook/Instagram"
+    assert canonical_source("refferal") == "Referral"
+    assert canonical_source("") == "Others"

@@ -5,7 +5,7 @@ Employees are created by admin via the Employees portal — never auto-seeded.
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import SessionLocal
-from app.models import AssignmentState, EnquirySequence, LeadSource, LeadStatus, Product, ProductAlias, Role, User
+from app.models import AssignmentState, EnquirySequence, Lead, LeadSource, LeadStatus, LeadStatusHistory, Product, ProductAlias, Role, User
 from app.services.normalize import (
     CANONICAL_SOURCES, CANONICAL_STATUSES, CANONICAL_PRODUCTS, PRODUCT_ALIASES,
 )
@@ -46,8 +46,35 @@ def run():
             db.add(AssignmentState())
         if not db.query(EnquirySequence).first():
             db.add(EnquirySequence(last_number=0))
+        db.flush()
+        # Backfill: leads already assigned but still "New Lead" -> "Assigned".
+        # Covers data created before the Assigned status existed.
+        try:
+            new_st = db.query(LeadStatus).filter_by(name="New Lead").first()
+            assigned_st = db.query(LeadStatus).filter_by(name="Assigned").first()
+            if new_st is not None and assigned_st is not None:
+                stale = db.query(Lead).filter(
+                    Lead.primary_employee_id.is_not(None),
+                    Lead.status_id == new_st.id,
+                    Lead.is_active.is_(True),
+                ).all()
+                admin = db.query(User).filter_by(email=settings.ADMIN_EMAIL).first()
+                for lead in stale:
+                    old = lead.status_id
+                    lead.status_id = assigned_st.id
+                    db.add(LeadStatusHistory(
+                        lead_id=lead.id, old_status_id=old, new_status_id=assigned_st.id,
+                        changed_by=admin.id if admin else None, reason="backfill assigned",
+                    ))
+                if stale:
+                    print(f"backfilled {len(stale)} assigned leads")
+        except Exception as exc:
+            print(f"backfill skipped: {exc}")
         db.commit()
         print("seeded")
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

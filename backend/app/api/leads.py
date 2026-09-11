@@ -5,9 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+import logging
+from datetime import datetime, timezone
+
 from app.core.config import settings
 from app.core.deps import admin_only, current_user
 from app.db.session import get_db
+
+log = logging.getLogger(__name__)
 from app.models import (
     ImportBatch, ImportError, Lead, LeadActivity, LeadAssignment, LeadDocument,
     LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User,
@@ -57,27 +62,54 @@ def _lookup(db, model, name: str):
     return db.query(model).filter(func.lower(model.name) == name.strip().lower()).first()
 
 
+def _owned_lead(db: Session, lid: UUID, u: User) -> Lead:
+    """404 if missing; EMPLOYEEs may only touch their own assigned leads."""
+    lead = db.get(Lead, lid)
+    if not lead:
+        raise HTTPException(404, "Not found")
+    if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
+        raise HTTPException(403, "Not assigned to you")
+    return lead
+
+
+def _parse_uuid(value: str, field: str) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, f"Invalid {field} filter")
+
+
+def _escape_like(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("")
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
                employee: str = "", sla: str = "", unassigned: str = "",
                page: int = 1, size: int = 20):
+    page = max(1, page)
+    size = min(max(1, size), 100)
     q = db.query(Lead).filter(Lead.is_active.is_(True))
     if u.role and u.role.name == "EMPLOYEE":
         q = q.filter(Lead.primary_employee_id == u.id)
     if search:
-        like = f"%{search}%"
-        q = q.filter(or_(Lead.customer_name.ilike(like), Lead.company_name.ilike(like),
-                         Lead.contact_number.ilike(like), Lead.enquiry_number.ilike(like)))
+        like = f"%{_escape_like(search)}%"
+        q = q.filter(or_(Lead.customer_name.ilike(like, escape="\\"), Lead.company_name.ilike(like, escape="\\"),
+                         Lead.contact_number.ilike(like, escape="\\"), Lead.enquiry_number.ilike(like, escape="\\")))
     if status:
-        q = q.filter(Lead.status_id == status)
+        q = q.filter(Lead.status_id == _parse_uuid(status, "status"))
     if source:
-        q = q.filter(Lead.source_id == source)
+        q = q.filter(Lead.source_id == _parse_uuid(source, "source"))
     if product:
-        q = q.filter(Lead.product_id == product)
+        q = q.filter(Lead.product_id == _parse_uuid(product, "product"))
     if employee:
-        q = q.filter(Lead.primary_employee_id == employee)
+        q = q.filter(Lead.primary_employee_id == _parse_uuid(employee, "employee"))
     if sla:
+        if sla not in ("PENDING", "OVERDUE", "COMPLETED"):
+            raise HTTPException(400, "Invalid sla filter")
         q = q.filter(Lead.sla_state == sla)
     if unassigned in ("1", "true", "yes"):
         q = q.filter(Lead.primary_employee_id.is_(None))
@@ -117,23 +149,22 @@ def get_lead(lid: UUID, db: Session = Depends(get_db), u: User = Depends(current
 
 @router.put("/{lid}")
 def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    lead = db.get(Lead, lid)
-    if not lead:
-        raise HTTPException(404, "Not found")
+    from app.services.normalize import is_valid_email, norm_phone
+    lead = _owned_lead(db, lid, u)
     for k, v in body.model_dump(exclude_unset=True).items():
         if v is not None:
             setattr(lead, k, v)
+    if body.email is not None and body.email.strip() and not is_valid_email(body.email.strip()):
+        raise HTTPException(400, "Enter a valid email address")
+    if body.contact_number is not None:
+        lead.contact_number_norm = norm_phone(body.contact_number)
     db.commit()
     return _serialize(lead, db)
 
 
 @router.post("/{lid}/status")
 def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    lead = db.get(Lead, lid)
-    if not lead:
-        raise HTTPException(404, "Not found")
-    if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
-        raise HTTPException(403, "Not assigned to you")
+    lead = _owned_lead(db, lid, u)
     remarks = (body.reason or "").strip()
     if not remarks:
         raise HTTPException(400, "Remarks are required after speaking to the customer")
@@ -163,16 +194,46 @@ def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin:
         raise HTTPException(400, "Employee already has an open customer. Finish first contact before assigning another.")
     assign(db, lead, emp, body.role, admin)
     db.commit()
+    # Immediate assignment email with full customer details (fail-open).
+    if body.role == "PRIMARY":
+        try:
+            from app.services import email_service
+            fresh = db.get(Lead, lid)
+            src = db.get(LeadSource, fresh.source_id) if fresh.source_id else None
+            prod = db.get(Product, fresh.product_id) if fresh.product_id else None
+            cur = db.query(LeadAssignment).filter(
+                LeadAssignment.lead_id == fresh.id,
+                LeadAssignment.is_current.is_(True),
+            ).order_by(LeadAssignment.assigned_at.desc()).first()
+            at = cur.assigned_at if cur else fresh.created_at
+            item = {
+                "enquiry_number": fresh.enquiry_number,
+                "legacy_enq": fresh.legacy_enquiry_no,
+                "enquiry_date": str(fresh.enquiry_date) if fresh.enquiry_date else "—",
+                "assigned_date_str": at.strftime("%d-%b-%Y") if at else "—",
+                "customer_name": fresh.customer_name or "",
+                "contact_number": fresh.contact_number or "",
+                "alternate_contact": fresh.alternate_contact or "",
+                "email": fresh.email or "",
+                "company_name": fresh.company_name or "",
+                "city": fresh.city or "",
+                "source": src.name if src else "—",
+                "product": prod.name if prod else "—",
+                "quantity_raw": fresh.quantity_raw or "",
+                "deadline_str": fresh.sla_deadline.strftime("%d-%b-%Y %H:%M") if fresh.sla_deadline else "—",
+                "lead_url": f"{settings.FRONTEND_URL.rstrip('/')}/leads/{fresh.id}",
+            }
+            if email_service.send_assignment_email(emp.email, emp.name, [item]):
+                fresh.assignment_email_sent_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception as exc:
+            log.error("manual assignment email failed for %s: %s", lid, exc)
     return {"ok": True}
 
 
 @router.post("/{lid}/contact")
 def first_contact(lid: UUID, body: ContactIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    lead = db.get(Lead, lid)
-    if not lead:
-        raise HTTPException(404, "Not found")
-    if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
-        raise HTTPException(403, "Not assigned to you")
+    lead = _owned_lead(db, lid, u)
     if not (body.notes or "").strip() and not (body.result or "").strip():
         raise HTTPException(400, "Please enter what you talked about with the customer")
     record_first_contact(db, lead, u, body.method, body.result, body.notes)
@@ -182,17 +243,19 @@ def first_contact(lid: UUID, body: ContactIn, db: Session = Depends(get_db), u: 
 
 @router.post("/{lid}/activities")
 def add_activity(lid: UUID, body: ActivityIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    lead = _owned_lead(db, lid, u)
     a = LeadActivity(lead_id=lid, employee_id=u.id, activity_type=body.activity_type,
                      notes=body.notes, outcome=body.outcome, next_followup_at=body.next_followup_at)
     db.add(a)
     if body.next_followup_at:
-        db.get(Lead, lid).next_followup_at = body.next_followup_at
+        lead.next_followup_at = body.next_followup_at
     db.commit()
     return {"id": str(a.id)}
 
 
 @router.post("/{lid}/site-visits")
 def add_visit(lid: UUID, body: VisitIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _owned_lead(db, lid, u)
     v = SiteVisit(lead_id=lid, employee_id=u.id, visit_date=body.visit_date, site_location=body.site_location,
                   visit_status=body.visit_status, customer_feedback=body.customer_feedback, notes=body.notes)
     db.add(v)
@@ -202,6 +265,7 @@ def add_visit(lid: UUID, body: VisitIn, db: Session = Depends(get_db), u: User =
 
 @router.post("/{lid}/quotations")
 def add_quote(lid: UUID, body: QuoteIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _owned_lead(db, lid, u)
     q = Quotation(lead_id=lid, **body.model_dump())
     db.add(q)
     db.commit()
@@ -211,10 +275,14 @@ def add_quote(lid: UUID, body: QuoteIn, db: Session = Depends(get_db), u: User =
 @router.post("/{lid}/documents")
 async def upload_doc(lid: UUID, file: UploadFile, doc_type: str = "Other",
                      db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _owned_lead(db, lid, u)
     data = await file.read()
     if len(data) > settings.MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(400, "File too large")
-    path = get_storage().save(str(lid), file.filename, data)
+    try:
+        path = get_storage().save(str(lid), file.filename, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     d = LeadDocument(lead_id=lid, file_name=file.filename, stored_path=path,
                      content_type=file.content_type or "", size_bytes=len(data),
                      document_type=doc_type, uploaded_by=u.id)

@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.core.security import decode
+from app.core.security import TokenExpired, TokenInvalid, decode_token
 from app.db.session import get_db
 from app.models import User
 
@@ -11,9 +11,11 @@ bearer = HTTPBearer()
 
 def current_user(creds: HTTPAuthorizationCredentials = Depends(bearer), db: Session = Depends(get_db)) -> User:
     try:
-        uid = decode(creds.credentials)
-    except Exception:
-        raise HTTPException(401, "Invalid token")
+        uid = decode_token(creds.credentials, "access")
+    except TokenExpired as exc:
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
+    except TokenInvalid as exc:
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
     u = db.get(User, uid)
     if not u or not u.is_active:
         raise HTTPException(401, "User inactive")

@@ -12,15 +12,26 @@ config = context.config
 target_metadata = Base.metadata
 
 
+def _db_url():
+    # The app's real database comes from .env (e.g. Supabase); alembic.ini is only a fallback.
+    try:
+        from app.core.config import settings
+        if settings.DATABASE_URL:
+            return settings.DATABASE_URL
+    except Exception:
+        pass
+    return config.get_main_option("sqlalchemy.url")
+
+
 def run_migrations_offline():
-    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=_db_url(), target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online():
     from sqlalchemy import engine_from_config
-    engine = engine_from_config({"sqlalchemy.url": config.get_main_option("sqlalchemy.url")}, prefix="sqlalchemy.")
+    engine = engine_from_config({"sqlalchemy.url": _db_url()}, prefix="sqlalchemy.")
     with engine.connect() as conn:
         context.configure(connection=conn, target_metadata=target_metadata)
         with context.begin_transaction():

@@ -24,9 +24,11 @@ STATUS_QUOTE = "Quotation sent"
 STATUS_CONVERTED = "Converted"
 STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
+STATUS_ASSIGNED = "Assigned"
 DASHBOARD_MAPPED = {
     STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
     "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
+    STATUS_ASSIGNED,
 }
 
 
@@ -110,6 +112,7 @@ def _kpis(db: Session):
             "not_interested": by_status.get("Not Interested", 0) + by_status.get("Not Interested/Spam", 0),
             "converted": by_status.get(STATUS_CONVERTED, 0),
             "new_lead": new_lead,
+            "assigned": by_status.get(STATUS_ASSIGNED, 0),
             "other": max(0, total - mapped),
         },
         "new_lead_actual": new_lead,
@@ -131,29 +134,23 @@ def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
 
 
 def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None) -> dict:
-    rows = db.query(LeadSource.name, LeadStatus.name, func.count(Lead.id)).outerjoin(
-        Lead, and_(Lead.source_id == LeadSource.id, _date_filter(start, end))
-    ).outerjoin(LeadStatus, Lead.status_id == LeadStatus.id).group_by(
-        LeadSource.name, LeadStatus.name
-    ).all()
+    # Single query from Lead: blank sources fold into "Others" via coalesce,
+    # so each lead is counted exactly once.
+    src_name = func.coalesce(LeadSource.name, "Others")
+    rows = db.query(src_name, LeadStatus.name, func.count(Lead.id)).outerjoin(
+        LeadSource, Lead.source_id == LeadSource.id
+    ).outerjoin(LeadStatus, Lead.status_id == LeadStatus.id).filter(
+        _date_filter(start, end)
+    ).group_by(src_name, LeadStatus.name).all()
     out: dict = {}
     for src, st, c in rows:
-        name = src or "Unknown"
+        name = src or "Others"
         out.setdefault(name, {"total": 0})
         if st:
             out[name][st] = c
             out[name]["total"] += c
         elif c:
             out[name]["total"] += c
-    # Leads with blank source in range
-    blank = db.query(LeadStatus.name, func.count(Lead.id)).join(
-        LeadStatus, Lead.status_id == LeadStatus.id
-    ).filter(_date_filter(start, end), Lead.source_id.is_(None)).group_by(LeadStatus.name).all()
-    if blank:
-        out.setdefault("Others", {"total": 0})
-        for st, c in blank:
-            out["Others"][st] = out["Others"].get(st, 0) + c
-            out["Others"]["total"] += c
     return out
 
 
@@ -292,19 +289,31 @@ def source_details_export(
 
 
 def _product_wise_rows(db: Session):
-    return [{"product": p or "Unmapped", "leads": c} for p, c in
-            db.query(Product.name, func.count(Lead.id)).join(
-                Lead, Lead.product_id == Product.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(Product.name)
+    rows = [{"product": p or "Unmapped", "leads": c} for p, c in
+            db.query(Product.name, func.count(Lead.id)).outerjoin(
+                Lead, and_(Lead.product_id == Product.id, Lead.is_active.is_(True)))
+            .group_by(Product.name)
             .order_by(func.count(Lead.id).desc()).all()]
+    unmapped = db.query(func.count(Lead.id)).filter(
+        Lead.is_active.is_(True), Lead.product_id.is_(None)).scalar() or 0
+    if unmapped:
+        rows.append({"product": "Unmapped", "leads": unmapped})
+        rows.sort(key=lambda r: r["leads"], reverse=True)
+    return rows
 
 
 def _source_wise_rows(db: Session):
-    return [{"source": s or "Unknown", "leads": c} for s, c in
-            db.query(LeadSource.name, func.count(Lead.id)).join(
-                Lead, Lead.source_id == LeadSource.id, isouter=True)
-            .filter(Lead.is_active.is_(True)).group_by(LeadSource.name)
+    rows = [{"source": s or "Unknown", "leads": c} for s, c in
+            db.query(LeadSource.name, func.count(Lead.id)).outerjoin(
+                Lead, and_(Lead.source_id == LeadSource.id, Lead.is_active.is_(True)))
+            .group_by(LeadSource.name)
             .order_by(func.count(Lead.id).desc()).all()]
+    unmapped = db.query(func.count(Lead.id)).filter(
+        Lead.is_active.is_(True), Lead.source_id.is_(None)).scalar() or 0
+    if unmapped:
+        rows.append({"source": "Unknown", "leads": unmapped})
+        rows.sort(key=lambda r: r["leads"], reverse=True)
+    return rows
 
 
 @router.get("/reports/product-wise")
@@ -377,11 +386,13 @@ def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user
 
 @router.get("/masters")
 def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    from sqlalchemy.orm import joinedload
     from app.models import Role
     staff = (
         db.query(User)
-        .join(Role)
+        .join(Role, User.role_id == Role.id)
         .filter(User.is_active.is_(True), Role.name.in_(("EMPLOYEE", "MANAGER")))
+        .options(joinedload(User.role))
         .order_by(User.name)
         .all()
     )

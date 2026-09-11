@@ -3,6 +3,7 @@ import React from 'react';
 /* ---------- status / sla color maps (single source of truth for badges) ---------- */
 const STATUS_STYLES: Record<string, string> = {
   'New Lead': 'bg-sky-100 text-sky-800 ring-sky-200',
+  'Assigned': 'bg-blue-100 text-blue-800 ring-blue-200',
   'In Followup': 'bg-amber-100 text-amber-800 ring-amber-200',
   'A - Prospect': 'bg-violet-100 text-violet-800 ring-violet-200',
   'A+ - Immediate': 'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200',
@@ -68,7 +69,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 
 export function Spinner() {
   return (
-    <div className="flex items-center justify-center p-12">
+    <div className="flex items-center justify-center p-12" role="status" aria-label="Loading">
       <div className="w-8 h-8 border-[3px] border-graphite-200 border-t-brand-600 rounded-full animate-spin" />
     </div>
   );

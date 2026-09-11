@@ -21,6 +21,10 @@ def _ts():
     return mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+def _ts_updated():
+    return mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Role(Base):
     __tablename__ = "roles"
     id: Mapped[uuid.UUID] = _pk()
@@ -39,7 +43,7 @@ class User(Base):
     role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("roles.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = _ts()
-    updated_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts_updated()
     role: Mapped[Role] = relationship()
 
 
@@ -106,12 +110,15 @@ class Lead(Base):
     first_contact_notes: Mapped[str] = mapped_column(Text, default="")
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sla_state: Mapped[str] = mapped_column(Text, default="PENDING")
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    overdue_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assignment_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lost_reason: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = _ts()
-    updated_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts_updated()
 
 
 class LeadAssignment(Base):
@@ -232,7 +239,7 @@ class AssignmentState(Base):
     __tablename__ = "assignment_state"
     id: Mapped[uuid.UUID] = _pk()
     last_employee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    updated_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts_updated()
 
 
 class EnquirySequence(Base):

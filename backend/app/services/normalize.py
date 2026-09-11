@@ -9,7 +9,71 @@ SOURCE_ALIASES = {
     "email campaign": "Email Campaign", "email enquiry": "Email Enquiry",
     "facebook/instagram": "Facebook/Instagram", "google ads": "Google Ads",
     "india mart": "India Mart", "whatsapp": "WhatsApp",
+    # Slash-spacing / case variants seen in real uploads (e.g. "facebook/ instagram")
+    "facebook/ instagram": "Facebook/Instagram",
+    "facebook /instagram": "Facebook/Instagram",
+    "facebook / instagram": "Facebook/Instagram",
+    "facebook": "Facebook/Instagram",
+    "instagram": "Facebook/Instagram",
+    "fb/instagram": "Facebook/Instagram",
+    "facebook/instagram ": "Facebook/Instagram",
+    "fb": "Facebook/Instagram",
+    "ig": "Facebook/Instagram",
+    "fb/ig": "Facebook/Instagram",
+    "meta ads": "Facebook/Instagram",
+    "facebook ads": "Facebook/Instagram",
+    "instagram ads": "Facebook/Instagram",
+    "directcall ": "Direct Call",
+    "directcall/": "Direct Call",
+    "indiamart": "India Mart",
+    "india mart ": "India Mart",
+    "expo/stall ": "Expo/Stall",
+    "expo stall": "Expo/Stall",
+    "expo": "Expo/Stall",
+    "google": "Google Ads",
+    "email campaign ": "Email Campaign",
+    "email enquiry ": "Email Enquiry",
 }
+
+
+def canonical_source(raw: str) -> str:
+    """Map any Excel source variant to a canonical master name.
+
+    Handles slash-spacing ("facebook/ instagram"), case, and common
+    shorthands (meta/fb/ig/im/directcall/refferal/expo).
+    """
+    text = (raw or "").strip()
+    if not text:
+        return "Others"
+    k = norm_key(text)
+    if k in SOURCE_ALIASES:
+        return SOURCE_ALIASES[k]
+    # Normalize spaces around "/" ("facebook/ instagram" -> "facebook/instagram")
+    k2 = re.sub(r"\s*/\s*", "/", k)
+    if k2 in SOURCE_ALIASES:
+        return SOURCE_ALIASES[k2]
+    # Contains-match for social variants
+    if "facebook" in k2 or "instagram" in k2 or k2 in ("meta", "meta ads", "fb", "ig", "fb/ig"):
+        return "Facebook/Instagram"
+    if "indiamart" in k2 or k2 == "im":
+        return "India Mart"
+    if "direct" in k2 and "call" in k2:
+        return "Direct Call"
+    if "referral" in k2 or "refferal" in k2:
+        return "Referral"
+    if "whatsapp" in k2 or k2 == "wa":
+        return "WhatsApp"
+    if "email" in k2 and "campaign" in k2:
+        return "Email Campaign"
+    if "email" in k2 and ("enquiry" in k2 or "enquiry" in k):
+        return "Email Enquiry"
+    if "seo" in k2:
+        return "SEO"
+    if "expo" in k2 or "stall" in k2:
+        return "Expo/Stall"
+    if "google" in k2:
+        return "Google Ads"
+    return "Others"
 
 STATUS_ALIASES = {
     "not interested/spam": "Not Interested/Spam",
@@ -54,19 +118,20 @@ CANONICAL_SOURCES = [
 # Work-progress values used by employees after speaking to the customer (Excel "Staus" column + pipeline extras).
 CANONICAL_STATUSES = [
     ("New Lead", False, False, 1),
-    ("In Followup", False, False, 2),
-    ("A - Prospect", False, False, 3),
-    ("A+ - Immediate", False, False, 4),
-    ("RNR / Not reachable", False, False, 5),
-    ("Site Visit", False, False, 6),
-    ("Quotation sent", False, False, 7),
-    ("Channel Partner", False, False, 8),
-    ("Approval Client", False, False, 9),
-    ("Investor", False, False, 10),
-    ("Not Interested", False, True, 11),
-    ("Not Interested/Spam", False, True, 12),
-    ("Converted", True, False, 13),
-    ("Duplicate", True, True, 14),
+    ("Assigned", False, False, 2),
+    ("In Followup", False, False, 3),
+    ("A - Prospect", False, False, 4),
+    ("A+ - Immediate", False, False, 5),
+    ("RNR / Not reachable", False, False, 6),
+    ("Site Visit", False, False, 7),
+    ("Quotation sent", False, False, 8),
+    ("Channel Partner", False, False, 9),
+    ("Approval Client", False, False, 10),
+    ("Investor", False, False, 11),
+    ("Not Interested", False, True, 12),
+    ("Not Interested/Spam", False, True, 13),
+    ("Converted", True, False, 14),
+    ("Duplicate", True, True, 15),
 ]
 def norm_phone(raw: str) -> str:
     d = re.sub(r"\D", "", raw or "")

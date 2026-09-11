@@ -12,8 +12,15 @@ class Settings(BaseSettings):
     ADMIN_NAME: str = "Administrator"
     STORAGE_DIR: str = "../storage"
     MAX_UPLOAD_MB: int = 15
-    OPEN_LEAD_LIMIT: int = 1
+    OPEN_LEAD_LIMIT: int = 3
     CORS_ORIGINS: str = "http://localhost:5173"
+    FRONTEND_URL: str = "http://localhost:5173"
+    # Email via Brevo (transactional). Real key lives in local .env only.
+    EMAIL_ENABLED: bool = True
+    BREVO_API_KEY: str = ""
+    BREVO_SENDER_EMAIL: str = ""
+    BREVO_SENDER_NAME: str = "E-Star CRM"
+    OVERDUE_DIGEST_HOUR: int = 9
 
     class Config:
         env_file = ".env"

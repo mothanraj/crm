@@ -1,10 +1,13 @@
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { api } from '../services/api';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
   { to: '/leads', label: 'Leads', icon: '☰', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
   { to: '/import', label: 'Import', icon: '⤴', roles: ['ADMIN'] },
   { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
+  { to: '/employee-leads', label: 'Employee Leads', icon: '👥', roles: ['ADMIN'] },
   { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
   { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
 ];
@@ -12,10 +15,25 @@ const NAV = [
 export function AppShell() {
   const navigate = useNavigate();
   const role = localStorage.getItem('role') || 'EMPLOYEE';
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    api.get('/notifications').then((r) => {
+      const items = Array.isArray(r.data) ? r.data : [];
+      setUnread(items.filter((n: any) => !n.is_read).length);
+    }).catch(() => {});
+    const t = setInterval(() => {
+      api.get('/notifications').then((r) => {
+        const items = Array.isArray(r.data) ? r.data : [];
+        setUnread(items.filter((n: any) => !n.is_read).length);
+      }).catch(() => {});
+    }, 60000);
+    return () => clearInterval(t);
+  }, []);
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('refresh_token');
     localStorage.removeItem('role');
-    navigate('/login');
+    navigate('/login', { replace: true });
   };
   return (
     <div className="flex min-h-screen">
@@ -58,10 +76,18 @@ export function AppShell() {
       {/* main */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* mobile nav */}
-        <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm">
+        <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm sticky top-0 z-20">
           {NAV.filter((n) => n.roles.includes(role)).map((n) => (
-            <Link key={n.to} to={n.to} className="whitespace-nowrap">{n.label}</Link>
+            <NavLink
+              key={n.to}
+              to={n.to}
+              aria-current={undefined}
+              className={({ isActive }) => `whitespace-nowrap ${isActive ? 'text-brand-400 font-semibold' : ''}`}
+            >
+              {n.label}
+            </NavLink>
           ))}
+          <button onClick={logout} className="whitespace-nowrap text-graphite-200 underline underline-offset-2">Sign out</button>
         </div>
         {/* topbar */}
         <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
@@ -70,7 +96,7 @@ export function AppShell() {
           </div>
           <Link to="/notifications" className="relative text-xl" title="Notifications">
             🔔
-            <span id="notif-dot" className="hidden absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#E03131] rounded-full" />
+            {unread > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#E03131] rounded-full" title={`${unread} unread`} />}
           </Link>
         </header>
         <main className="p-6 max-w-[1400px] w-full mx-auto">

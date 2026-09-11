@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+
+class RefreshBody(BaseModel):
+    refresh_token: str = ""
+
 from app.core.deps import current_user
-from app.core.security import access_token, refresh_token, verify_password
+from app.core.security import TokenExpired, TokenInvalid, access_token, decode_token, refresh_token, verify_password
 from app.db.session import get_db
 from app.models import User
 from app.schemas import LoginIn
@@ -18,3 +23,16 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
     role = u.role.name if u.role else "EMPLOYEE"
     return {"access_token": access_token(str(u.id)), "refresh_token": refresh_token(str(u.id)),
             "user": {"id": str(u.id), "name": u.name, "email": u.email, "role": role}}
+
+
+@router.post("/refresh")
+def refresh(body: RefreshBody, db: Session = Depends(get_db)):
+    try:
+        uid = decode_token(body.refresh_token, "refresh")
+    except (TokenExpired, TokenInvalid) as exc:
+        raise HTTPException(401, str(exc)) from exc
+    u = db.get(User, uid)
+    if not u or not u.is_active:
+        raise HTTPException(401, "User inactive")
+    # Rotation: every refresh mints a fresh pair.
+    return {"access_token": access_token(str(u.id)), "refresh_token": refresh_token(str(u.id))}

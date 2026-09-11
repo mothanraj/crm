@@ -9,28 +9,48 @@ import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '..
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
+function fmtDT(v: any, len = 16) {
+  if (!v) return '—';
+  return String(v).slice(0, len).replace('T', ' ');
+}
+
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
-  const { data } = await api.get(path, { responseType: 'blob', params });
-  const url = URL.createObjectURL(data);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  const res = await api.get(path, { responseType: 'blob', params });
+  const ctype = res.headers?.['content-type'] || '';
+  if (ctype.includes('application/json')) {
+    const text = await (res.data as Blob).text();
+    let detail = 'Download failed';
+    try { detail = JSON.parse(text)?.detail || detail; } catch { /* keep default */ }
+    throw new Error(detail);
+  }
+  const url = URL.createObjectURL(res.data);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
 }
 
 /* ================= LOGIN ================= */
 export function Login() {
-  const [email, setEmail] = useState('admin@crm.local');
+  const devDefault = import.meta.env.DEV ? 'admin@crm.local' : '';
+  const [email, setEmail] = useState(devDefault);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const expired = new URLSearchParams(location.search).get('expired') === '1';
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError('');
     try {
       const { data } = await api.post('/auth/login', { email, password });
       localStorage.setItem('token', data.access_token);
+      if (data.refresh_token) localStorage.setItem('refresh_token', data.refresh_token);
       localStorage.setItem('role', data.user.role);
       location.href = '/dashboard';
     } catch (e: any) {
@@ -66,16 +86,17 @@ export function Login() {
             <p className="text-sm text-graphite-500">Sign in to your CRM account</p>
           </div>
           {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">{error}</div>}
+          {!error && expired && <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-2">Session expired — please sign in again.</div>}
           <div>
             <label className="text-xs font-medium text-graphite-600">Email</label>
-            <input className="input mt-1" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@crm.local" />
+            <input className="input mt-1" type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@crm.local" />
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">Password</label>
-            <input className="input mt-1" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+            <input className="input mt-1" type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
           </div>
           <button className="btn-primary w-full !py-2.5" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          <p className="text-xs text-graphite-400 text-center">Admin: admin@crm.local / Admin123! — employees are created by admin</p>
+          {import.meta.env.DEV && <p className="text-xs text-graphite-400 text-center">Dev: admin@crm.local / Admin123! — employees are created by admin</p>}
         </form>
       </div>
     </div>
@@ -87,13 +108,30 @@ export function Dashboard() {
   const [d, setD] = useState<any>(null);
   const [src, setSrc] = useState<any>(null);
   const [monthly, setMonthly] = useState<any[]>([]);
-  useEffect(() => {
-    api.get('/dashboard').then((r) => setD(r.data));
-    api.get('/dashboard/by-source').then((r) => setSrc(r.data));
-    api.get('/reports/monthly').then((r) => setMonthly(r.data)).catch(() => {});
-  }, []);
+  const [error, setError] = useState('');
+  const [dlError, setDlError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const dl = async (path: string, filename: string, params?: Record<string, string>) => {
+    setDlError('');
+    try { await downloadReport(path, filename, params); }
+    catch (e: any) { setDlError(e?.message || 'Download failed'); }
+  };
+  const load = () => {
+    setLoading(true); setError('');
+    Promise.allSettled([
+      api.get('/dashboard'),
+      api.get('/dashboard/by-source'),
+      api.get('/reports/monthly'),
+    ]).then(([dr, sr, mr]) => {
+      if (dr.status === 'fulfilled') setD(dr.value.data);
+      else setError(dr.reason?.response?.data?.detail || 'Failed to load dashboard. Check backend / login again.');
+      if (sr.status === 'fulfilled') setSrc(sr.value.data);
+      if (mr.status === 'fulfilled') setMonthly(Array.isArray(mr.value.data) ? mr.value.data : []);
+    }).finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
-  const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => b.total - a.total), [src]);
+  const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
     const t = { total: 0, follow: 0, prospect: 0, rnr: 0, notInt: 0, converted: 0 };
     for (const r of srcRows as any[]) {
@@ -106,6 +144,19 @@ export function Dashboard() {
     }
     return t;
   }, [srcRows]);
+  if (loading && !d) return <Spinner />;
+  if (error && !d) {
+    return (
+      <div>
+        <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and monthly volume from live database data." />
+        <div className="card p-8 text-center">
+          <p className="font-medium text-graphite-700">Could not load dashboard</p>
+          <p className="text-sm text-graphite-500 mt-1">{error}</p>
+          <button className="btn-primary mt-4" onClick={load}>Retry</button>
+        </div>
+      </div>
+    );
+  }
   if (!d) return <Spinner />;
   const f = d.funnel || {};
   const tiles = [
@@ -117,12 +168,16 @@ export function Dashboard() {
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
     { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#196f3d]', text: 'text-white' },
     { label: 'New Lead', value: f.new_lead ?? 0, bg: 'bg-[#1c2833]', text: 'text-white' },
+    { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
       <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and monthly volume from live database data." />
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
+      )}
+      {dlError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">❌ {dlError}</div>
       )}
       <div className="grid lg:grid-cols-2 gap-5">
         <div className="space-y-5">
@@ -192,8 +247,8 @@ export function Dashboard() {
               <div className="h-80">
                 <ResponsiveContainer>
                   <PieChart>
-                    <Pie data={pie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(percent * 100).toFixed(0)}%`}>
-                      {pie.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    <Pie data={pie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}>
+                      {pie.map((e: any, i: number) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
                     </Pie>
                     <Tooltip /><Legend />
                   </PieChart>
@@ -202,7 +257,7 @@ export function Dashboard() {
             )}
           </Card>
           <Card title="Monthly Lead Volume" action={
-            <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => downloadReport('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
+            <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
               Download
             </button>
           }>
@@ -234,28 +289,50 @@ export function Leads() {
   const [masters, setMasters] = useState<any>(null);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [source, setSource] = useState('');
   const [sla, setSla] = useState('');
   const [unassigned, setUnassigned] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const size = 15;
-  useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, []);
+  useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
   useEffect(() => {
-    setLoading(true);
-    api.get('/leads', { params: { search, status, sla, unassigned: unassigned ? '1' : '', page, size } })
-      .then((r) => { setItems(r.data.items); setTotal(r.data.total); })
-      .finally(() => setLoading(false));
-  }, [search, status, sla, unassigned, page]);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      setLoading(true); setError('');
+      api.get('/leads', {
+        params: { search, status, source, sla, unassigned: unassigned ? '1' : '', page, size },
+        signal: ctrl.signal,
+      })
+        .then((r) => {
+          setItems(r.data.items || []);
+          setTotal(r.data.total ?? 0);
+          const pages = Math.max(1, Math.ceil((r.data.total ?? 0) / size));
+          if (page > pages) setPage(pages);
+        })
+        .catch((e: any) => {
+          if (e?.code === 'ERR_CANCELED') return;
+          setError(e?.response?.data?.detail || 'Could not load leads.');
+        })
+        .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    }, 300);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [search, status, source, sla, unassigned, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   return (
     <div>
-      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · 1 open customer per employee`} />
+      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · 3 open customers per employee`} />
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
         <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
           {masters?.statuses?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select className="input !w-52" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
+          <option value="">All sources (Excel)</option>
+          {masters?.sources?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <select className="input !w-44" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
           <option value="">All SLA states</option>
@@ -268,13 +345,14 @@ export function Leads() {
           Pending assignment only
         </label>
       </div>
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
       <div className="card overflow-hidden">
-        {loading ? <Spinner /> : items.length === 0 ? <EmptyState title="No leads match" hint="Import the Excel tracker or adjust filters." /> : (
+        {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px]">
               <thead className="bg-graphite-50"><tr>
                 <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
-                <th className="th">City</th><th className="th">Source</th><th className="th">Status</th><th className="th">Owner</th><th className="th">SLA</th>
+                <th className="th">City</th><th className="th">Source</th><th className="th">Status</th><th className="th">Employee</th><th className="th">SLA</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
@@ -305,6 +383,109 @@ export function Leads() {
   );
 }
 
+/* ================= EMPLOYEE LEADS ================= */
+export function EmployeeLeads() {
+  const [masters, setMasters] = useState<any>(null);
+  const [empId, setEmpId] = useState('');
+  const [items, setItems] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api.get('/masters').then((r) => {
+      setMasters(r.data);
+      const list = r.data?.employees || [];
+      if (list.length > 0) setEmpId((cur) => cur || list[0].id);
+    }).catch(() => setError('Failed to load employees'));
+  }, []);
+  const [truncated, setTruncated] = useState(false);
+  useEffect(() => {
+    if (!empId) { setItems([]); setTotal(0); return; }
+    setLoading(true); setError(''); setTruncated(false);
+    // Two-step fetch so summary chips cover ALL assigned customers, not just page 1.
+    api.get('/leads', { params: { employee: empId, page: 1, size: 1 } })
+      .then((r) => {
+        const totalCount = r.data.total ?? 0;
+        const full = Math.min(Math.max(totalCount, 1), 500);
+        setTruncated(totalCount > 500);
+        return api.get('/leads', { params: { employee: empId, page: 1, size: full } });
+      })
+      .then((r) => { setItems(r.data.items || []); setTotal(r.data.total ?? 0); })
+      .catch(() => setError('Failed to load assigned customers'))
+      .finally(() => setLoading(false));
+  }, [empId]);
+  const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
+    masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
+  const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
+  const needsContact = items.filter((l) => !l.first_contact_at).length;
+  const overdue = items.filter((l) => l.sla_state === 'OVERDUE').length;
+  const done = items.filter((l) => !!l.first_contact_at).length;
+  return (
+    <div>
+      <PageHeader title="Employee Leads" subtitle="Select an employee to see all data of their assigned customers." />
+      <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
+        <label className="text-xs font-medium text-graphite-600">Employee</label>
+        <select className="input !w-64" value={empId} onChange={(e) => setEmpId(e.target.value)}>
+          <option value="">Select employee…</option>
+          {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </select>
+        {empName && <span className="text-sm text-graphite-500">{total} customer{total === 1 ? '' : 's'} assigned{truncated ? ' (showing first 500)' : ''}</span>}
+      </div>
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
+      {!empId ? <EmptyState title="No employee selected" hint="Choose an employee above." /> : loading ? <Spinner /> : items.length === 0 ? (
+        <EmptyState title={`No customers assigned to ${empName || 'this employee'}`} hint="Assign leads from the Leads page or wait for auto-assignment." />
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+            {[
+              { label: 'Total assigned', value: total },
+              { label: 'Needs first contact', value: needsContact },
+              { label: 'SLA overdue', value: overdue },
+              { label: 'Contact done', value: done },
+            ].map((s) => (
+              <div key={s.label} className="card p-4 text-center">
+                <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1200px]">
+                <thead className="bg-graphite-50"><tr>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
+                  <th className="th">City</th><th className="th">Contact</th><th className="th">Source</th>
+                  <th className="th">Product</th><th className="th">Status</th><th className="th">SLA</th>
+                  <th className="th">Due date</th>
+                  <th className="th">First contact</th><th className="th">Enquiry date</th>
+                </tr></thead>
+                <tbody>
+                  {items.map((l) => (
+                    <tr key={l.id} className="hover:bg-brand-50/50">
+                      <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                      <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div><div className="text-xs text-graphite-400">{l.email || ''}</div></td>
+                      <td className="td">{l.company_name || '—'}</td>
+                      <td className="td">{l.city || '—'}</td>
+                      <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                      <td className="td">{nameOf('sources', l.source_id)}</td>
+                      <td className="td">{nameOf('products', l.product_id)}</td>
+                      <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
+                      <td className="td"><SlaBadge value={l.sla_state} /></td>
+                      <td className={`td whitespace-nowrap tabular-nums ${l.sla_state === 'OVERDUE' ? 'text-red-700 font-semibold' : ''}`}>{fmtDT(l.sla_deadline)}</td>
+                      <td className="td whitespace-nowrap">{l.first_contact_at ? `${l.first_contact_method || 'Contacted'} · ${l.first_contact_at.slice(0, 10)}` : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
+                      <td className="td whitespace-nowrap">{l.enquiry_date || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ================= LEAD DETAIL ================= */
 export function LeadDetail({ id }: { id: string }) {
   const [l, setL] = useState<any>(null);
@@ -319,19 +500,37 @@ export function LeadDetail({ id }: { id: string }) {
   const [okMsg, setOkMsg] = useState('');
   const [tab, setTab] = useState<'timeline' | 'history'>('timeline');
   const role = localStorage.getItem('role') || 'EMPLOYEE';
-  const reload = () => api.get(`/leads/${id}`).then((r) => setL(r.data));
-  useEffect(() => { reload(); api.get('/masters').then((r) => setMasters(r.data)).catch(() => {}); }, [id]);
+  const [loadError, setLoadError] = useState('');
+  const reload = () => api.get(`/leads/${id}`).then((r) => { setL(r.data); setLoadError(''); });
   useEffect(() => {
-    if (l?.status_id) setProgressId(l.status_id);
+    reload().catch((e: any) => setLoadError(e?.response?.data?.detail || 'Could not load this lead.'));
+    api.get('/masters').then((r) => setMasters(r.data)).catch(() => {});
+  }, [id]);
+  useEffect(() => {
+    if (l?.status_id) setProgressId((cur) => cur || l.status_id);
   }, [l?.status_id]);
+  if (loadError && !l) {
+    return (
+      <div className="card p-8 text-center">
+        <p className="font-medium text-graphite-700">Lead not found or not accessible</p>
+        <p className="text-sm text-graphite-500 mt-1">{loadError}</p>
+        <Link to="/leads" className="btn-secondary mt-4 inline-block">← All leads</Link>
+      </div>
+    );
+  }
   if (!l) return <Spinner />;
   const nameOf = (kind: string, v?: string) => masters?.[kind]?.find((x: any) => x.id === v)?.name ?? (v ?? '—');
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
   const canUpdateProgress = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id);
   const addNote = async () => {
-    if (!note.trim()) return;
-    await api.post(`/leads/${id}/activities`, { activity_type: 'Note', notes: note });
-    setNote(''); reload();
+    if (!note.trim() || busy) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/leads/${id}/activities`, { activity_type: 'Note', notes: note });
+      setNote(''); await reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not add note');
+    } finally { setBusy(false); }
   };
   const saveProgress = async () => {
     if (!progressId) { setErr('Select work progress'); return; }
@@ -381,7 +580,7 @@ export function LeadDetail({ id }: { id: string }) {
               <span>🏷 {nameOf('sources', l.source_id)}</span>
               <span>📦 {nameOf('products', l.product_id)}</span>
               <span>👤 {nameOf('employees', l.primary_employee_id)}</span>
-              {l.sla_deadline && <span>⏱ Contact by {l.sla_deadline.slice(0, 16).replace('T', ' ')}</span>}
+              {l.sla_deadline && <span>⏱ Contact by {fmtDT(l.sla_deadline)}</span>}
             </div>
           </div>
           <Link to="/leads" className="btn-secondary">← All leads</Link>
@@ -394,7 +593,7 @@ export function LeadDetail({ id }: { id: string }) {
         <Card title="Assign to employee">
           <div className="flex flex-wrap gap-3 items-end">
             <div className="flex-1 min-w-[200px]">
-              <label className="text-xs font-medium text-graphite-600">Employee (must be free — 1 open lead max)</label>
+              <label className="text-xs font-medium text-graphite-600">Employee (must be free — 3 open leads max)</label>
               <select className="input mt-1" value={assignEmp} onChange={(e) => setAssignEmp(e.target.value)}>
                 <option value="">Select…</option>
                 {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
@@ -448,7 +647,7 @@ export function LeadDetail({ id }: { id: string }) {
           {l.first_contact_at && (
             <Card title="First contact recorded">
               <p className="text-sm text-graphite-700"><b>{l.first_contact_method}</b> · {l.first_contact_result}</p>
-              <p className="text-xs text-graphite-400 mt-1">{l.first_contact_at.slice(0, 16).replace('T', ' ')}</p>
+              <p className="text-xs text-graphite-400 mt-1">{fmtDT(l.first_contact_at)}</p>
               {l.first_contact_notes && <p className="text-sm mt-2 whitespace-pre-wrap">{l.first_contact_notes}</p>}
             </Card>
           )}
@@ -474,7 +673,7 @@ export function LeadDetail({ id }: { id: string }) {
                 {(l.activities || []).map((a: any) => (
                   <li key={a.id} className="ml-5">
                     <span className="absolute -left-[7px] mt-1 w-3 h-3 rounded-full bg-brand-500 ring-4 ring-brand-100" />
-                    <div className="flex items-center gap-2 text-sm"><b>{a.type}</b><span className="text-xs text-graphite-400">{a.at?.slice(0, 16).replace('T', ' ')}</span></div>
+                    <div className="flex items-center gap-2 text-sm"><b>{a.type}</b><span className="text-xs text-graphite-400">{fmtDT(a.at)}</span></div>
                     <p className="text-sm text-graphite-700 mt-1 whitespace-pre-wrap">{a.notes}</p>
                   </li>
                 ))}
@@ -501,12 +700,12 @@ export function ImportPage() {
   const [batches, setBatches] = useState<any[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
-    name: '', city: '', company: '', cars: '', source: '', product: '', enq: '', date: '',
+    name: '', city: '', company: '', phone: '', cars: '', source: '', product: '', enq: '', date: '',
   });
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<'duplicates' | 'invalid'>('duplicates');
+  const [tab, setTab] = useState<'duplicates' | 'invalid' | 'ready'>('duplicates');
   const errMsg = (e: any) => e?.response?.data?.detail || 'Upload failed. Is the backend running?';
 
   const loadBatches = () => api.get('/import/batches').then((r) => setBatches(r.data || [])).catch(() => {});
@@ -540,8 +739,10 @@ export function ImportPage() {
     } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
   };
 
+  const [confirming, setConfirming] = useState(false);
   const confirm = async () => {
-    setError(''); setOkMsg('');
+    if (!res?.batch_id || confirming) return;
+    setConfirming(true); setError(''); setOkMsg('');
     try {
       const { data } = await api.post(`/import/${res.batch_id}/confirm`);
       setDone(data);
@@ -549,7 +750,7 @@ export function ImportPage() {
       setRes(null);
       loadBatches();
       if ((data.errors || []).length) setTab(data.errors.some((x: any) => x.reason === 'DUPLICATE') ? 'duplicates' : 'invalid');
-    } catch (e: any) { setError(errMsg(e)); }
+    } catch (e: any) { setError(errMsg(e)); } finally { setConfirming(false); }
   };
 
   const pickFile = (f: File | null) => {
@@ -562,6 +763,7 @@ export function ImportPage() {
       name: row.name || '',
       city: row.city || '',
       company: row.company || '',
+      phone: row.phone || '',
       cars: row.cars || '',
       source: row.source || '',
       product: row.product || '',
@@ -606,6 +808,7 @@ export function ImportPage() {
   const previewInvalid = res?.invalid_rows || [];
   const skippedDups = errors.filter((e) => e.reason === 'DUPLICATE');
   const skippedInvalid = errors.filter((e) => e.reason === 'INVALID');
+  const skippedReady = errors.filter((e) => e.reason !== 'DUPLICATE' && e.reason !== 'INVALID');
   const showReview = errors.length > 0;
 
   const SkippedTable = ({ rows, mode }: { rows: any[]; mode: 'preview' | 'review' }) => (
@@ -615,18 +818,19 @@ export function ImportPage() {
           <thead className="bg-graphite-50">
             <tr>
               <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th>
-              <th className="th">Company</th><th className="th">City</th><th className="th">Cars</th>
+              <th className="th">Company</th><th className="th">Phone</th><th className="th">City</th><th className="th">Cars</th>
               <th className="th">Source</th><th className="th">Product</th><th className="th">Reason</th>
               {mode === 'review' && <th className="th text-right">Actions</th>}
             </tr>
           </thead>
           <tbody>
             {rows.map((r: any) => (
-              <tr key={r.id || r.row} className="bg-red-50/40 hover:bg-red-50/70">
+              <tr key={r.id ?? `row-${r.row_number ?? r.row}`} className="bg-red-50/40 hover:bg-red-50/70">
                 <td className="td">{r.row_number ?? r.row}</td>
                 <td className="td">{r.enq ?? r.legacy_enq ?? '—'}</td>
                 <td className="td">{r.name || '—'}</td>
                 <td className="td">{r.company || '—'}</td>
+                <td className="td">{r.phone || '—'}</td>
                 <td className="td">{r.city || '—'}</td>
                 <td className="td">{r.cars || '—'}</td>
                 <td className="td">{r.source || '—'}</td>
@@ -652,7 +856,7 @@ export function ImportPage() {
     <div className="space-y-5 max-w-6xl">
       <PageHeader
         title="Import from Excel"
-        subtitle="Columns: Enq no, Received date, Name, Company (optional), City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
+        subtitle="Columns: Enq no, Received date, Name, Company (optional), Contact no, City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
       />
       {error && <div className="bg-[#E03131]/10 border border-[#E03131]/40 text-[#B32727] text-sm rounded-xl px-4 py-3">❌ {error}</div>}
       {okMsg && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">✓ {okMsg}</div>}
@@ -694,7 +898,7 @@ export function ImportPage() {
             <div className="overflow-x-auto -mx-5 px-5 mb-4">
               <table className="w-full min-w-[900px]"><thead className="bg-graphite-50"><tr>
                 <th className="th">Row</th><th className="th">Enq</th><th className="th">Date</th><th className="th">Name</th>
-                <th className="th">Company</th><th className="th">City</th><th className="th">Cars</th>
+                <th className="th">Company</th><th className="th">Phone</th><th className="th">City</th><th className="th">Cars</th>
                 <th className="th">Source</th><th className="th">Product</th>
               </tr></thead>
                 <tbody>{(res.preview || []).map((r: any) => (
@@ -704,6 +908,7 @@ export function ImportPage() {
                     <td className="td">{r.date != null ? String(r.date).slice(0, 10) : '—'}</td>
                     <td className="td">{r.name}</td>
                     <td className="td">{r.company || '—'}</td>
+                    <td className="td">{r.phone || '—'}</td>
                     <td className="td">{r.city || '—'}</td>
                     <td className="td">{r.cars || '—'}</td>
                     <td className="td">{r.source || '—'}</td>
@@ -712,8 +917,8 @@ export function ImportPage() {
                 ))}</tbody>
               </table>
             </div>
-            <button onClick={confirm} disabled={!res.valid && !res.duplicates && !res.invalid} className="btn-primary">
-              4 · Confirm import ({res.valid} leads){res.duplicates || res.invalid ? ` · keep ${res.duplicates + res.invalid} for review` : ''}
+            <button onClick={confirm} disabled={confirming || (!res.valid && !res.duplicates && !res.invalid)} className="btn-primary">
+              {confirming ? 'Importing…' : `4 · Confirm import (${res.valid} leads)`}{res.duplicates || res.invalid ? ` · keep ${res.duplicates + res.invalid} for review` : ''}
             </button>
           </Card>
 
@@ -751,8 +956,11 @@ export function ImportPage() {
             <button type="button" onClick={() => setTab('invalid')} className={`px-3 py-1.5 rounded-lg ${tab === 'invalid' ? 'bg-red-100 text-red-900' : 'bg-graphite-100 text-graphite-600'}`}>
               Invalid ({skippedInvalid.length})
             </button>
+            <button type="button" onClick={() => setTab('ready')} className={`px-3 py-1.5 rounded-lg ${tab === 'ready' ? 'bg-emerald-100 text-emerald-900' : 'bg-graphite-100 text-graphite-600'}`}>
+              Ready ({skippedReady.length})
+            </button>
           </div>
-          <SkippedTable rows={tab === 'duplicates' ? skippedDups : skippedInvalid} mode="review" />
+          <SkippedTable rows={tab === 'duplicates' ? skippedDups : tab === 'ready' ? skippedReady : skippedInvalid} mode="review" />
         </Card>
       )}
 
@@ -805,6 +1013,10 @@ export function ImportPage() {
                 <input className="input mt-1" value={editForm.company} onChange={(e) => setEditForm({ ...editForm, company: e.target.value })} />
               </div>
               <div>
+                <label className="text-xs font-medium text-graphite-600">Contact no</label>
+                <input className="input mt-1" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
+              </div>
+              <div>
                 <label className="text-xs font-medium text-graphite-600">City</label>
                 <input className="input mt-1" value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} />
               </div>
@@ -837,6 +1049,10 @@ function money(n: number) {
   return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
+function barRows(v: any): any[] {
+  return Array.isArray(v) ? v : [];
+}
+
 function BarCard({ title, data, x, y, onDownload }: {
   title: string; data: any[]; x: string; y: string; onDownload?: () => void;
 }) {
@@ -846,10 +1062,10 @@ function BarCard({ title, data, x, y, onDownload }: {
         Download Excel
       </button>
     )}>
-      {data.length === 0 ? <EmptyState title="No data" /> : (
+      {barRows(data).length === 0 ? <EmptyState title="No data" /> : (
         <div className="h-72">
           <ResponsiveContainer>
-            <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <BarChart data={barRows(data)} layout="vertical" margin={{ left: 8, right: 16 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
               <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} />
               <YAxis type="category" dataKey={x} width={170} tick={{ fontSize: 12 }} />
@@ -877,8 +1093,8 @@ export function Reports() {
   const [err, setErr] = useState('');
 
   useEffect(() => {
-    api.get('/reports/product-wise').then((r) => setProd(r.data)).catch(() => {});
-    api.get('/reports/employee-wise').then((r) => setEmp(r.data)).catch(() => {});
+    api.get('/reports/product-wise').then((r) => setProd(Array.isArray(r.data) ? r.data : [])).catch(() => setErr('Could not load product report.'));
+    api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => setErr('Could not load employee report.'));
   }, []);
 
   const filterParams = () => {
@@ -887,6 +1103,10 @@ export function Reports() {
   };
 
   const loadDetails = async () => {
+    if (mode === 'custom' && fromDate > toDate) {
+      setErr('From date must be on or before To date.');
+      return;
+    }
     setBusy(true); setErr('');
     try {
       const { data } = await api.get('/reports/source-details', { params: filterParams() });
@@ -896,14 +1116,30 @@ export function Reports() {
     } finally { setBusy(false); }
   };
 
+  const dl = async (path: string, filename: string, params?: Record<string, string>) => {
+    try {
+      await downloadReport(path, filename, params);
+    } catch (e: any) {
+      setErr(e?.message || 'Download failed');
+    }
+  };
+
   useEffect(() => { loadDetails(); }, []);
 
   const downloadDetails = async () => {
+    if (mode === 'custom' && fromDate > toDate) {
+      setErr('From date must be on or before To date.');
+      return;
+    }
     const p = filterParams();
     const name = mode === 'month'
       ? `leads-by-source-${month}.xlsx`
       : `leads-by-source-${fromDate}_to_${toDate}.xlsx`;
-    await downloadReport('/reports/source-details/export', name, p);
+    try {
+      await downloadReport('/reports/source-details/export', name, p);
+    } catch (e: any) {
+      setErr(e?.message || 'Download failed');
+    }
   };
 
   return (
@@ -1015,10 +1251,10 @@ export function Reports() {
           data={prod}
           x="product"
           y="leads"
-          onDownload={() => downloadReport('/reports/product-wise/export', 'product-wise-report.xlsx')}
+          onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx')}
         />
         <Card title="Monthly lead volume" action={
-          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => downloadReport('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
+          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
             Download monthly Excel
           </button>
         }>
@@ -1052,7 +1288,9 @@ export function EmployeesPage() {
     e.preventDefault();
     setBusy(true); setError(''); setOk('');
     const emailOk = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(form.email.trim());
-    const digits = form.phone.replace(/\D/g, '').replace(/^91/, '').slice(-10);
+    let digits = form.phone.replace(/\D/g, '').replace(/^0+/, '');
+    if (digits.length > 10 && digits.startsWith('91')) digits = digits.slice(2);
+    digits = digits.slice(-10);
     const phoneOk = /^[6-9]\d{9}$/.test(digits);
     if (!emailOk) {
       setError('Enter a valid email address (e.g. name@company.com)');
@@ -1187,11 +1425,20 @@ export function EmployeesPage() {
 /* ================= NOTIFICATIONS ================= */
 export function NotificationsPage() {
   const [items, setItems] = useState<any[]>([]);
-  useEffect(() => { api.get('/notifications').then((r) => setItems(r.data)).catch(() => {}); }, []);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api.get('/notifications')
+      .then((r) => setItems(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setError('Could not load notifications. Check your connection.'))
+      .finally(() => setLoading(false));
+  }, []);
   return (
     <div className="max-w-3xl space-y-4">
       <PageHeader title="Notifications" subtitle="SLA breaches, assignments and follow-up reminders." />
-      {items.length === 0 ? <div className="card"><EmptyState title="All caught up" hint="No notifications." /></div> : items.map((n) => (
+      {loading ? <div className="card"><Spinner /></div>
+      : error ? <div className="card"><EmptyState title="Could not load notifications" hint={error} /></div>
+      : items.length === 0 ? <div className="card"><EmptyState title="All caught up" hint="No notifications." /></div> : items.map((n) => (
         <div key={n.id} className="card p-4 flex gap-3">
           <div className="w-9 h-9 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0">⚠</div>
           <div><div className="font-semibold text-sm">{n.title}</div><div className="text-sm text-graphite-600 mt-0.5">{n.body}</div></div>
