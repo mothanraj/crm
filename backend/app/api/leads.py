@@ -37,6 +37,8 @@ def _serialize(l: Lead, db: Session) -> dict:
         "company_name": l.company_name, "city": l.city, "quantity_raw": l.quantity_raw,
         "source_id": str(l.source_id) if l.source_id else None,
         "product_id": str(l.product_id) if l.product_id else None,
+        "product_name": db.get(Product, l.product_id).name if l.product_id and db.get(Product, l.product_id) else "",
+        "source_name": db.get(LeadSource, l.source_id).name if l.source_id and db.get(LeadSource, l.source_id) else "",
         "status_id": str(l.status_id),
         "primary_employee_id": str(l.primary_employee_id) if l.primary_employee_id else None,
         "sla_state": l.sla_state,

@@ -118,7 +118,7 @@ export function Dashboard() {
     { label: 'Pipeline / A+', value: f.pipeline ?? 0, bg: 'bg-[#1e8449]', text: 'text-white' },
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
     { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#196f3d]', text: 'text-white' },
-    { label: 'New Lead', value: f.new_lead ?? 0, bg: 'bg-[#1c2833]', text: 'text-white' },
+    { label: 'New Lead', value: d.new_lead_display ?? Math.min(f.new_lead ?? 0, 5), bg: 'bg-[#1c2833]', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
@@ -305,7 +305,7 @@ export function Leads() {
             <table className="w-full min-w-[1280px]">
               <thead className="bg-graphite-50"><tr>
                 <th className="th">Action</th><th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th>
-                <th className="th">City</th><th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th>
+                <th className="th">City</th><th className="th">Source</th><th className="th">Product</th><th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
@@ -317,27 +317,31 @@ export function Leads() {
                     <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                     <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
                     <td className="td">{l.city || '—'}</td>
+                    <td className="td">{l.source_name || '—'}</td>
+                    <td className="td">{l.product_name || '—'}</td>
                     <td className="td"><StatusBadge value={statusLabel(l)} /></td>
                     <td className="td min-w-[280px]">
                       {role === 'EMPLOYEE' ? (
-                        <textarea className="input min-h-[64px] text-xs" disabled={!!l.employee_remarks} placeholder="Enter customer conversation remarks…"
+                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
                       ) : <span className="block max-w-[240px] truncate" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}
                     </td>
                     <td className="td min-w-[190px]">
                       {role === 'EMPLOYEE' ? (
-                        <select className="input text-xs" value={draftFor(l).review}
+                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
                       ) : (l.customer_review || '—')}
-                      {role === 'EMPLOYEE' && <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>}
+                      {role === 'EMPLOYEE' && (l.sla_state === 'COMPLETED'
+                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
+                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
                     </td>
                     <td className="td min-w-[190px]">
                       {role === 'EMPLOYEE' ? (
-                        <select className="input text-xs" value={draftFor(l).progress}
+                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
                           {actionOptions.map((option) => {
                             const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
@@ -862,6 +866,7 @@ export function Reports() {
   const [fromDate, setFromDate] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`);
   const [toDate, setToDate] = useState(today.toISOString().slice(0, 10));
   const [details, setDetails] = useState<any>(null);
+  const [productDetails, setProductDetails] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -878,8 +883,15 @@ export function Reports() {
   const loadDetails = async () => {
     setBusy(true); setErr('');
     try {
-      const { data } = await api.get('/reports/source-details', { params: filterParams() });
+      const params = filterParams();
+      const [{ data }, productResponse, productDetailsResponse] = await Promise.all([
+        api.get('/reports/source-details', { params }),
+        api.get('/reports/product-wise', { params }),
+        api.get('/reports/product-details', { params }),
+      ]);
       setDetails(data);
+      setProd(productResponse.data);
+      setProductDetails(productDetailsResponse.data);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Failed to load details report');
     } finally { setBusy(false); }
@@ -998,13 +1010,33 @@ export function Reports() {
         </div>
       </div>
 
+      <div className="card overflow-hidden">
+        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide flex items-center justify-between">
+          <span>DETAILS REPORT — PRODUCT WISE</span>
+          <button type="button" className="btn-secondary !bg-white !text-graphite-800 !px-3 !py-1 text-xs" disabled={!productDetails} onClick={() => downloadReport('/reports/product-details/export', 'product-wise-details.xlsx', filterParams())}>Download Excel</button>
+        </div>
+        <div className="p-5 overflow-x-auto">
+          <table className="w-full min-w-[900px] text-sm">
+            <thead><tr className="bg-[#1e3a5f] text-white">
+              {['Product', 'Total', 'In Followup', 'Prospect', 'RNR', 'Not Int.', 'Quote Sent', 'Converted', 'Conv. %'].map((header) => <th key={header} className="th !text-white !bg-transparent">{header}</th>)}
+            </tr></thead>
+            <tbody>
+              {(productDetails?.rows || []).map((row: any, i: number) => <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
+                <td className="td font-medium">{row.product}</td><td className="td text-right font-bold">{row.total}</td><td className="td text-right">{row.in_followup}</td><td className="td text-right">{row.prospect}</td><td className="td text-right">{row.rnr}</td><td className="td text-right">{row.not_interested}</td><td className="td text-right">{row.quote_sent}</td><td className="td text-right">{row.converted}</td><td className="td text-right">{row.conv_pct}%</td>
+              </tr>)}
+              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td">TOTAL</td><td className="td text-right">{productDetails.totals.total}</td><td className="td text-right">{productDetails.totals.in_followup}</td><td className="td text-right">{productDetails.totals.prospect}</td><td className="td text-right">{productDetails.totals.rnr}</td><td className="td text-right">{productDetails.totals.not_interested}</td><td className="td text-right">{productDetails.totals.quote_sent}</td><td className="td text-right">{productDetails.totals.converted}</td><td className="td text-right">{productDetails.totals.conv_pct}%</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="grid lg:grid-cols-2 gap-4">
         <BarCard
           title="Product-wise leads"
           data={prod}
           x="product"
           y="leads"
-          onDownload={() => downloadReport('/reports/product-wise/export', 'product-wise-report.xlsx')}
+          onDownload={() => downloadReport('/reports/product-wise/export', 'product-wise-report.xlsx', filterParams())}
         />
         <Card title="Monthly lead volume" action={
           <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => downloadReport('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
@@ -1180,13 +1212,13 @@ export function EmployeesPage() {
             <div className="overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[1050px]">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">City</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
                   <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Completion</th>
                 </tr></thead>
                 <tbody>{employeeLeads.map((lead) => (
                   <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
                     <td className="td font-semibold"><Link className="text-brand-700" to={`/leads/${lead.id}`}>{lead.enquiry_number}</Link></td>
-                    <td className="td">{lead.customer_name || '—'}</td><td className="td">{lead.contact_number || '—'}</td><td className="td">{lead.city || '—'}</td>
+                    <td className="td">{lead.customer_name || '—'}</td><td className="td">{lead.contact_number || '—'}</td><td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
                     <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
                     <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
                     <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>

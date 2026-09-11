@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import admin_only
 from app.db.session import get_db
-from app.models import ImportBatch, ImportError, Lead, LeadStatus, LeadStatusHistory, User
+from app.models import ImportBatch, ImportError, Lead, LeadSource, LeadStatus, LeadStatusHistory, Product, User
 from app.services.lead_service import auto_assign, next_enquiry_number
-from app.services.normalize import norm_phone, parse_excel_date
+from app.services.normalize import PRODUCT_ALIASES, SOURCE_ALIASES, norm_key, norm_phone, parse_excel_date
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 PENDING: dict[str, list[dict]] = {}
@@ -64,6 +64,24 @@ def _default_status(db: Session) -> LeadStatus:
     if not st:
         raise HTTPException(500, "New Lead status missing — run seed")
     return st
+
+
+def _product_id(db: Session, raw) -> object | None:
+    value = str(raw or '').strip()
+    if not value:
+        return None
+    canonical = PRODUCT_ALIASES.get(norm_key(value), value)
+    product = db.query(Product).filter(Product.name.ilike(canonical)).first()
+    return product.id if product else None
+
+
+def _source_id(db: Session, raw) -> object | None:
+    value = str(raw or '').strip()
+    if not value:
+        return None
+    canonical = SOURCE_ALIASES.get(norm_key(value), value)
+    source = db.query(LeadSource).filter(LeadSource.name.ilike(canonical)).first()
+    return source.id if source else None
 
 
 def _json_safe_rec(rec: dict) -> dict:
@@ -127,6 +145,15 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
         contact_number=phone,
         contact_number_norm=phone_n,
         city=city,
+        company_name=str(raw.get("company") or "").strip(),
+        alternate_contact=str(raw.get("alternate_contact") or "").strip(),
+        email=str(raw.get("email") or "").strip(),
+        requirement=str(raw.get("requirement") or "").strip(),
+        quantity_raw=str(raw.get("quantity") or "").strip(),
+        priority=str(raw.get("priority") or "").strip(),
+        first_contact_notes=str(raw.get("remarks") or "").strip(),
+        product_id=_product_id(db, raw.get("product")),
+        source_id=_source_id(db, raw.get("source")),
         status_id=st.id,
         sla_state="PENDING",
         created_by=admin.id,
@@ -177,6 +204,8 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             f"(found headers: {', '.join(h for h in header if h)[:120]}). "
             "Please select the tracker sheet.")
 
+    product_index = next((idx for idx, value in enumerate(header) if "product" in value.lower() or "parking" in value.lower()), None)
+    source_index = next((idx for idx, value in enumerate(header) if "source" in value.lower()), None)
     preview, duplicates, invalids = [], [], []
     seen_phones: set[str] = set()
     seen_enqs: set[int] = set()
@@ -188,8 +217,17 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "enq": r[0] if len(r) > 0 else None,
             "date": r[1] if len(r) > 1 else None,
             "name": str(r[2] or "").strip() if len(r) > 2 else "",
+            "company": str(r[3] or "").strip() if len(r) > 3 else "",
             "phone": str(r[4] or "").strip() if len(r) > 4 else "",
             "city": str(r[5] or "").strip() if len(r) > 5 else "",
+            "requirement": str(r[6] or "").strip() if len(r) > 6 else "",
+            "quantity": str(r[7] or "").strip() if len(r) > 7 else "",
+            "remarks": str(r[8] or "").strip() if len(r) > 8 else "",
+            "priority": str(r[18] or "").strip() if len(r) > 18 else "",
+            "email": str(r[29] or "").strip() if len(r) > 29 else "",
+            "alternate_contact": str(r[30] or "").strip() if len(r) > 30 else "",
+            "product": str(r[product_index] or "").strip() if product_index is not None and len(r) > product_index else "",
+            "source": str(r[source_index] or "").strip() if source_index is not None and len(r) > source_index else "",
         }
         errs: list[str] = []
         if not rec["name"]:
@@ -281,9 +319,18 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
             legacy_enquiry_no=legacy,
             enquiry_date=parse_excel_date(rec["date"]),
             customer_name=str(rec["name"] or ""),
+            company_name=str(rec.get("company") or ""),
             contact_number=str(rec["phone"] or ""),
             contact_number_norm=phone_n,
             city=str(rec["city"] or ""),
+            email=str(rec.get("email") or ""),
+            alternate_contact=str(rec.get("alternate_contact") or ""),
+            requirement=str(rec.get("requirement") or ""),
+            quantity_raw=str(rec.get("quantity") or ""),
+            priority=str(rec.get("priority") or ""),
+            first_contact_notes=str(rec.get("remarks") or ""),
+            product_id=_product_id(db, rec.get("product")),
+            source_id=_source_id(db, rec.get("source")),
             status_id=st.id,
             sla_state="PENDING",
             created_by=admin.id,
