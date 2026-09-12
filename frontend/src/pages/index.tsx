@@ -1125,7 +1125,11 @@ export function ImportPage() {
       )}
 
       {showReview && (
-        <Card title="Admin review — Add to leads or Delete">
+        <Card title="Admin review — Add to leads or Delete" action={
+          <button type="button" className="btn-secondary !px-3 !py-1.5 text-sm" onClick={() => { setErrors([]); setEditId(null); }}>
+            Close
+          </button>
+        }>
           <p className="text-sm text-graphite-500 mb-3">
             View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. Use <b>Force add</b> if enquiry no conflicts but it should still become a lead. <b>Delete</b> removes it from this list.
           </p>
@@ -1284,7 +1288,7 @@ export function Reports() {
   };
 
   const loadDetails = async () => {
-    if (mode === 'custom' && fromDate > toDate) {
+    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
       setErr('From date must be on or before To date.');
       return;
     }
@@ -1315,7 +1319,7 @@ export function Reports() {
   useEffect(() => { loadDetails(); }, []);
 
   const downloadDetails = async () => {
-    if (mode === 'custom' && fromDate > toDate) {
+    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
       setErr('From date must be on or before To date.');
       return;
     }
@@ -1330,18 +1334,15 @@ export function Reports() {
     }
   };
 
-  return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Reports"
-        subtitle="Details report by lead source (date range / month), product-wise counts, and monthly volume downloads."
-      />
+  const downloadProductDetails = () => {
+    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
+      setErr('From date must be on or before To date.');
+      return;
+    }
+    return dl('/reports/product-details/export', 'product-wise-details.xlsx', filterParams());
+  };
 
-      <div className="card overflow-hidden">
-        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">
-          DETAILS REPORT — LEADS BY SOURCE
-        </div>
-        <div className="p-5 space-y-4">
+  const reportFilters = (isProduct = false) => (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
             <div>
               <label className="text-xs font-medium text-graphite-600">Report Mode</label>
@@ -1369,16 +1370,25 @@ export function Reports() {
             )}
             <div className="flex items-end gap-2">
               <button type="button" className="btn-primary" disabled={busy} onClick={loadDetails}>{busy ? 'Loading…' : 'Apply'}</button>
-              <button type="button" className="btn-secondary" disabled={!details} onClick={downloadDetails}>Download Excel</button>
+              <button type="button" className="btn-secondary" disabled={isProduct ? !productDetails : !details} onClick={isProduct ? downloadProductDetails : downloadDetails}>Download Excel</button>
             </div>
           </div>
+  );
 
-          {details && (
-            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
-              <span><b>Effective From:</b> {details.effective_from || 'All time'}</span>
-              <span><b>Effective To:</b> {details.effective_to || 'All time'}</span>
-            </div>
-          )}
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Reports"
+        subtitle="Details report by lead source (date range / month), product-wise counts, and monthly volume downloads."
+      />
+
+      <div className="card overflow-hidden">
+        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">
+          DETAILS REPORT — LEADS BY SOURCE
+        </div>
+        <div className="p-5 space-y-4">
+          {reportFilters()}
+
           {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
 
           <div className="overflow-x-auto">
@@ -1427,9 +1437,11 @@ export function Reports() {
       <div className="card overflow-hidden">
         <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide flex items-center justify-between">
           <span>DETAILS REPORT — PRODUCT WISE</span>
-          <button type="button" className="btn-secondary !bg-white !text-graphite-800 !px-3 !py-1 text-xs" disabled={!productDetails} onClick={() => downloadReport('/reports/product-details/export', 'product-wise-details.xlsx', filterParams())}>Download Excel</button>
         </div>
-        <div className="p-5 overflow-x-auto">
+        <div className="p-5 space-y-4">
+          {reportFilters(true)}
+          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
+          <div className="overflow-x-auto">
           <table className="w-full min-w-[900px] text-sm">
             <thead><tr className="bg-[#1e3a5f] text-white">
               {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent">{header}</th>)}
@@ -1441,6 +1453,7 @@ export function Reports() {
               {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td">TOTAL</td><td className="td text-right">{productDetails.totals.total}</td><td className="td text-right">{productDetails.totals.in_followup}</td><td className="td text-right">{productDetails.totals.meeting}</td><td className="td text-right">{productDetails.totals.site_visit}</td><td className="td text-right">{productDetails.totals.quote_sent}</td><td className="td text-right">{productDetails.totals.not_interested}</td></tr>}
             </tbody>
           </table>
+        </div>
         </div>
       </div>
 
