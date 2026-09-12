@@ -85,8 +85,16 @@ def _resolve_range(
     return start, end, "custom"
 
 
-def _date_filter(start: date | None, end: date | None):
-    clauses = [Lead.is_active.is_(True)]
+def _is_employee(u: User | None) -> bool:
+    return bool(u is not None and u.role is not None and u.role.name == "EMPLOYEE")
+
+
+def _emp_clauses(u: User | None):
+    return [Lead.primary_employee_id == u.id] if _is_employee(u) else []
+
+
+def _date_filter(start: date | None, end: date | None, u: User | None = None):
+    clauses = [Lead.is_active.is_(True), *_emp_clauses(u)]
     if start:
         clauses.append(Lead.enquiry_date >= start)
     if end:
@@ -94,18 +102,29 @@ def _date_filter(start: date | None, end: date | None):
     return and_(*clauses)
 
 
-def _kpis(db: Session):
-    total = db.query(Lead).filter(Lead.is_active.is_(True)).count()
+def _kpis(db: Session, u: User | None = None):
+    emp = _emp_clauses(u)
+    is_emp = _is_employee(u)
+    total = db.query(Lead).filter(Lead.is_active.is_(True), *emp).count()
     by_status = dict(db.query(LeadStatus.name, func.count(Lead.id)).join(
-        Lead, Lead.status_id == LeadStatus.id).filter(Lead.is_active.is_(True)).group_by(LeadStatus.name).all())
+        Lead, Lead.status_id == LeadStatus.id).filter(Lead.is_active.is_(True), *emp).group_by(LeadStatus.name).all())
     new_lead = by_status.get(STATUS_NEW, 0)
-    overdue = db.query(Lead).filter(Lead.sla_state == "OVERDUE", Lead.is_active.is_(True)).count()
-    unassigned = db.query(Lead).filter(Lead.primary_employee_id.is_(None), Lead.is_active.is_(True)).count()
+    overdue = db.query(Lead).filter(Lead.sla_state == "OVERDUE", Lead.is_active.is_(True), *emp).count()
+    needs_first_contact = db.query(Lead).filter(
+        Lead.is_active.is_(True),
+        Lead.first_contact_at.is_(None),
+        Lead.primary_employee_id.isnot(None),
+        *emp,
+    ).count()
+    contacted = db.query(Lead).filter(
+        Lead.is_active.is_(True), Lead.first_contact_at.isnot(None), *emp
+    ).count()
+    unassigned = 0 if is_emp else db.query(Lead).filter(Lead.primary_employee_id.is_(None), Lead.is_active.is_(True)).count()
     mapped = sum(by_status.get(s, 0) for s in DASHBOARD_MAPPED)
     latest_assignments = (
         db.query(LeadAssignment)
         .join(Lead, Lead.id == LeadAssignment.lead_id)
-        .filter(LeadAssignment.is_current.is_(True), Lead.is_active.is_(True))
+        .filter(LeadAssignment.is_current.is_(True), Lead.is_active.is_(True), *emp)
         .order_by(LeadAssignment.assigned_at.desc())
         .limit(5)
         .all()
@@ -151,28 +170,38 @@ def _kpis(db: Session):
         "latest_assigned": latest_assigned,
         "new_lead_capped": new_lead > 5,
         "sla_overdue": overdue,
+        "needs_first_contact": needs_first_contact,
+        "contacted": contacted,
         "unassigned": unassigned,
-        "quotations": db.query(Quotation).count(),
-        "visits": db.query(SiteVisit).count(),
+        "quotations": (
+            db.query(Quotation).join(Lead, Quotation.lead_id == Lead.id)
+            .filter(Lead.is_active.is_(True), *emp).count()
+            if is_emp else db.query(Quotation).count()
+        ),
+        "visits": (
+            db.query(SiteVisit).join(Lead, SiteVisit.lead_id == Lead.id)
+            .filter(Lead.is_active.is_(True), *emp).count()
+            if is_emp else db.query(SiteVisit).count()
+        ),
     }
 
 
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    d = _kpis(db)
+    d = _kpis(db, u)
     if d["new_lead_capped"]:
         d["warning"] = "New leads exceeded the threshold."
     return d
 
 
-def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None) -> dict:
+def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None, u: User | None = None) -> dict:
     # Single query from Lead: blank sources fold into "Others" via coalesce,
     # so each lead is counted exactly once.
     src_name = func.coalesce(LeadSource.name, "Others")
     rows = db.query(src_name, LeadStatus.name, func.count(Lead.id)).outerjoin(
         LeadSource, Lead.source_id == LeadSource.id
     ).outerjoin(LeadStatus, Lead.status_id == LeadStatus.id).filter(
-        _date_filter(start, end)
+        _date_filter(start, end, u)
     ).group_by(src_name, LeadStatus.name).all()
     out: dict = {}
     for src, st, c in rows:
@@ -188,7 +217,7 @@ def _by_source_matrix(db: Session, start: date | None = None, end: date | None =
 
 @router.get("/dashboard/by-source")
 def by_source(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return _by_source_matrix(db)
+    return _by_source_matrix(db, u=u)
 
 
 def _quote_sums_by_source(db: Session, start: date | None, end: date | None) -> dict[str, dict[str, float]]:
@@ -480,14 +509,14 @@ def employee_wise(db: Session = Depends(get_db), u: User = Depends(current_user)
     return [{"employee": n, "assigned": c} for n, c in rows]
 
 
-def _monthly_rows(db: Session):
+def _monthly_rows(db: Session, u: User | None = None):
     month_key = func.to_char(Lead.enquiry_date, "YYYY-MM")
     month_label = func.to_char(Lead.enquiry_date, "Mon-YY")
     converted = func.sum(case((LeadStatus.name == STATUS_CONVERTED, 1), else_=0))
     rows = (
         db.query(month_key, month_label, func.count(Lead.id), converted)
         .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None))
+        .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None), *_emp_clauses(u))
         .group_by(month_key, month_label)
         .order_by(month_key)
         .all()
@@ -497,12 +526,12 @@ def _monthly_rows(db: Session):
 
 @router.get("/reports/monthly")
 def monthly(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return _monthly_rows(db)
+    return _monthly_rows(db, u)
 
 
 @router.get("/reports/monthly/export")
 def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    rows = _monthly_rows(db)
+    rows = _monthly_rows(db, u)
     return _xlsx_download(
         "monthly-lead-volume.xlsx",
         ["Month", "Total Leads", "Converted"],

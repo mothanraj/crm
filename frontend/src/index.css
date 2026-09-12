@@ -49,3 +49,48 @@
 /* slim scrollbars for sidebar / tables */
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { @apply bg-graphite-300 rounded-full; }
+
+/* employee to-do queue: animated strike-through for contacted leads */
+.todo-strike {
+  position: relative;
+  display: inline-block;
+  color: var(--muted);
+}
+.todo-strike::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 52%;
+  height: 2px;
+  width: 100%;
+  background: #2F9E44;
+  border-radius: 2px;
+  transform-origin: left center;
+  animation: todo-strike-draw 0.6s ease-out both;
+}
+@keyframes todo-strike-draw {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* struck to-dos leaving after the 24h window: fade + slide, then collapse */
+.todo-leaving {
+  opacity: 0;
+  transform: translateX(24px);
+  max-height: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  transition: opacity 0.45s ease, transform 0.45s ease, max-height 0.45s ease, padding 0.45s ease, margin 0.45s ease;
+}
+.todo-row:not(.todo-leaving) {
+  max-height: 200px;
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-strike::after { animation: none; transform: scaleX(1); }
+  .todo-leaving, .todo-row:not(.todo-leaving) { transition: none; }
+}

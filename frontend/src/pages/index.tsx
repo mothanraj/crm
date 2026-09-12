@@ -24,7 +24,7 @@ function prodName(l: any, nameOf: (kind: any, id?: string) => string) {
 
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
   const res = await api.get(path, { responseType: 'blob', params });
-  const ctype = res.headers?.['content-type'] || '';
+  const ctype = String(res.headers?.['content-type'] ?? '');
   if (ctype.includes('application/json')) {
     const text = await (res.data as Blob).text();
     let detail = 'Download failed';
@@ -333,6 +333,245 @@ export function Dashboard() {
           </Card>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ================= EMPLOYEE DASHBOARD (personal, assigned leads only) ================= */
+const TODO_STRIKE_MS = 24 * 60 * 60 * 1000;
+const TODO_CAP = 500;
+
+function todoState(l: any, now: number): 'pending' | 'struck' | 'gone' {
+  if (!l.first_contact_at) return 'pending';
+  const t = Date.parse(l.first_contact_at);
+  if (Number.isNaN(t)) return 'pending';
+  return now - t < TODO_STRIKE_MS ? 'struck' : 'gone';
+}
+
+function hoursAgo(ts: string, now: number) {
+  const h = Math.floor((now - Date.parse(ts)) / 3600000);
+  if (h < 1) return 'just now';
+  if (h === 1) return '1h ago';
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function TodoRow({ lead: l, state, leaving, statusLabel, now }: {
+  lead: any; state: 'pending' | 'struck'; leaving?: boolean; statusLabel: string; now: number;
+}) {
+  const done = state === 'struck';
+  return (
+    <li className={`todo-row flex items-start gap-3 px-1 py-3 ${done && leaving ? 'todo-leaving' : ''}`}>
+      <span className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs shrink-0 ${done ? 'bg-[#2F9E44] border-[#2F9E44] text-white' : 'border-graphite-300 text-transparent'}`}>✓</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <Link to={`/leads/${l.id}`} className={`font-semibold text-brand-700 hover:underline ${done ? 'todo-strike' : ''}`}>{l.customer_name || '—'}</Link>
+          <span className="text-xs text-graphite-400">{l.enquiry_number}</span>
+          {done ? (
+            <span className="text-xs font-medium text-emerald-700">✓ Contacted · {l.first_contact_method || 'Call'} · {hoursAgo(l.first_contact_at, now)}</span>
+          ) : (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 ring-1 ring-amber-200 px-1.5 py-px rounded">New lead</span>
+          )}
+        </div>
+        <div className="text-sm text-graphite-600 mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5">
+          <span>📞 {l.contact_number || '—'}</span>
+          {l.company_name && <span>🏢 {l.company_name}</span>}
+          {l.city && <span>📍 {l.city}</span>}
+          {l.sla_deadline && !done && <span>⏱ Contact by {fmtDT(l.sla_deadline)}</span>}
+        </div>
+      </div>
+      <div className="shrink-0 flex flex-col items-end gap-1">
+        <StatusBadge value={statusLabel} />
+        <SlaBadge value={l.sla_state} />
+      </div>
+    </li>
+  );
+}
+
+export function EmployeeDashboard() {
+  const [d, setD] = useState<any>(null);
+  const [todos, setTodos] = useState<any[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [leaving, setLeaving] = useState<string[]>([]);
+  const [notes, setNotes] = useState<any[]>([]);
+  const [masters, setMasters] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
+  const userName = localStorage.getItem('user_name') || 'there';
+  const load = () => {
+    setLoading(true); setError('');
+    api.get('/masters').then((r) => setMasters(r.data)).catch(() => {});
+    const dashP = api.get('/dashboard').then(
+      (r) => setD(r.data),
+      (e: any) => setError(e?.response?.data?.detail || 'Failed to load your dashboard. Check backend / login again.'),
+    );
+    const notesP = api.get('/notifications').then(
+      (r) => setNotes(Array.isArray(r.data) ? r.data.slice(0, 5) : []),
+      () => {},
+    );
+    // Two-step fetch so the to-do queue covers ALL assigned customers, not just page 1.
+    const queueP = api.get('/leads', { params: { page: 1, size: 1 } }).then((r) => {
+      const totalCount = r.data.total ?? 0;
+      const full = Math.min(Math.max(totalCount, 1), TODO_CAP);
+      setTruncated(totalCount > TODO_CAP);
+      return api.get('/leads', { params: { page: 1, size: full } });
+    }).then(
+      (r) => setTodos(r.data.items || []),
+      () => setError('Failed to load your to-dos. Check your connection.'),
+    );
+    Promise.allSettled([dashP, notesP, queueP]).finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  const { pending, struck } = useMemo(() => {
+    const p: any[] = []; const s: any[] = [];
+    for (const l of todos) {
+      const st = todoState(l, now);
+      if (st === 'pending') p.push(l);
+      else if (st === 'struck') s.push(l);
+    }
+    p.sort((a, b) => String(a.sla_deadline || 'zzz').localeCompare(String(b.sla_deadline || 'zzz')));
+    s.sort((a, b) => Date.parse(b.first_contact_at) - Date.parse(a.first_contact_at));
+    return { pending: p, struck: s };
+  }, [todos, now]);
+  // Drop struck rows once they cross the 24h mark, with a fade/slide-out first.
+  useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const l of struck) {
+      const ms = Date.parse(l.first_contact_at) + TODO_STRIKE_MS - Date.now();
+      if (ms <= 0) {
+        setTodos((cur) => (cur.some((x) => x.id === l.id) ? cur.filter((x) => x.id !== l.id) : cur));
+      } else if (ms < 2147483647) {
+        timers.push(setTimeout(() => {
+          setLeaving((cur) => (cur.includes(l.id) ? cur : [...cur, l.id]));
+          timers.push(setTimeout(() => {
+            setTodos((cur) => cur.filter((x) => x.id !== l.id));
+            setLeaving((cur) => cur.filter((id) => id !== l.id));
+          }, 500));
+        }, ms));
+      }
+    }
+    return () => { timers.forEach(clearTimeout); };
+  }, [struck]);
+  if (loading && !d) return <Spinner />;
+  if (error && !d) {
+    return (
+      <div>
+        <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and SLA alerts." />
+        <div className="card p-8 text-center">
+          <p className="font-medium text-graphite-700">Could not load your dashboard</p>
+          <p className="text-sm text-graphite-500 mt-1">{error}</p>
+          <button className="btn-primary mt-4" onClick={load}>Retry</button>
+        </div>
+      </div>
+    );
+  }
+  if (!d) return <Spinner />;
+  const f = d.funnel || {};
+  const statusName = (sid?: string) => masters?.statuses?.find((s: any) => s.id === sid)?.name ?? 'Assigned';
+  const overduePending = pending.filter((l: any) => l.sla_state === 'OVERDUE').slice(0, 5);
+  const recent = todos.slice(0, 5);
+  const tiles = [
+    { label: 'My assigned leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
+    { label: 'Needs first contact', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
+    { label: 'SLA overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
+    { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#2F9E44]', hint: 'First contact recorded' },
+    { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#0e7490]', hint: 'My pipeline' },
+    { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#65A30D]', hint: 'My wins' },
+  ];
+  return (
+    <div className="space-y-5">
+      <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and SLA alerts." actions={
+        <Link to="/leads" className="btn-primary">View all my leads →</Link>
+      } />
+      {d.warning && (
+        <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {tiles.map((t) => (
+          <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+            <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+            <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+            <div className="text-[11px] opacity-80 mt-0.5">{t.hint}</div>
+          </div>
+        ))}
+      </div>
+      <Card title={`My to-dos — new leads (${pending.length})`} action={
+        truncated
+          ? <span className="text-xs text-graphite-400">showing first 500</span>
+          : <Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>
+      }>
+        {pending.length === 0 && struck.length === 0 ? <EmptyState title="No pending to-dos" hint="New assigned customers will appear here." /> : (
+          <ul className="divide-y divide-graphite-100 -my-1">
+            {pending.map((l: any) => (
+              <TodoRow key={l.id} lead={l} state="pending" statusLabel={statusName(l.status_id)} now={now} />
+            ))}
+            {struck.map((l: any) => (
+              <TodoRow key={l.id} lead={l} state="struck" leaving={leaving.includes(l.id)} statusLabel={statusName(l.status_id)} now={now} />
+            ))}
+          </ul>
+        )}
+      </Card>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <Card title="Needs attention — overdue SLA" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
+          {overduePending.length === 0 ? <EmptyState title="Nothing overdue" hint="All caught up on SLAs." /> : (
+            <div className="overflow-x-auto -mx-5 px-5">
+              <table className="w-full min-w-[480px] text-sm">
+                <thead className="bg-graphite-50"><tr>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">Due</th>
+                </tr></thead>
+                <tbody>
+                  {overduePending.map((l: any) => (
+                    <tr key={l.id} className="hover:bg-brand-50/50">
+                      <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                      <td className="td">{l.customer_name || '—'}</td>
+                      <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                      <td className="td whitespace-nowrap text-red-700 font-semibold tabular-nums">{fmtDT(l.sla_deadline)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+        <Card title="My recent leads" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
+          {recent.length === 0 ? <EmptyState title="No leads assigned yet" hint="New Excel imports will appear here once assigned to you." /> : (
+            <div className="overflow-x-auto -mx-5 px-5">
+              <table className="w-full min-w-[480px] text-sm">
+                <thead className="bg-graphite-50"><tr>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Status</th><th className="th">SLA</th>
+                </tr></thead>
+                <tbody>
+                  {recent.map((l: any) => (
+                    <tr key={l.id} className="hover:bg-brand-50/50">
+                      <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                      <td className="td">{l.customer_name || '—'}</td>
+                      <td className="td"><StatusBadge value={statusName(l.status_id)} /></td>
+                      <td className="td"><SlaBadge value={l.sla_state} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+      {notes.length > 0 && (
+        <Card title="Alerts">
+          <div className="space-y-2">
+            {notes.map((n: any) => (
+              <div key={n.id} className="flex gap-3 items-start bg-graphite-50 rounded-lg px-3 py-2">
+                <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0">⚠</div>
+                <div><div className="font-semibold text-sm">{n.title}</div><div className="text-sm text-graphite-600">{n.body}</div></div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -1222,7 +1461,7 @@ export function Reports() {
     api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => setErr('Could not load employee report.'));
   }, []);
 
-  const filterParams = () => {
+  const filterParams = (): Record<string, string> => {
     if (mode === 'month') return { mode: 'month', month };
     return { mode: 'custom', from_date: fromDate, to_date: toDate };
   };
