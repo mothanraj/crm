@@ -58,6 +58,11 @@ def _serialize(l: Lead, db: Session) -> dict:
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
         "pending_assignment": l.primary_employee_id is None,
+        "work_history": [
+            {"remarks": a.notes or "", "category": a.customer_review or "", "work_action": a.outcome or "", "at": a.activity_at.isoformat() if a.activity_at else None}
+            for a in db.query(LeadActivity).filter_by(lead_id=l.id).order_by(LeadActivity.activity_at.asc()).all()
+            if a.activity_type == "Work Progress"
+        ],
     }
 
 
@@ -193,7 +198,7 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         lead.sla_state = body.sla_state
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
-        notes=remarks, outcome=status.name,
+        notes=remarks, outcome=status.name, customer_review=customer_review,
     ))
     db.commit()
     return {"ok": True, "sla_state": lead.sla_state, "status": status.name}

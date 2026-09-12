@@ -1,6 +1,7 @@
-from calendar import monthrange
+from calendar import month_abbr, monthrange
 from datetime import date, datetime
 from io import BytesIO
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -264,8 +265,7 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
     money = _quote_sums_by_source(db, start, end)
     rows = []
     totals = {
-        "total": 0, "in_followup": 0, "prospect": 0, "rnr": 0, "not_interested": 0,
-        "quote_sent": 0, "project_value": 0.0, "converted": 0, "sales_amount": 0.0,
+        "total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "not_interested": 0,
     }
     for src in _ordered_sources(matrix):
         m = matrix[src]
@@ -274,21 +274,14 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
             "source": src,
             "total": int(m.get("total", 0)),
             "in_followup": int(m.get(STATUS_FOLLOWUP, 0)),
-            "prospect": int(m.get(STATUS_PROSPECT, 0)),
-            "rnr": int(m.get(STATUS_RNR, 0)),
+            "meeting": int(m.get("Meeting", 0)),
+            "site_visit": int(m.get("Site Visit", 0)),
             "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
             "quote_sent": int(m.get(STATUS_QUOTE, 0)),
-            "project_value": round(float(money_row["project_value"]), 2),
-            "converted": int(m.get(STATUS_CONVERTED, 0)),
-            "sales_amount": round(float(money_row["sales_amount"]), 2),
         }
-        row["conv_pct"] = round((row["converted"] / row["total"] * 100), 1) if row["total"] else 0.0
         rows.append(row)
         for k in totals:
             totals[k] += row[k]
-    totals["project_value"] = round(totals["project_value"], 2)
-    totals["sales_amount"] = round(totals["sales_amount"], 2)
-    totals["conv_pct"] = round((totals["converted"] / totals["total"] * 100), 1) if totals["total"] else 0.0
     return {
         "mode": mode,
         "effective_from": start.isoformat() if start else None,
@@ -312,17 +305,15 @@ def _product_details_payload(db: Session, start: date | None, end: date | None, 
     ordered = [p for p in CANONICAL_PRODUCTS if p in rows_by_product]
     ordered += sorted(p for p in rows_by_product if p not in ordered)
     rows = []
-    totals = {"total": 0, "in_followup": 0, "prospect": 0, "rnr": 0, "not_interested": 0, "quote_sent": 0, "converted": 0}
+    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
     for product in ordered:
         data = rows_by_product[product]
         row = {"product": product, "total": data.get("total", 0),
-               "in_followup": data.get(STATUS_FOLLOWUP, 0), "prospect": data.get(STATUS_PROSPECT, 0),
-               "rnr": data.get(STATUS_RNR, 0), "not_interested": sum(data.get(s, 0) for s in STATUS_NOT_INT),
-               "quote_sent": data.get(STATUS_QUOTE, 0), "converted": data.get(STATUS_CONVERTED, 0)}
-        row["conv_pct"] = round(row["converted"] / row["total"] * 100, 1) if row["total"] else 0.0
+               "in_followup": data.get(STATUS_FOLLOWUP, 0), "meeting": data.get("Meeting", 0),
+               "site_visit": data.get("Site Visit", 0), "not_interested": sum(data.get(s, 0) for s in STATUS_NOT_INT),
+               "quote_sent": data.get(STATUS_QUOTE, 0)}
         rows.append(row)
         for key in totals: totals[key] += row[key]
-    totals["conv_pct"] = round(totals["converted"] / totals["total"] * 100, 1) if totals["total"] else 0.0
     return {"mode": mode, "effective_from": start.isoformat() if start else None,
             "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
 
@@ -337,10 +328,10 @@ def product_details(db: Session = Depends(get_db), u: User = Depends(current_use
 def product_details_export(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, from_date: str | None = None, to_date: str | None = None):
     start, end, resolved = _resolve_range(mode, month, from_date, to_date)
     payload = _product_details_payload(db, start, end, resolved)
-    headers = ["Product", "Total", "In Followup", "Prospect", "RNR", "Not Int.", "Quote Sent", "Converted", "Conv. %"]
-    body = [[r["product"], r["total"], r["in_followup"], r["prospect"], r["rnr"], r["not_interested"], r["quote_sent"], r["converted"], r["conv_pct"]] for r in payload["rows"]]
+    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]] for r in payload["rows"]]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["prospect"], t["rnr"], t["not_interested"], t["quote_sent"], t["converted"], t["conv_pct"]])
+    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
 
 
@@ -368,22 +359,15 @@ def source_details_export(
 ):
     start, end, resolved = _resolve_range(mode, month, from_date, to_date)
     payload = _source_details_payload(db, start, end, resolved)
-    headers = [
-        "Lead Source", "Total", "In Followup", "Prospect", "RNR", "Not Int.",
-        "Quote Sent", "Project Value (Rs.)", "Converted", "Sales Amount (Rs.)", "Conv. %",
-    ]
+    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
     body = []
     for r in payload["rows"]:
         body.append([
-            r["source"], r["total"], r["in_followup"], r["prospect"], r["rnr"],
-            r["not_interested"], r["quote_sent"], r["project_value"], r["converted"],
-            r["sales_amount"], r["conv_pct"],
+            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"],
         ])
     t = payload["totals"]
     body.append([
-        "TOTAL", t["total"], t["in_followup"], t["prospect"], t["rnr"],
-        t["not_interested"], t["quote_sent"], t["project_value"], t["converted"],
-        t["sales_amount"], t["conv_pct"],
+        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"],
     ])
     # Meta sheet row for range
     label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
@@ -510,18 +494,41 @@ def employee_wise(db: Session = Depends(get_db), u: User = Depends(current_user)
 
 
 def _monthly_rows(db: Session, u: User | None = None):
-    month_key = func.to_char(Lead.enquiry_date, "YYYY-MM")
-    month_label = func.to_char(Lead.enquiry_date, "Mon-YY")
-    converted = func.sum(case((LeadStatus.name == STATUS_CONVERTED, 1), else_=0))
-    rows = (
-        db.query(month_key, month_label, func.count(Lead.id), converted)
-        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None), *_emp_clauses(u))
-        .group_by(month_key, month_label)
-        .order_by(month_key)
-        .all()
-    )
-    return [{"month_key": k, "month": label, "leads": int(c), "converted": int(conv or 0)} for k, label, c, conv in rows]
+    rows = (db.query(Lead, LeadStatus.name, LeadSource.name, Product.name)
+            .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+            .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+            .outerjoin(Product, Lead.product_id == Product.id)
+            .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None), *_emp_clauses(u))
+            .order_by(Lead.enquiry_date)
+            .all())
+    grouped = {}
+    for lead, status_name, source_name, product_name in rows:
+        dt = lead.enquiry_date
+        # strftime('%b-%y') raises on Windows for years < 1900 (bad Excel dates
+        # like 1899-12-30), so build the label without strftime.
+        key = f"{dt.year:04d}-{dt.month:02d}"
+        label = f"{month_abbr[dt.month]}-{dt.year % 100:02d}"
+        item = grouped.setdefault(key, {
+            "month_key": key, "month": label, "leads": 0,
+            "in_followup": 0, "meeting": 0, "site_visit": 0,
+            "quotation_sent": 0, "not_interested": 0,
+            "sources": set(), "products": set(),
+        })
+        item["leads"] += 1
+        if source_name: item["sources"].add(source_name)
+        if product_name: item["products"].add(product_name)
+        if status_name == STATUS_FOLLOWUP: item["in_followup"] += 1
+        elif status_name == "Meeting": item["meeting"] += 1
+        elif status_name == "Site Visit": item["site_visit"] += 1
+        elif status_name == STATUS_QUOTE: item["quotation_sent"] += 1
+        elif status_name in STATUS_NOT_INT: item["not_interested"] += 1
+    result = []
+    for key in sorted(grouped):
+        item = grouped[key]
+        item["sources"] = ", ".join(sorted(item["sources"])) or "—"
+        item["products"] = ", ".join(sorted(item["products"])) or "—"
+        result.append(item)
+    return result
 
 
 @router.get("/reports/monthly")
@@ -534,8 +541,8 @@ def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user
     rows = _monthly_rows(db, u)
     return _xlsx_download(
         "monthly-lead-volume.xlsx",
-        ["Month", "Total Leads", "Converted"],
-        [[r["month"], r["leads"], r["converted"]] for r in rows],
+        ["Month", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested", "Lead Sources", "Products"],
+        [[r["month"], r["leads"], r["in_followup"], r["meeting"], r["site_visit"], r["quotation_sent"], r["not_interested"], r["sources"], r["products"]] for r in rows],
         title="Monthly Volume",
     )
 

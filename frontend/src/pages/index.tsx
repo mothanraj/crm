@@ -150,14 +150,14 @@ export function Dashboard() {
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
-    const t = { total: 0, follow: 0, prospect: 0, rnr: 0, notInt: 0, converted: 0 };
+    const t = { total: 0, follow: 0, meeting: 0, siteVisit: 0, quote: 0, notInt: 0 };
     for (const r of srcRows as any[]) {
       t.total += r.total || 0;
       t.follow += r['In Followup'] || 0;
-      t.prospect += r['A - Prospect'] || 0;
-      t.rnr += r['RNR / Not reachable'] || 0;
+      t.meeting += r.Meeting || 0;
+      t.siteVisit += r['Site Visit'] || 0;
+      t.quote += r['Quotation sent'] || 0;
       t.notInt += (r['Not Interested'] || 0) + (r['Not Interested/Spam'] || 0);
-      t.converted += r.Converted || 0;
     }
     return t;
   }, [srcRows]);
@@ -255,13 +255,12 @@ export function Dashboard() {
                 <thead>
                   <tr className="bg-[#0e7490] text-white">
                     <th className="th !text-white !bg-transparent">Source</th>
-                    <th className="th text-right !text-white !bg-transparent">Total</th>
+                    <th className="th text-right !text-white !bg-transparent">Total Leads</th>
                     <th className="th text-right !text-white !bg-transparent">In Followup</th>
-                    <th className="th text-right !text-white !bg-transparent">Prospect</th>
-                    <th className="th text-right !text-white !bg-transparent">RNR</th>
-                    <th className="th text-right !text-white !bg-transparent">Not Int.</th>
-                    <th className="th text-right !text-white !bg-transparent">Converted</th>
-                    <th className="th text-right !text-white !bg-transparent">Conv.%</th>
+                    <th className="th text-right !text-white !bg-transparent">Meeting</th>
+                    <th className="th text-right !text-white !bg-transparent">Site Visit</th>
+                    <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
+                    <th className="th text-right !text-white !bg-transparent">Not Interested</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -270,11 +269,10 @@ export function Dashboard() {
                       <td className="td font-medium">{r.name}</td>
                       <td className="td text-right font-bold">{r.total}</td>
                       <td className="td text-right">{r['In Followup'] ?? 0}</td>
-                      <td className="td text-right">{r['A - Prospect'] ?? 0}</td>
-                      <td className="td text-right">{r['RNR / Not reachable'] ?? 0}</td>
+                      <td className="td text-right">{r.Meeting ?? 0}</td>
+                      <td className="td text-right">{r['Site Visit'] ?? 0}</td>
+                      <td className="td text-right">{r['Quotation sent'] ?? 0}</td>
                       <td className="td text-right">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
-                      <td className="td text-right">{r.Converted ?? 0}</td>
-                      <td className="td text-right">{r.total ? (((r.Converted ?? 0) / r.total) * 100).toFixed(1) : '0.0'}%</td>
                     </tr>
                   ))}
                   {srcRows.length > 0 && (
@@ -282,11 +280,10 @@ export function Dashboard() {
                       <td className="td">TOTAL</td>
                       <td className="td text-right">{srcTotals.total}</td>
                       <td className="td text-right">{srcTotals.follow}</td>
-                      <td className="td text-right">{srcTotals.prospect}</td>
-                      <td className="td text-right">{srcTotals.rnr}</td>
+                      <td className="td text-right">{srcTotals.meeting}</td>
+                      <td className="td text-right">{srcTotals.siteVisit}</td>
+                      <td className="td text-right">{srcTotals.quote}</td>
                       <td className="td text-right">{srcTotals.notInt}</td>
-                      <td className="td text-right">{srcTotals.converted}</td>
-                      <td className="td text-right">{srcTotals.total ? ((srcTotals.converted / srcTotals.total) * 100).toFixed(1) : '0.0'}%</td>
                     </tr>
                   )}
                 </tbody>
@@ -325,11 +322,21 @@ export function Dashboard() {
                     <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
                     <Tooltip /><Legend />
                     <Bar dataKey="leads" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="converted" fill="#c0392b" name="Converted" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="quotation_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             )}
+            {monthly.length > 0 && <div className="overflow-x-auto mt-4">
+              <table className="w-full text-xs">
+                <thead><tr className="bg-graphite-100"><th className="th">Month</th><th className="th">Sources</th><th className="th">Products</th></tr></thead>
+                <tbody>{monthly.map((row: any, i: number) => <tr key={row.month_key} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}><td className="td font-medium">{row.month}</td><td className="td">{row.sources}</td><td className="td">{row.products}</td></tr>)}</tbody>
+              </table>
+            </div>}
           </Card>
         </div>
       </div>
@@ -579,7 +586,7 @@ export function EmployeeDashboard() {
 /* ================= LEADS ================= */
 export function Leads() {
   const role = localStorage.getItem('role') || '';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)', 'Not Interested'];
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [masters, setMasters] = useState<any>(null);
@@ -587,12 +594,15 @@ export function Leads() {
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
   const [sla, setSla] = useState('');
+  const [validationMessage, setValidationMessage] = useState('');
   const [page, setPage] = useState(1);
   const STATUS_FILTERS = ['Assigned', 'In Followup', 'Site Visit', 'Quotation sent', 'Not Interested'];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string }>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string }>>>({});
   const size = 15;
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
   useEffect(() => {
@@ -627,7 +637,12 @@ export function Leads() {
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.status_id };
   const saveLead = async (lead: any, done = false) => {
     const draft = draftFor(lead);
-    if (!draft.remarks.trim() && !done) return;
+    const reopening = !done && lead.sla_state === 'COMPLETED';
+    const actionName = nameOf('statuses', draft.progress || lead.status_id);
+    if (!draft.remarks.trim() || !draft.review || !actionOptions.includes(actionName)) {
+      setValidationMessage('Please fill Remarks, Category, and Work Action before saving or completing this lead.');
+      return;
+    }
     setSavingId(lead.id);
     try {
       await api.post(`/leads/${lead.id}/status`, {
@@ -638,12 +653,38 @@ export function Leads() {
         sla_state: done ? 'COMPLETED' : lead.sla_state,
       });
       setItems((current) => current.map((item) => item.id === lead.id
-        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: draft.remarks.trim() || 'Lead completed', customer_review: draft.review, sla_state: done ? 'COMPLETED' : 'PENDING' }
+        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: draft.remarks.trim() || 'Lead completed', customer_review: draft.review, sla_state: done ? 'COMPLETED' : 'PENDING', work_history: [...(item.work_history || []), { remarks: draft.remarks.trim() || 'Lead completed', work_action: nameOf('statuses', draft.progress || item.status_id) }] }
         : item));
       setDrafts((current) => { const next = { ...current }; delete next[lead.id]; return next; });
+      setExpandedRows((current) => ({ ...current, [lead.id]: false }));
+      if (reopening) setExpandedRows((current) => ({ ...current, [lead.id]: true }));
     } catch (e: any) {
-      window.alert(e?.response?.data?.detail || 'Could not save lead remarks');
+      setValidationMessage(e?.response?.data?.detail || 'Could not save lead remarks');
     } finally { setSavingId(null); }
+  };
+  const addFollowUp = (lead: any) => {
+    setFollowupForms((current) => ({
+      ...current,
+      [lead.id]: [...(current[lead.id] || []), { remarks: '', review: lead.customer_review || '', progress: lead.status_id }],
+    }));
+  };
+  const closeFollowUp = (lead: any) => {
+    setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).slice(0, -1) }));
+  };
+  const saveFollowup = async (lead: any, index: number) => {
+    const form = followupForms[lead.id]?.[index];
+    const actionName = form ? nameOf('statuses', form.progress || lead.status_id) : '';
+    if (!form?.remarks.trim() || !form.review || !actionOptions.includes(actionName)) {
+      setValidationMessage('Please fill Remarks, Category, and Work Action for this follow-up.');
+      return;
+    }
+    setSavingId(lead.id);
+    try {
+      await api.post(`/leads/${lead.id}/status`, { new_status_id: form.progress || lead.status_id, reason: form.remarks.trim(), method: 'Call', customer_review: form.review, sla_state: lead.sla_state });
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: form.remarks.trim(), customer_review: form.review, work_history: [...(item.work_history || []), { remarks: form.remarks.trim(), work_action: nameOf('statuses', form.progress || item.status_id) }] } : item));
+      setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
+    } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
+    finally { setSavingId(null); }
   };
   return (
     <div>
@@ -681,7 +722,9 @@ export function Leads() {
                 {items.map((l) => (
                   <tr key={l.id} className={l.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-brand-50/50'}>
                     <td className="td">
-                      {role === 'EMPLOYEE' && <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={savingId === l.id} onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>{savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}</button>}
+                      {role === 'EMPLOYEE' && <div className="flex gap-1 items-center">
+                        <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={savingId === l.id} onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>{savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}</button>
+                      </div>}
                     </td>
                     <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                     <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
@@ -694,26 +737,28 @@ export function Leads() {
                     <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
                     <td className="td"><SlaBadge value={l.sla_state} /></td>
                     <td className="td min-w-[280px]">
-                      {role === 'EMPLOYEE' ? (
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
-                      ) : <span className="block max-w-[240px] truncate" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}
+                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block max-w-[240px] truncate" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
                     </td>
                     <td className="td min-w-[190px]">
-                      {role === 'EMPLOYEE' ? (
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
-                      ) : (l.customer_review || '—')}
-                      {role === 'EMPLOYEE' && (l.sla_state === 'COMPLETED'
+                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—'))}
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
                         ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
                     <td className="td min-w-[190px]">
-                      {role === 'EMPLOYEE' ? (
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
                           {actionOptions.map((option) => {
@@ -721,7 +766,9 @@ export function Leads() {
                             return <option key={option} value={match?.id || l.status_id}>{option}</option>;
                           })}
                         </select>
-                      ) : nameOf('statuses', l.status_id)}
+                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}</div>) : nameOf('statuses', l.status_id))}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <select key={`progress-${index}`} className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>)}
+                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                   </tr>
                 ))}
@@ -737,6 +784,15 @@ export function Leads() {
           </div>
         </div>
       </div>
+      {validationMessage && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setValidationMessage('')}>
+          <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-graphite-900">Complete the lead details</h3>
+            <p className="text-sm text-graphite-600 mt-2">{validationMessage}</p>
+            <div className="flex justify-end mt-5"><button type="button" className="btn-primary" onClick={() => setValidationMessage('')}>OK</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -825,9 +881,9 @@ export function EmployeeLeads() {
                       <td className="td">{l.company_name || '—'}</td>
                       <td className="td">{l.city || '—'}</td>
                       <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
-                      <td className="td">{nameOf('sources', l.source_id)}</td>
-                      <td className="td">{prodName(l, nameOf)}</td>
-                      <td className="td"><StatusBadge value={nameOf('statuses', l.status_id)} /></td>
+                      <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
+                      <td className="td">{l.product_name || prodName(l, nameOf)}</td>
+                      <td className="td"><StatusBadge value={l.primary_employee_id && nameOf('statuses', l.status_id) === 'New Lead' ? 'Assigned' : nameOf('statuses', l.status_id)} /></td>
                       <td className="td"><SlaBadge value={l.sla_state} /></td>
                       <td className={`td whitespace-nowrap tabular-nums ${l.sla_state === 'OVERDUE' ? 'text-red-700 font-semibold' : ''}`}>{fmtDT(l.sla_deadline)}</td>
                       <td className="td whitespace-nowrap">{l.first_contact_at ? `${l.first_contact_method || 'Contacted'} · ${l.first_contact_at.slice(0, 10)}` : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
@@ -1449,8 +1505,8 @@ export function Reports() {
   const [emp, setEmp] = useState<any[]>([]);
   const [mode, setMode] = useState<'custom' | 'month'>('custom');
   const [month, setMonth] = useState(defaultMonth);
-  const [fromDate, setFromDate] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`);
-  const [toDate, setToDate] = useState(today.toISOString().slice(0, 10));
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [details, setDetails] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -1529,7 +1585,7 @@ export function Reports() {
             <div>
               <label className="text-xs font-medium text-graphite-600">Report Mode</label>
               <select className="input mt-1" value={mode} onChange={(e) => setMode(e.target.value as 'custom' | 'month')}>
-                <option value="custom">Custom Date Range</option>
+                <option value="custom">All time / Custom Date Range</option>
                 <option value="month">Month-wise</option>
               </select>
             </div>
@@ -1541,11 +1597,11 @@ export function Reports() {
             ) : (
               <>
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Custom From Date</label>
+                  <label className="text-xs font-medium text-graphite-600">Custom From Date (optional)</label>
                   <input type="date" className="input mt-1" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Custom To Date</label>
+                  <label className="text-xs font-medium text-graphite-600">Custom To Date (optional)</label>
                   <input type="date" className="input mt-1" value={toDate} onChange={(e) => setToDate(e.target.value)} />
                 </div>
               </>
@@ -1569,15 +1625,12 @@ export function Reports() {
               <thead>
                 <tr className="bg-[#1e3a5f] text-white">
                   <th className="th !text-white !bg-transparent">Lead Source</th>
-                  <th className="th text-right !text-white !bg-transparent">Total</th>
+                  <th className="th text-right !text-white !bg-transparent">Total Leads</th>
                   <th className="th text-right !text-white !bg-transparent">In Followup</th>
-                  <th className="th text-right !text-white !bg-transparent">Prospect</th>
-                  <th className="th text-right !text-white !bg-transparent">RNR</th>
-                  <th className="th text-right !text-white !bg-transparent">Not Int.</th>
-                  <th className="th text-right !text-white !bg-transparent">Quote Sent</th>
-                  <th className="th text-right !text-white !bg-transparent">Project Value (Rs.)</th>
-                  <th className="th text-right !text-white !bg-transparent">Converted</th>
-                  <th className="th text-right !text-white !bg-transparent">Sales Amount (Rs.)</th>
+                  <th className="th text-right !text-white !bg-transparent">Meeting</th>
+                  <th className="th text-right !text-white !bg-transparent">Site Visit</th>
+                  <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
+                  <th className="th text-right !text-white !bg-transparent">Not Interested</th>
                 </tr>
               </thead>
               <tbody>
@@ -1586,13 +1639,10 @@ export function Reports() {
                     <td className="td font-medium">{r.source}</td>
                     <td className="td text-right font-bold">{r.total}</td>
                     <td className="td text-right">{r.in_followup}</td>
-                    <td className="td text-right">{r.prospect}</td>
-                    <td className="td text-right">{r.rnr}</td>
-                    <td className="td text-right">{r.not_interested}</td>
+                    <td className="td text-right">{r.meeting}</td>
+                    <td className="td text-right">{r.site_visit}</td>
                     <td className="td text-right">{r.quote_sent}</td>
-                    <td className="td text-right">{money(r.project_value)}</td>
-                    <td className="td text-right">{r.converted}</td>
-                    <td className="td text-right">{money(r.sales_amount)}</td>
+                    <td className="td text-right">{r.not_interested}</td>
                   </tr>
                 ))}
                 {details?.totals && (
@@ -1600,13 +1650,10 @@ export function Reports() {
                     <td className="td">TOTAL</td>
                     <td className="td text-right">{details.totals.total}</td>
                     <td className="td text-right">{details.totals.in_followup}</td>
-                    <td className="td text-right">{details.totals.prospect}</td>
-                    <td className="td text-right">{details.totals.rnr}</td>
-                    <td className="td text-right">{details.totals.not_interested}</td>
+                    <td className="td text-right">{details.totals.meeting}</td>
+                    <td className="td text-right">{details.totals.site_visit}</td>
                     <td className="td text-right">{details.totals.quote_sent}</td>
-                    <td className="td text-right">{money(details.totals.project_value)}</td>
-                    <td className="td text-right">{details.totals.converted}</td>
-                    <td className="td text-right">{money(details.totals.sales_amount)}</td>
+                    <td className="td text-right">{details.totals.not_interested}</td>
                   </tr>
                 )}
               </tbody>
@@ -1624,13 +1671,13 @@ export function Reports() {
         <div className="p-5 overflow-x-auto">
           <table className="w-full min-w-[900px] text-sm">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['Product', 'Total', 'In Followup', 'Prospect', 'RNR', 'Not Int.', 'Quote Sent', 'Converted', 'Conv. %'].map((header) => <th key={header} className="th !text-white !bg-transparent">{header}</th>)}
+              {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent">{header}</th>)}
             </tr></thead>
             <tbody>
               {(productDetails?.rows || []).map((row: any, i: number) => <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                <td className="td font-medium">{row.product}</td><td className="td text-right font-bold">{row.total}</td><td className="td text-right">{row.in_followup}</td><td className="td text-right">{row.prospect}</td><td className="td text-right">{row.rnr}</td><td className="td text-right">{row.not_interested}</td><td className="td text-right">{row.quote_sent}</td><td className="td text-right">{row.converted}</td><td className="td text-right">{row.conv_pct}%</td>
+                <td className="td font-medium">{row.product}</td><td className="td text-right font-bold">{row.total}</td><td className="td text-right">{row.in_followup}</td><td className="td text-right">{row.meeting}</td><td className="td text-right">{row.site_visit}</td><td className="td text-right">{row.quote_sent}</td><td className="td text-right">{row.not_interested}</td>
               </tr>)}
-              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td">TOTAL</td><td className="td text-right">{productDetails.totals.total}</td><td className="td text-right">{productDetails.totals.in_followup}</td><td className="td text-right">{productDetails.totals.prospect}</td><td className="td text-right">{productDetails.totals.rnr}</td><td className="td text-right">{productDetails.totals.not_interested}</td><td className="td text-right">{productDetails.totals.quote_sent}</td><td className="td text-right">{productDetails.totals.converted}</td><td className="td text-right">{productDetails.totals.conv_pct}%</td></tr>}
+              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td">TOTAL</td><td className="td text-right">{productDetails.totals.total}</td><td className="td text-right">{productDetails.totals.in_followup}</td><td className="td text-right">{productDetails.totals.meeting}</td><td className="td text-right">{productDetails.totals.site_visit}</td><td className="td text-right">{productDetails.totals.quote_sent}</td><td className="td text-right">{productDetails.totals.not_interested}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1649,7 +1696,7 @@ export function Reports() {
             Download monthly Excel
           </button>
         }>
-          <p className="text-sm text-graphite-600">Download total leads and converted counts for every month with a valid enquiry date.</p>
+            <p className="text-sm text-graphite-600">Download every month with a valid enquiry date, including source, product, and progress details.</p>
         </Card>
       </div>
 
