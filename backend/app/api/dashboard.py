@@ -147,7 +147,21 @@ def _kpis(db: Session, u: User | None = None):
             "employee": emp_map.get(lead.primary_employee_id, "—") if lead.primary_employee_id else "—",
             "assigned_date": a.assigned_at.strftime("%d-%b-%Y") if a.assigned_at else "—",
         })
+    quoted_customers = []
+    if not is_emp:
+        for lead, employee_name in (
+            db.query(Lead, User.name)
+            .outerjoin(User, User.id == Lead.primary_employee_id)
+            .filter(Lead.is_active.is_(True), Lead.quotation_value.isnot(None))
+            .order_by(Lead.updated_at.desc()).all()
+        ):
+            quoted_customers.append({
+                "lead_id": str(lead.id), "enquiry_number": lead.enquiry_number,
+                "customer_name": lead.customer_name or "—", "employee": employee_name,
+                "quotation_value": str(lead.quotation_value),
+            })
     return {
+        "quoted_customers": quoted_customers,
         "total": total,
         "by_status": by_status,
         "funnel": {

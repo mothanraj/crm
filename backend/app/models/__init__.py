@@ -111,6 +111,7 @@ class Lead(Base):
     first_contact_notes: Mapped[str] = mapped_column(Text, default="")
     employee_remarks: Mapped[str] = mapped_column(Text, default="")
     customer_review: Mapped[str] = mapped_column(Text, default="")
+    quotation_value: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sla_state: Mapped[str] = mapped_column(Text, default="PENDING")
     reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -157,6 +158,7 @@ class LeadActivity(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     outcome: Mapped[str] = mapped_column(Text, default="")
     customer_review: Mapped[str] = mapped_column(Text, default="")
+    quotation_value: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     next_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _ts()
 

@@ -2,7 +2,8 @@ from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel
+from decimal import Decimal
+from pydantic import BaseModel, Field
 
 
 class LoginIn(BaseModel):
@@ -64,6 +65,7 @@ class LeadUpdate(BaseModel):
 
 
 class StatusChange(BaseModel):
+    quotation_value: Optional[Decimal] = Field(default=None, ge=0, max_digits=16, decimal_places=2)
     new_status_id: UUID
     reason: str = ""  # remarks — required when employee updates work progress
     method: str = "Call"  # used if this is also the first contact

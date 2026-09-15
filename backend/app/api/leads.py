@@ -55,11 +55,12 @@ def _serialize(l: Lead, db: Session) -> dict:
         "first_contact_notes": l.first_contact_notes or "",
         "employee_remarks": l.employee_remarks or "",
         "customer_review": l.customer_review or "",
+        "quotation_value": str(l.quotation_value) if l.quotation_value is not None else None,
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
         "pending_assignment": l.primary_employee_id is None,
         "work_history": [
-            {"remarks": a.notes or "", "category": a.customer_review or "", "work_action": a.outcome or "", "at": a.activity_at.isoformat() if a.activity_at else None}
+            {"quotation_value": str(a.quotation_value) if a.quotation_value is not None else None, "remarks": a.notes or "", "category": a.customer_review or "", "work_action": a.outcome or "", "at": a.activity_at.isoformat() if a.activity_at else None}
             for a in db.query(LeadActivity).filter_by(lead_id=l.id).order_by(LeadActivity.activity_at.asc()).all()
             if a.activity_type == "Work Progress"
         ],
@@ -79,6 +80,10 @@ def _owned_lead(db: Session, lid: UUID, u: User) -> Lead:
         raise HTTPException(404, "Not found")
     if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
         raise HTTPException(403, "Not assigned to you")
+    if u.role and u.role.name == "EMPLOYEE" and lead.sla_state == "COMPLETED":
+        status = db.get(LeadStatus, lead.status_id)
+        if status and status.name == "Converted":
+            raise HTTPException(403, "Converted leads cannot be edited or reopened.")
     return lead
 
 
@@ -117,7 +122,11 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         q = q.filter(Lead.product_id == _parse_uuid(product, "product"))
     if employee:
         q = q.filter(Lead.primary_employee_id == _parse_uuid(employee, "employee"))
-    if sla:
+    if sla == "NOT_INTERESTED":
+        q = q.filter(Lead.status_id.in_(
+            db.query(LeadStatus.id).filter(LeadStatus.name.in_(("Not Interested", "Not Interested/Spam")))
+        ))
+    elif sla:
         if sla not in ("PENDING", "OVERDUE", "COMPLETED"):
             raise HTTPException(400, "Invalid sla filter")
         q = q.filter(Lead.sla_state == sla)
@@ -188,20 +197,35 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         raise HTTPException(400, "Invalid customer review")
     if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
         raise HTTPException(400, "Invalid SLA state")
+    completion_only = (
+        body.sla_state is not None
+        and (body.sla_state == "COMPLETED" or lead.sla_state == "COMPLETED")
+        and lead.status_id == body.new_status_id
+        and (lead.employee_remarks or "").strip() == remarks
+        and (lead.customer_review or "").strip() == customer_review
+        and (body.quotation_value is None or body.quotation_value == lead.quotation_value)
+    )
+    if completion_only:
+        lead.sla_state = body.sla_state
+        db.commit()
+        return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": False}
     # First talk after assignment also completes the 3-day contact SLA
     if not lead.first_contact_at and lead.primary_employee_id == u.id:
         record_first_contact(db, lead, u, body.method or "Call", status.name, remarks)
     change_status(db, lead, body.new_status_id, u, remarks)
     lead.employee_remarks = remarks
     lead.customer_review = customer_review
+    if status.name == "Quotation sent" and body.quotation_value is not None:
+        lead.quotation_value = body.quotation_value
     if body.sla_state is not None:
         lead.sla_state = body.sla_state
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
         notes=remarks, outcome=status.name, customer_review=customer_review,
+        quotation_value=body.quotation_value if status.name == "Quotation sent" else None,
     ))
     db.commit()
-    return {"ok": True, "sla_state": lead.sla_state, "status": status.name}
+    return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": True}
 
 
 @router.post("/{lid}/assign")
