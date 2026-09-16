@@ -9,6 +9,12 @@ import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '..
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
+function leadRowColour(lead: any, status: string) {
+  if (lead.sla_state === 'COMPLETED' && status === 'Converted') return 'bg-emerald-50';
+  if (lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(status)) return 'bg-red-100';
+  return 'bg-white';
+}
+
 function fmtDT(v: any, len = 16) {
   if (!v) return '—';
   return String(v).slice(0, len).replace('T', ' ');
@@ -117,6 +123,7 @@ export function Login() {
 export function Dashboard() {
   const [d, setD] = useState<any>(null);
   const [src, setSrc] = useState<any>(null);
+  const [products, setProducts] = useState<any>(null);
   const [monthly, setMonthly] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [dlError, setDlError] = useState('');
@@ -133,10 +140,13 @@ export function Dashboard() {
       api.get('/dashboard'),
       api.get('/dashboard/by-source'),
       api.get('/reports/monthly'),
-    ]).then(([dr, sr, mr]) => {
+      api.get('/dashboard/by-product'),
+    ]).then(([dr, sr, mr, pr]) => {
       if (dr.status === 'fulfilled') setD(dr.value.data);
       else setError(dr.reason?.response?.data?.detail || 'Failed to load dashboard. Check backend / login again.');
       if (sr.status === 'fulfilled') setSrc(sr.value.data);
+      if (pr.status === 'fulfilled') setProducts(pr.value.data);
+      else setError('Could not load product data. Please refresh the dashboard.');
       if (mr.status === 'fulfilled') setMonthly(Array.isArray(mr.value.data) ? mr.value.data : []);
     }).finally(() => setLoading(false));
   };
@@ -161,6 +171,15 @@ export function Dashboard() {
     }
     return t;
   }, [srcRows]);
+  const productRows = (products?.rows || []).map((row: any) => ({
+    name: row.product, total: row.total, 'In Followup': row.in_followup,
+    Meeting: row.meeting, 'Site Visit': row.site_visit,
+    'Quotation sent': row.quote_sent, 'Not Interested': row.not_interested,
+  }));
+  const productPie = productRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
+  const productTotals = { total: products?.totals.total ?? 0, follow: products?.totals.in_followup ?? 0,
+    meeting: products?.totals.meeting ?? 0, siteVisit: products?.totals.site_visit ?? 0,
+    quote: products?.totals.quote_sent ?? 0, notInt: products?.totals.not_interested ?? 0 };
   if (loading && !d) return <Spinner />;
   if (error && !d) {
     return (
@@ -339,6 +358,64 @@ export function Dashboard() {
             </div>}
           </Card>
         </div>
+      </div>
+      <div className="grid xl:grid-cols-[1.4fr_1fr] gap-5">
+        <Card title="Leads by Product">
+            <div className="overflow-x-auto -mx-5 px-5">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="bg-[#0e7490] text-white">
+                    <th className="th !text-white !bg-transparent">Product</th>
+                    <th className="th text-right !text-white !bg-transparent">Total Leads</th>
+                    <th className="th text-right !text-white !bg-transparent">In Followup</th>
+                    <th className="th text-right !text-white !bg-transparent">Meeting</th>
+                    <th className="th text-right !text-white !bg-transparent">Site Visit</th>
+                    <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
+                    <th className="th text-right !text-white !bg-transparent">Not Interested</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productRows.map((r: any, i: number) => (
+                    <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+                      <td className="td font-medium">{r.name}</td>
+                      <td className="td text-right font-bold">{r.total}</td>
+                      <td className="td text-right">{r['In Followup'] ?? 0}</td>
+                      <td className="td text-right">{r.Meeting ?? 0}</td>
+                      <td className="td text-right">{r['Site Visit'] ?? 0}</td>
+                      <td className="td text-right">{r['Quotation sent'] ?? 0}</td>
+                      <td className="td text-right">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                    </tr>
+                  ))}
+                  {productRows.length > 0 && (
+                    <tr className="bg-graphite-100 font-bold">
+                      <td className="td">TOTAL</td>
+                      <td className="td text-right">{productTotals.total}</td>
+                      <td className="td text-right">{productTotals.follow}</td>
+                      <td className="td text-right">{productTotals.meeting}</td>
+                      <td className="td text-right">{productTotals.siteVisit}</td>
+                      <td className="td text-right">{productTotals.quote}</td>
+                      <td className="td text-right">{productTotals.notInt}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {productRows.length === 0 && <EmptyState title="No product data" hint="Import leads to populate the funnel." />}
+            </div>
+          </Card>
+                  <Card title="Leads by Product">
+            {productPie.length === 0 ? <EmptyState title="No data" /> : (
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <PieChart>
+                    <Pie data={productPie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}>
+                      {productPie.map((e: any, i: number) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip /><Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </Card>
       </div>
       <Card title="Customer quotation values">
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
@@ -724,21 +801,21 @@ export function Leads() {
     finally { setSavingId(null); }
   };
   return (
-    <div>
+    <div className="min-w-0 max-w-full">
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
-      <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-        <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
+      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr]">
+        <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        <select className="input min-w-0" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <select className="input !w-52" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
+        <select className="input min-w-0" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
           <option value="">All sources</option>
           {masters?.sources?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select className="input !w-44" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
+        <select className="input min-w-0" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
           <option value="">Lead status</option>
           <option value="PENDING">Pending</option>
           <option value="COMPLETED">Completed</option>
@@ -746,29 +823,29 @@ export function Leads() {
         </select>
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
-      <div className="card overflow-hidden">
+      <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1280px]">
+          <div className="relative isolate w-full overflow-x-auto">
+            <table className="w-full table-fixed min-w-[1800px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
               <thead className="bg-graphite-50"><tr>
-                <th className="th">Enquiry Number</th>
-                <th className="th">Customer name</th>
-                <th className="th">Company</th>
-                <th className="th">City</th>
-                <th className="th">Contact</th>
-                <th className="th">Product</th>
-                <th className="th">Work action</th>
-                <th className="th text-right">Quotation value</th>
-                <th className="th">Remarks</th>
-                <th className="th">Category</th>
-                <th className="th">Source</th>
-                <th className="th">Status</th>
-                <th className="th">Lead status</th>
-                {role !== 'EMPLOYEE' && <th className="th">Employee</th>}
+                <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
+                <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
+                <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
+                <th className="th whitespace-nowrap align-top w-[120px]">City</th>
+                <th className="th whitespace-nowrap align-top w-[150px]">Contact</th>
+                <th className="th whitespace-nowrap align-top w-[160px]">Product</th>
+                <th className="th whitespace-nowrap align-top w-[210px]">Work action</th>
+                <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
+                <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
+                <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
+                <th className="th whitespace-nowrap align-top w-[140px]">Source</th>
+                <th className="th whitespace-nowrap align-top w-[170px] text-center">Status</th>
+                <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
+                {role !== 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[170px]">Employee</th>}
               </tr></thead>
               <tbody>
                 {items.map((l) => (
-                  <tr key={l.id} className={l.sla_state === 'COMPLETED' ? (['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', l.status_id)) ? 'bg-red-100 text-red-900' : 'bg-emerald-50/80') : 'hover:bg-brand-50/50'}
+                  <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}
                     onClickCapture={(event) => {
                       if (role === 'EMPLOYEE' && isConvertedLocked(l) && (event.target as HTMLElement).closest('button, select, textarea')) {
                         event.preventDefault(); event.stopPropagation();
@@ -776,13 +853,13 @@ export function Leads() {
                       }
                     }}>
 
-                    <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                    <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
-                    <td className="td">{l.company_name || '—'}</td>
-                    <td className="td">{l.city || '—'}</td>
-                    <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
-                    <td className="td">{prodName(l, nameOf)}</td>
-                    <td className="td min-w-[190px]">
+                    <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                    <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
+                    <td className="td align-top">{l.company_name || '—'}</td>
+                    <td className="td align-top">{l.city || '—'}</td>
+                    <td className="td align-top whitespace-nowrap">{l.contact_number || '—'}</td>
+                    <td className="td align-top">{prodName(l, nameOf)}</td>
+                    <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
@@ -792,7 +869,7 @@ export function Leads() {
                             return <option key={option} value={match?.id || l.status_id}>{option}</option>;
                           })}
                         </select>
-                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {entry.quotation_value}</span>}</div>) : nameOf('statuses', l.status_id))}
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {entry.quotation_value}</span>}</div>) : nameOf('statuses', l.status_id)}</div>)}
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && nameOf('statuses', draftFor(l).progress) === 'Quotation sent' && (
                         <label className="block text-xs text-graphite-600 mt-2">Quotation value
                           <input type="number" min="0" step="0.01" className="input text-xs mt-1" placeholder="Enter quotation value" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value } }))} />
@@ -801,38 +878,53 @@ export function Leads() {
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="0.01" className="input text-xs mt-1" placeholder="Enter quotation value" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value } : item) }))} /></label>}</div>)}
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
-                    <td className="td text-right whitespace-nowrap">
+                    <td className="td align-top text-right whitespace-nowrap">
                       {l.quotation_value != null && l.quotation_value !== '' ? (
-                        <span className="inline-block rounded-lg border border-amber-300 bg-amber-100 px-3 py-1.5 font-bold text-amber-900">
+                        <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
                           {Number(l.quotation_value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       ) : <span className="text-graphite-400">—</span>}
                     </td>
-                    <td className="td min-w-[280px]">
+                    <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
-                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block max-w-[240px] truncate" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>)}
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
                     </td>
-                    <td className="td min-w-[190px]">
+                    <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
-                      ) : (l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—'))}
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
                         ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
-                    <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
-                    <td className="td"><StatusBadge value={statusLabel(l)} /></td>
-                    <td className="td"><SlaBadge value={l.sla_state} /></td>
-                    {role !== 'EMPLOYEE' && <td className="td">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
+                    <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
+                    <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
+                    <td className="td align-top text-center">
+                      <SlaBadge value={l.sla_state} />
+                      {role === 'EMPLOYEE' && (
+                        <div className="mt-2">
+                          {isConvertedLocked(l) ? (
+                            <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
+                          ) : (
+                            <button type="button" className={`btn-secondary !px-3 !py-1 text-xs ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200' : '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700'}`}
+                              disabled={savingId === l.id}
+                              onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
+                              {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -950,7 +1042,7 @@ export function EmployeeLeads() {
                 </tr></thead>
                 <tbody>
                   {items.map((l) => (
-                    <tr key={l.id} className="hover:bg-brand-50/50">
+                    <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}>
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div><div className="text-xs text-graphite-400">{l.email || ''}</div></td>
                       <td className="td">{l.company_name || '—'}</td>
@@ -1588,6 +1680,7 @@ export function Reports() {
   const [toDate, setToDate] = useState('');
   const [details, setDetails] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -1656,6 +1749,25 @@ export function Reports() {
     return dl('/reports/product-details/export', 'product-wise-details.xlsx', filterParams());
   };
 
+  const downloadPdf = async (isProduct: boolean) => {
+    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
+      setErr('From date must be on or before To date.');
+      return;
+    }
+    setPdfBusy(true);
+    setErr('');
+    try {
+      await downloadReport('/reports/pdf', isProduct ? 'product-wise-report.pdf' : 'lead-source-report.pdf', { ...filterParams(), report_type: isProduct ? 'product' : 'source' });
+    } catch (e: any) {
+      const response = e?.response?.data;
+      let message = e?.message || 'PDF download failed';
+      if (response instanceof Blob) {
+        try { message = JSON.parse(await response.text()).detail || message; } catch { /* retain error */ }
+      }
+      setErr(message);
+    } finally { setPdfBusy(false); }
+  };
+
   const reportFilters = (isProduct = false) => (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
             <div>
@@ -1682,9 +1794,10 @@ export function Reports() {
                 </div>
               </>
             )}
-            <div className="flex items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2">
               <button type="button" className="btn-primary" disabled={busy} onClick={loadDetails}>{busy ? 'Loading…' : 'Apply'}</button>
               <button type="button" className="btn-secondary" disabled={isProduct ? !productDetails : !details} onClick={isProduct ? downloadProductDetails : downloadDetails}>Download Excel</button>
+              <button type="button" className="btn-secondary" disabled={pdfBusy || busy} onClick={() => downloadPdf(isProduct)}>{pdfBusy ? 'Creating PDF…' : 'Download PDF'}</button>
             </div>
           </div>
   );

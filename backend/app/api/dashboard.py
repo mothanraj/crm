@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import current_user
 from app.db.session import get_db
 from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
-from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES
+from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -218,12 +218,12 @@ def _by_source_matrix(db: Session, start: date | None = None, end: date | None =
     ).outerjoin(LeadStatus, Lead.status_id == LeadStatus.id).filter(
         _date_filter(start, end, u)
     ).group_by(src_name, LeadStatus.name).all()
-    out: dict = {}
+    out: dict = {name: {"total": 0} for name in CANONICAL_SOURCES}
     for src, st, c in rows:
-        name = src or "Others"
+        name = canonical_source(src)
         out.setdefault(name, {"total": 0})
         if st:
-            out[name][st] = c
+            out[name][st] = out[name].get(st, 0) + c
             out[name]["total"] += c
         elif c:
             out[name]["total"] += c
@@ -305,12 +305,13 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
     }
 
 
-def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
+def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
     rows_by_product: dict[str, dict] = {}
     query = (db.query(Product.name, LeadStatus.name, func.count(Lead.id))
-             .join(Lead, Lead.product_id == Product.id)
-             .join(LeadStatus, Lead.status_id == LeadStatus.id)
-             .filter(_date_filter(start, end))
+             .select_from(Lead)
+             .outerjoin(Product, Lead.product_id == Product.id)
+             .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+             .filter(_date_filter(start, end, u))
              .group_by(Product.name, LeadStatus.name).all())
     for product, status, count in query:
         row = rows_by_product.setdefault(product or "Unmapped", {"total": 0})
@@ -330,6 +331,11 @@ def _product_details_payload(db: Session, start: date | None, end: date | None, 
         for key in totals: totals[key] += row[key]
     return {"mode": mode, "effective_from": start.isoformat() if start else None,
             "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
+
+
+@router.get("/dashboard/by-product")
+def by_product(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _product_details_payload(db, None, None, "custom", u)
 
 
 @router.get("/reports/product-details")
@@ -393,6 +399,25 @@ def source_details_export(
     )
 
 
+@router.get("/reports/pdf")
+def report_pdf(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    report_type: str = Query(..., pattern="^(source|product)$"),
+    mode: str = Query("custom"), month: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+):
+    if not u.role or u.role.name not in ("ADMIN", "MANAGER"):
+        raise HTTPException(403, "Reports require an admin or manager role")
+    from app.services.report_pdf import build_report_pdf
+
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
+    content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
+    filename = f"{report_type}-report.pdf"
+    return StreamingResponse(BytesIO(content), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 def _product_wise_rows(db: Session, start: date | None = None, end: date | None = None):
     filters = [Lead.is_active.is_(True)]
     if start:
@@ -413,17 +438,8 @@ def _product_wise_rows(db: Session, start: date | None = None, end: date | None 
 
 
 def _source_wise_rows(db: Session):
-    rows = [{"source": s or "Unknown", "leads": c} for s, c in
-            db.query(LeadSource.name, func.count(Lead.id)).outerjoin(
-                Lead, and_(Lead.source_id == LeadSource.id, Lead.is_active.is_(True)))
-            .group_by(LeadSource.name)
-            .order_by(func.count(Lead.id).desc()).all()]
-    unmapped = db.query(func.count(Lead.id)).filter(
-        Lead.is_active.is_(True), Lead.source_id.is_(None)).scalar() or 0
-    if unmapped:
-        rows.append({"source": "Unknown", "leads": unmapped})
-        rows.sort(key=lambda r: r["leads"], reverse=True)
-    return rows
+    matrix = _by_source_matrix(db)
+    return [{"source": name, "leads": matrix[name]["total"]} for name in _ordered_sources(matrix)]
 
 
 def _customer_review_rows(db: Session):
