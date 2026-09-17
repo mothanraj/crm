@@ -21,12 +21,13 @@ from app.models import (
     ImportBatch, ImportError, Lead, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory,
     Product, ProductAlias, User,
 )
-from app.services import email_service
+from app.services import email_service, live
 from app.services.lead_service import auto_assign, next_enquiry_number
 
 log = logging.getLogger(__name__)
 from app.services.normalize import (
-    PRODUCT_ALIASES, SOURCE_ALIASES, canonical_source, norm_key, norm_phone, parse_excel_date, parse_quantity,
+    PRODUCT_ALIASES, SOURCE_ALIASES, canonical_source, is_valid_email, norm_key, norm_phone, parse_excel_date,
+    parse_quantity,
 )
 
 router = APIRouter(prefix="/api/import", tags=["import"])
@@ -65,7 +66,7 @@ def _resolve_cols(header: list[str]) -> dict[str, int]:
         "quantity": find(["quantity"], 7),
         "remarks": find(["remarks", "remark"], 8),
         "priority": find(["priority"], 18),
-        "email": find(["email", "e-mail"], 29),
+        "email": find(["email id", "e-mail", "e mail", "email"], 29),
         "alternate_contact": find(["alternate", "alt contact"], 30),
         "city": find(["city"], COL_CITY),
         "cars": find(["no. of cars", "no of cars", "cars"], COL_CARS),
@@ -179,6 +180,7 @@ def _serialize_error(e: ImportError) -> dict:
         "remarks": raw.get("remarks", ""),
         "priority": raw.get("priority", ""),
         "email": raw.get("email", ""),
+        "email_invalid": bool(raw.get("email_invalid", False)),
         "alternate_contact": raw.get("alternate_contact", ""),
         "source": raw.get("source", ""),
         "product": raw.get("product", ""),
@@ -204,6 +206,9 @@ def _row_issue_messages(db: Session, raw: dict) -> list[str]:
         msgs.append("missing/invalid enquiry no")
     elif db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
         msgs.append("duplicate enquiry no")
+    email_v = str(raw.get("email") or "").strip()
+    if email_v and not is_valid_email(email_v):
+        msgs.append("invalid email")
     return msgs
 
 
@@ -332,6 +337,9 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 "Enquiry number already exists. Correct it, or Force add to create without that Excel enquiry no.",
             )
 
+    email_v = str(raw.get("email") or "").strip()
+    if email_v and not is_valid_email(email_v):
+        raise HTTPException(400, "Enter a valid email address")
     company = str(raw.get("company") or "").strip()
     city = str(raw.get("city") or "").strip()
     cars = str(raw.get("cars") or "").strip()
@@ -444,9 +452,11 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
         legacy = parse_legacy_enq(rec["enq"])
         rec["legacy_enq"] = legacy
         rec["phone_norm"] = phone_n
-        # Non-blocking flag: product text the system can't map (shows raw text in Leads).
+        # Non-blocking flags: unmapped product + invalid email (warn, don't block import).
         prod_raw = (rec.get("product") or "").strip()
         rec["product_unmapped"] = bool(prod_raw) and _norm_product(db, prod_raw) is None
+        email_v = (rec.get("email") or "").strip()
+        rec["email_invalid"] = bool(email_v) and not is_valid_email(email_v)
 
         errs: list[str] = []
         dup_reasons: list[str] = []
@@ -493,9 +503,9 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
         "invalid_rows": invalids,
         "fields": [
             "enquiry no", "received date", "name", "company/organisation (optional)",
-            "contact no", "city", "no. of cars", "lead source", "product/type",
+            "contact no", "city", "no. of cars", "lead source", "product/type", "email",
         ],
-        "note": "Only listed columns are imported. Admin can review duplicates/invalid and Add to leads or Delete.",
+        "note": "Only listed columns are imported (email included). Invalid emails warn but don't block; admin can Correct in review. Admin can review duplicates/invalid and Add to leads or Delete.",
     }
 
 
@@ -584,6 +594,8 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
     batch.imported = ok
     batch.status = "DONE"
     db.commit()
+    if ok:
+        live.bump()
     # One batched email per employee with all newly assigned customers.
     _send_assignment_batches(db, new_by_emp)
     errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
@@ -639,6 +651,9 @@ def update_error(eid: UUID, body: ErrorUpdate, db: Session = Depends(get_db), _:
             raw[key] = str(data[key]).strip() if key != "date" else data[key]
     if "phone" in data and data["phone"] is not None:
         raw["phone_norm"] = norm_phone(str(data["phone"]))
+    if "email" in data and data["email"] is not None:
+        email_v = str(data["email"]).strip()
+        raw["email_invalid"] = bool(email_v) and not is_valid_email(email_v)
     if "enq" in data and data["enq"] is not None:
         raw["enq"] = data["enq"]
         raw["legacy_enq"] = parse_legacy_enq(data["enq"])
@@ -673,6 +688,7 @@ def promote_error(eid: UUID, body: PromoteIn | None = None, db: Session = Depend
             batch.invalid = max(0, batch.invalid - 1)
     db.delete(e)
     db.commit()
+    live.bump()
     if emp_id:
         _send_assignment_batches(db, {emp_id: [lead_id]})
     return {

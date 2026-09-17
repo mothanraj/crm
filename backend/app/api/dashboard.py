@@ -144,6 +144,7 @@ def _kpis(db: Session, u: User | None = None):
             "enquiry_number": lead.enquiry_number,
             "customer_name": lead.customer_name or "—",
             "contact_number": lead.contact_number or "—",
+            "email": lead.email or "",
             "employee": emp_map.get(lead.primary_employee_id, "—") if lead.primary_employee_id else "—",
             "assigned_date": a.assigned_at.strftime("%d-%b-%Y") if a.assigned_at else "—",
         })

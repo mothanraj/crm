@@ -5,6 +5,7 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
+import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
@@ -224,7 +225,7 @@ export function Dashboard() {
                   <div className="overflow-x-auto -mx-6 px-6">
                     <table className="w-full min-w-[560px] text-sm">
                       <thead className="bg-graphite-50"><tr>
-                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Phone</th>
+                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Phone</th><th className="th">Email</th>
                         <th className="th">Employee</th><th className="th">Assigned</th>
                       </tr></thead>
                       <tbody>
@@ -233,6 +234,7 @@ export function Dashboard() {
                             <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
                             <td className="td">{l.customer_name}</td>
                             <td className="td whitespace-nowrap">{l.contact_number}</td>
+                            <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
                             <td className="td">{l.employee}</td>
                             <td className="td whitespace-nowrap">{l.assigned_date}</td>
                           </tr>
@@ -395,7 +397,8 @@ function TodoRow({ lead: l, state, leaving, statusLabel, now }: {
           )}
         </div>
         <div className="text-sm text-graphite-600 mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5">
-          <span>📞 {l.contact_number || '—'}</span>
+          <span>📞 {l.contact_number ? <a className="text-brand-700 hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}</span>
+          {l.email ? <span>✉️ <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a></span> : null}
           {l.company_name && <span>🏢 {l.company_name}</span>}
           {l.city && <span>📍 {l.city}</span>}
           {l.sla_deadline && !done && <span>⏱ Contact by {fmtDT(l.sla_deadline)}</span>}
@@ -444,6 +447,7 @@ export function EmployeeDashboard() {
     Promise.allSettled([dashP, notesP, queueP]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => subscribeLeadUpdates(() => load()), []);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(t);
@@ -543,7 +547,7 @@ export function EmployeeDashboard() {
             <div className="overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[480px] text-sm">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">Due</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">Email</th><th className="th">Due</th>
                 </tr></thead>
                 <tbody>
                   {overduePending.map((l: any) => (
@@ -551,6 +555,7 @@ export function EmployeeDashboard() {
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td">{l.customer_name || '—'}</td>
                       <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                      <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
                       <td className="td whitespace-nowrap text-red-700 font-semibold tabular-nums">{fmtDT(l.sla_deadline)}</td>
                     </tr>
                   ))}
@@ -619,7 +624,9 @@ export function Leads() {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string; quotationValue?: string }>>>({});
   const size = 15;
+  const [liveSeq, setLiveSeq] = useState(0);
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
+  useEffect(() => subscribeLeadUpdates(() => setLiveSeq((s) => s + 1)), []);
   useEffect(() => {
     const ctrl = new AbortController();
     const t = setTimeout(() => {
@@ -641,7 +648,7 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, sla, page]);
+  }, [search, status, source, sla, page, liveSeq]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const statusLabel = (lead: any) => {
@@ -727,7 +734,7 @@ export function Leads() {
     <div>
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input !w-64" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        <input className="input !w-64" placeholder="🔍 Search name, phone, email, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input !w-52" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
@@ -756,6 +763,7 @@ export function Leads() {
                 <th className="th">Company</th>
                 <th className="th">City</th>
                 <th className="th">Contact</th>
+                <th className="th">Email</th>
                 <th className="th">Product</th>
                 <th className="th">Work action</th>
                 <th className="th text-right">Quotation value</th>
@@ -780,7 +788,8 @@ export function Leads() {
                     <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                     <td className="td">{l.company_name || '—'}</td>
                     <td className="td">{l.city || '—'}</td>
-                    <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                    <td className="td whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</td>
+                    <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
                     <td className="td">{prodName(l, nameOf)}</td>
                     <td className="td min-w-[190px]">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
@@ -943,7 +952,7 @@ export function EmployeeLeads() {
               <table className="w-full min-w-[1200px]">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
-                  <th className="th">City</th><th className="th">Contact</th><th className="th">Source</th>
+                  <th className="th">City</th><th className="th">Contact</th><th className="th">Email</th><th className="th">Source</th>
                   <th className="th">Product</th><th className="th">Status</th><th className="th">SLA</th>
                   <th className="th">Due date</th>
                   <th className="th">First contact</th><th className="th">Enquiry date</th>
@@ -955,7 +964,8 @@ export function EmployeeLeads() {
                       <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div><div className="text-xs text-graphite-400">{l.email || ''}</div></td>
                       <td className="td">{l.company_name || '—'}</td>
                       <td className="td">{l.city || '—'}</td>
-                      <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
+                      <td className="td whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</td>
+                      <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
                       <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
                       <td className="td">{l.product_name || prodName(l, nameOf)}</td>
                       <td className="td"><StatusBadge value={l.primary_employee_id && nameOf('statuses', l.status_id) === 'New Lead' ? 'Assigned' : nameOf('statuses', l.status_id)} /></td>
@@ -1062,6 +1072,10 @@ export function LeadDetail({ id }: { id: string }) {
               {needsContact && <span className="text-xs font-medium text-sky-800 bg-sky-50 ring-1 ring-sky-200 px-2 py-0.5 rounded-full">Speak to customer</span>}
             </div>
             <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm">
+              <span>📞 {l.contact_number ? <a className="text-brand-700 font-semibold hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}{l.alternate_contact ? <span className="text-graphite-400"> (alt: {l.alternate_contact})</span> : null}</span>
+              <span>✉️ {l.email ? <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">—</span>}</span>
+            </div>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-graphite-500">
               <span>📍 {l.city || '—'}</span>
               <span>📅 {l.enquiry_date || '—'}</span>
@@ -1194,7 +1208,7 @@ export function ImportPage() {
   const [batches, setBatches] = useState<any[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
-    name: '', city: '', company: '', phone: '', cars: '', source: '', product: '', enq: '', date: '',
+    name: '', city: '', company: '', phone: '', cars: '', source: '', product: '', enq: '', date: '', email: '',
   });
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
@@ -1263,6 +1277,7 @@ export function ImportPage() {
       product: row.product || '',
       enq: row.enq != null ? String(row.enq) : '',
       date: row.date != null ? String(row.date).slice(0, 10) : '',
+      email: row.email || '',
     });
     setError(''); setOkMsg('');
   };
@@ -1312,7 +1327,7 @@ export function ImportPage() {
           <thead className="bg-graphite-50">
             <tr>
               <th className="th">Row</th><th className="th">Enq</th><th className="th">Name</th>
-              <th className="th">Company</th><th className="th">Phone</th><th className="th">City</th><th className="th">Cars</th>
+              <th className="th">Company</th><th className="th">Phone</th><th className="th">Email</th><th className="th">City</th><th className="th">Cars</th>
               <th className="th">Source</th><th className="th">Product</th><th className="th">Reason</th>
               {mode === 'review' && <th className="th text-right">Actions</th>}
             </tr>
@@ -1325,6 +1340,7 @@ export function ImportPage() {
                 <td className="td">{r.name || '—'}</td>
                 <td className="td">{r.company || '—'}</td>
                 <td className="td">{r.phone || '—'}</td>
+                <td className="td">{r.email || '—'}{(r.email_invalid || (r.email && !/^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(String(r.email).trim()))) && <span className="block text-[11px] text-amber-700 font-medium">⚠ invalid email</span>}</td>
                 <td className="td">{r.city || '—'}</td>
                 <td className="td">{r.cars || '—'}</td>
                 <td className="td">{r.source || '—'}</td>
@@ -1350,7 +1366,7 @@ export function ImportPage() {
     <div className="space-y-5 max-w-6xl">
       <PageHeader
         title="Import from Excel"
-        subtitle="Columns: Enq no, Received date, Name, Company (optional), Contact no, City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
+        subtitle="Columns: Enq no, Received date, Name, Company (optional), Contact no, Email, City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
       />
       {error && <div className="bg-[#E03131]/10 border border-[#E03131]/40 text-[#B32727] text-sm rounded-xl px-4 py-3">❌ {error}</div>}
       {okMsg && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">✓ {okMsg}</div>}
@@ -1392,7 +1408,7 @@ export function ImportPage() {
             <div className="overflow-x-auto -mx-5 px-5 mb-4">
               <table className="w-full min-w-[900px]"><thead className="bg-graphite-50"><tr>
                 <th className="th">Row</th><th className="th">Enq</th><th className="th">Date</th><th className="th">Name</th>
-                <th className="th">Company</th><th className="th">Phone</th><th className="th">City</th><th className="th">Cars</th>
+                <th className="th">Company</th><th className="th">Phone</th><th className="th">Email</th><th className="th">City</th><th className="th">Cars</th>
                 <th className="th">Source</th><th className="th">Product</th>
               </tr></thead>
                 <tbody>{(res.preview || []).map((r: any) => (
@@ -1403,6 +1419,7 @@ export function ImportPage() {
                     <td className="td">{r.name}</td>
                     <td className="td">{r.company || '—'}</td>
                     <td className="td">{r.phone || '—'}</td>
+                    <td className="td">{r.email || '—'}{r.email_invalid && <span className="block text-[11px] text-amber-700 font-medium">⚠ invalid email</span>}</td>
                     <td className="td">{r.city || '—'}</td>
                     <td className="td">{r.cars || '—'}</td>
                     <td className="td">{r.source || '—'}</td>
@@ -1513,6 +1530,10 @@ export function ImportPage() {
               <div>
                 <label className="text-xs font-medium text-graphite-600">Contact no</label>
                 <input className="input mt-1" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Email</label>
+                <input className="input mt-1" type="email" placeholder="name@company.com" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-graphite-600">City</label>

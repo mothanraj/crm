@@ -38,7 +38,8 @@ def _serialize(l: Lead, db: Session) -> dict:
         "id": str(l.id), "enquiry_number": l.enquiry_number,
         "legacy_enquiry_no": l.legacy_enquiry_no,
         "enquiry_date": str(l.enquiry_date) if l.enquiry_date else None,
-        "customer_name": l.customer_name, "contact_number": l.contact_number, "email": l.email,
+        "customer_name": l.customer_name, "contact_number": l.contact_number,
+        "alternate_contact": l.alternate_contact or "", "email": l.email,
         "company_name": l.company_name, "city": l.city, "quantity_raw": l.quantity_raw,
         "source_id": str(l.source_id) if l.source_id else None,
         "product_id": str(l.product_id) if l.product_id else None,
@@ -113,7 +114,8 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
     if search:
         like = f"%{_escape_like(search)}%"
         q = q.filter(or_(Lead.customer_name.ilike(like, escape="\\"), Lead.company_name.ilike(like, escape="\\"),
-                         Lead.contact_number.ilike(like, escape="\\"), Lead.enquiry_number.ilike(like, escape="\\")))
+                         Lead.contact_number.ilike(like, escape="\\"), Lead.enquiry_number.ilike(like, escape="\\"),
+                         Lead.email.ilike(like, escape="\\")))
     if status:
         q = q.filter(Lead.status_id == _parse_uuid(status, "status"))
     if source:

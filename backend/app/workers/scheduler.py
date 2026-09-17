@@ -1,10 +1,11 @@
 """APScheduler: SLA sweeps + Brevo email (assignment batches + admin overdue digest).
 
-- Every 15 min: mark SLA-overdue leads + in-app notify; retry any
-  assignment emails that failed during import/manual assign.
-- Daily (OVERDUE_DIGEST_HOUR, Asia/Kolkata): one email per admin listing
-  customers past the 3-day due with no talk/status update, grouped by
-  employee with assigned dates.
+- Every 15 min: mark SLA-overdue leads (72h after assignment with no
+  first contact) + in-app notify + mail admins immediately, grouped by
+  employee. Each lead mailed once (overdue_digest_at). No fixed daily slot.
+- Hourly backstop: resend for any OVERDUE rows missed earlier (server was
+  down at deadline, or Brevo failed last time).
+- Assignment retry: resend failed assignment emails (once per lead).
 Email failures only log — they never break the sweep.
 """
 import logging
@@ -74,9 +75,75 @@ def _sla_sweep():
                     body=f"You missed the 3-day contact SLA for {lead.enquiry_number} ({lead.customer_name}).",
                 ))
         db.commit()
+        _send_overdue_now(db, [x for x in overdue if x.overdue_digest_at is None], now)
         _assignment_retry_sweep(db, now)
     finally:
         db.close()
+
+
+def _digest_groups(db, rows, now) -> list[dict]:
+    """Group overdue leads by employee for the admin digest payload."""
+    owner_ids = {x.primary_employee_id for x in rows if x.primary_employee_id}
+    owners = {u.id: u for u in db.query(User).filter(User.id.in_(owner_ids)).all()} if owner_ids else {}
+    assigns = db.query(LeadAssignment).filter(
+        LeadAssignment.lead_id.in_([x.id for x in rows]),
+        LeadAssignment.is_current.is_(True),
+    ).all()
+    assign_by_lead = {a.lead_id: a for a in assigns}
+    groups: dict[str, dict] = {}
+    for lead in rows:
+        owner = owners.get(lead.primary_employee_id)
+        key = owner.name if owner else "Unassigned"
+        bucket = groups.setdefault(key, {"employee": key, "leads": []})
+        assign = assign_by_lead.get(lead.id)
+        assigned_at = assign.assigned_at if assign else lead.created_at
+        try:
+            assigned_str = assigned_at.strftime("%d-%b-%Y") if assigned_at else "—"
+        except Exception:
+            assigned_str = "—"
+        if lead.sla_deadline:
+            days = max(1, math.ceil((now - lead.sla_deadline).total_seconds() / 86400))
+        else:
+            days = 1
+        bucket["leads"].append({
+            "enquiry_number": lead.enquiry_number,
+            "customer_name": lead.customer_name or "",
+            "phone": lead.contact_number or "",
+            "assigned_date_str": assigned_str,
+            "deadline_str": lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—",
+            "days_overdue": days,
+            "lead_url": _lead_url(lead),
+        })
+    return list(groups.values())
+
+
+def _send_overdue_now(db, rows, now) -> bool:
+    """Mail admins immediately for freshly-overdue leads. Returns True if mailed."""
+    rows = [x for x in rows if x.overdue_digest_at is None]
+    if not rows:
+        return False
+    admins = [a for a in _admins(db) if a.email]
+    if not admins:
+        db.rollback()
+        return False
+    if not email_service.emails_enabled():
+        return False
+    payload = _digest_groups(db, rows, now)
+    date_str = now.strftime("%d-%b-%Y")
+    try:
+        results = [email_service.send_overdue_digest(a.email, a.name, payload, date_str)
+                   for a in admins]
+    except Exception as exc:
+        log.error("overdue immediate send failed: %s", exc)
+        db.rollback()
+        return False
+    if all(results):
+        for lead in rows:
+            lead.overdue_digest_at = now
+        db.commit()
+        return True
+    db.rollback()
+    return False
 
 
 def _assignment_item(db, lead) -> dict:
@@ -164,7 +231,11 @@ def _assignment_retry_sweep(db, now):
 
 
 def _overdue_digest():
-    """Daily admin email: not-talked / status-not-updated leads grouped by employee."""
+    """Backstop: mail any OVERDUE rows missed earlier (downtime / Brevo failure).
+
+    Runs hourly. Normal path mails immediately inside _sla_sweep the moment
+    the 72h deadline passes, so this usually finds nothing.
+    """
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
@@ -177,60 +248,7 @@ def _overdue_digest():
         ).order_by(Lead.sla_deadline.asc()).all()
         if not rows:
             return
-        owner_ids = {x.primary_employee_id for x in rows if x.primary_employee_id}
-        owners = {u.id: u for u in db.query(User).filter(User.id.in_(owner_ids)).all()} if owner_ids else {}
-        assigns = db.query(LeadAssignment).filter(
-            LeadAssignment.lead_id.in_([x.id for x in rows]),
-            LeadAssignment.is_current.is_(True),
-        ).all()
-        assign_by_lead = {a.lead_id: a for a in assigns}
-        groups: dict[str, dict] = {}
-        for lead in rows:
-            owner = owners.get(lead.primary_employee_id)
-            key = owner.name if owner else "Unassigned"
-            bucket = groups.setdefault(key, {"employee": key, "leads": []})
-            assign = assign_by_lead.get(lead.id)
-            assigned_at = assign.assigned_at if assign else lead.created_at
-            if assigned_at is not None:
-                try:
-                    assigned_str = assigned_at.strftime("%d-%b-%Y")
-                except Exception:
-                    assigned_str = str(assigned_at)[:10]
-            else:
-                assigned_str = "—"
-            if lead.sla_deadline:
-                days = max(1, math.ceil((now - lead.sla_deadline).total_seconds() / 86400))
-            else:
-                days = 1
-            bucket["leads"].append({
-                "enquiry_number": lead.enquiry_number,
-                "customer_name": lead.customer_name or "",
-                "phone": lead.contact_number or "",
-                "assigned_date_str": assigned_str,
-                "deadline_str": lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—",
-                "days_overdue": days,
-                "lead_url": _lead_url(lead),
-            })
-        payload = list(groups.values())
-        date_str = now.strftime("%d-%b-%Y")
-        admins = [a for a in _admins(db) if a.email]
-        if not admins:
-            db.rollback()
-            return
-        try:
-            results = [email_service.send_overdue_digest(a.email, a.name, payload, date_str)
-                       for a in admins]
-        except Exception as exc:
-            log.error("overdue digest send failed: %s", exc)
-            db.rollback()
-            return
-        if all(results):
-            for lead in rows:
-                lead.overdue_digest_at = now
-            db.commit()
-        else:
-            # Fail-open: unflagged leads are retried at the next daily run.
-            db.rollback()
+        _send_overdue_now(db, rows, now)
     finally:
         db.close()
 
@@ -238,15 +256,8 @@ def _overdue_digest():
 def start():
     if not scheduler.running:
         scheduler.add_job(_sla_sweep, "interval", minutes=15, id="sla", replace_existing=True)
-        try:
-            scheduler.add_job(
-                _overdue_digest, "cron",
-                hour=int(settings.OVERDUE_DIGEST_HOUR), minute=0,
-                timezone="Asia/Kolkata", id="digest", replace_existing=True,
-            )
-        except Exception:
-            scheduler.add_job(_overdue_digest, "interval", hours=24, id="digest",
-                              replace_existing=True)
+        scheduler.add_job(_overdue_digest, "interval", hours=1, id="digest",
+                          replace_existing=True)
         scheduler.start()
 
 

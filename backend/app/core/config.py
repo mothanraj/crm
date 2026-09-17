@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     BREVO_SENDER_EMAIL: str = ""
     BREVO_SENDER_NAME: str = "E-Star CRM"
     OVERDUE_DIGEST_HOUR: int = 9
+    # Google Sheets push sync (Apps Script -> POST /api/sheets/rows).
+    SHEETS_WEBHOOK_SECRET: str = ""
+    SHEETS_SIGNATURE_WINDOW_SEC: int = 300
 
     class Config:
         env_file = ".env"
