@@ -1,7 +1,8 @@
 from calendar import month_abbr, monthrange
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from collections import defaultdict
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -11,8 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Product, Quotation, SiteVisit, User
+from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Notification, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
+from app.services.pricing import PRODUCT_PRICES
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -66,6 +68,7 @@ def _resolve_range(
     month: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    week: str | None = None,
 ) -> tuple[date | None, date | None, str]:
     mode_l = (mode or "custom").lower().strip()
     if mode_l in ("month", "month-wise", "monthly"):
@@ -79,6 +82,11 @@ def _resolve_range(
         except Exception as exc:
             raise HTTPException(400, "Invalid month. Use YYYY-MM") from exc
         return start, end, "month"
+    if mode_l in ("week", "weekly", "week-wise"):
+        anchor = _parse_date(week or from_date, "week") or date.today()
+        start = anchor - timedelta(days=anchor.weekday())  # Monday
+        end = start + timedelta(days=6)
+        return start, end, "week"
     start = _parse_date(from_date, "from_date")
     end = _parse_date(to_date, "to_date")
     if start and end and start > end:
@@ -88,6 +96,11 @@ def _resolve_range(
 
 def _is_employee(u: User | None) -> bool:
     return bool(u is not None and u.role is not None and u.role.name == "EMPLOYEE")
+
+
+def _require_reports(u: User) -> None:
+    if not u.role or u.role.name not in ("ADMIN", "MANAGER"):
+        raise HTTPException(403, "Reports require an admin or manager role")
 
 
 def _emp_clauses(u: User | None):
@@ -145,6 +158,7 @@ def _kpis(db: Session, u: User | None = None):
             "customer_name": lead.customer_name or "—",
             "contact_number": lead.contact_number or "—",
             "email": lead.email or "",
+            "quantity_raw": lead.quantity_raw or "",
             "employee": emp_map.get(lead.primary_employee_id, "—") if lead.primary_employee_id else "—",
             "assigned_date": a.assigned_at.strftime("%d-%b-%Y") if a.assigned_at else "—",
         })
@@ -159,11 +173,14 @@ def _kpis(db: Session, u: User | None = None):
             quoted_customers.append({
                 "lead_id": str(lead.id), "enquiry_number": lead.enquiry_number,
                 "customer_name": lead.customer_name or "—", "employee": employee_name,
-                "quotation_value": str(lead.quotation_value),
+                "quotation_value": str(int(round(float(lead.quotation_value)))),
             })
+    lead_value = _lead_value_analytics(db, u)
     return {
         "quoted_customers": quoted_customers,
         "total": total,
+        "lead_value": lead_value,
+        "total_lead_value": lead_value["total_lead_value"],
         "by_status": by_status,
         "funnel": {
             "total": total,
@@ -209,6 +226,184 @@ def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
         d["warning"] = "New leads exceeded the threshold."
     return d
 
+
+def _as_rupee(v) -> int:
+    try:
+        return int(round(float(v or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _lead_value_analytics(db: Session, u: User | None = None) -> dict:
+    emp = _emp_clauses(u)
+    total_leads = db.query(Lead).filter(Lead.is_active.is_(True), *emp).count()
+    total_value = _as_rupee(
+        db.query(func.coalesce(func.sum(Lead.lead_value), 0))
+        .filter(Lead.is_active.is_(True), *emp).scalar() or 0
+    )
+    total_cars = int(round(float(
+        db.query(func.coalesce(func.sum(Lead.quantity_num), 0))
+        .filter(Lead.is_active.is_(True), *emp).scalar() or 0
+    )))
+    valued = db.query(Lead).filter(
+        Lead.is_active.is_(True), Lead.lead_value.isnot(None), *emp,
+    ).count()
+    avg_value = _as_rupee(total_value / valued) if valued else 0
+
+    rows = (
+        db.query(Product.name, func.coalesce(func.sum(Lead.lead_value), 0), func.count(Lead.id))
+        .select_from(Lead)
+        .join(Product, Lead.product_id == Product.id)
+        .filter(Lead.is_active.is_(True), *emp)
+        .group_by(Product.name)
+        .all()
+    )
+    by_name = {name: {"product": name, "lead_value": _as_rupee(val), "leads": int(cnt or 0)} for name, val, cnt in rows}
+    by_product = [
+        by_name.get(name) or {"product": name, "lead_value": 0, "leads": 0}
+        for name in CANONICAL_PRODUCTS
+    ]
+
+    status_rows = (
+        db.query(LeadStatus.name, func.coalesce(func.sum(Lead.lead_value), 0), func.count(Lead.id))
+        .join(Lead, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), *emp)
+        .group_by(LeadStatus.name)
+        .all()
+    )
+    by_status = [
+        {"status": st, "lead_value": _as_rupee(val), "leads": int(cnt or 0)}
+        for st, val, cnt in status_rows
+    ]
+    return {
+        "total_lead_value": total_value,
+        "total_leads": total_leads,
+        "total_cars": total_cars,
+        "average_lead_value": avg_value,
+        "by_product": by_product,
+        "by_status": by_status,
+    }
+
+
+@router.get("/dashboard/lead-value")
+def dashboard_lead_value(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _lead_value_analytics(db, u)
+
+
+def _lead_value_for_range(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
+    filters = _date_filter(start, end, u)
+    total_leads = db.query(Lead).filter(filters).count()
+    total_value = _as_rupee(
+        db.query(func.coalesce(func.sum(Lead.lead_value), 0)).filter(filters).scalar() or 0
+    )
+    total_cars = int(round(float(
+        db.query(func.coalesce(func.sum(Lead.quantity_num), 0)).filter(filters).scalar() or 0
+    )))
+    valued = db.query(Lead).filter(filters, Lead.lead_value.isnot(None)).count()
+    avg_value = _as_rupee(total_value / valued) if valued else 0
+
+    rows = (
+        db.query(Product.name, func.coalesce(func.sum(Lead.lead_value), 0), func.count(Lead.id))
+        .select_from(Lead)
+        .join(Product, Lead.product_id == Product.id)
+        .filter(filters)
+        .group_by(Product.name)
+        .all()
+    )
+    by_name = {name: {"product": name, "lead_value": _as_rupee(val), "leads": int(cnt or 0)} for name, val, cnt in rows}
+    by_product = [
+        by_name.get(name) or {"product": name, "lead_value": 0, "leads": 0}
+        for name in CANONICAL_PRODUCTS
+    ]
+
+    # Period series: daily for week mode, weekly buckets otherwise
+    period_rows = (
+        db.query(Lead.enquiry_date, Lead.lead_value)
+        .filter(filters, Lead.enquiry_date.isnot(None))
+        .all()
+    )
+    buckets: dict[str, dict] = {}
+    use_daily = mode == "week"
+
+    def week_key(d: date) -> tuple[str, str]:
+        monday = d - timedelta(days=d.weekday())
+        sunday = monday + timedelta(days=6)
+        key = monday.isoformat()
+        label = f"{monday.strftime('%d %b')} – {sunday.strftime('%d %b %Y')}"
+        return key, label
+
+    for enq_date, val in period_rows:
+        if not enq_date:
+            continue
+        d = enq_date if isinstance(enq_date, date) else enq_date.date()
+        if use_daily:
+            key = d.isoformat()
+            label = d.strftime("%d %b %Y")
+        else:
+            key, label = week_key(d)
+        b = buckets.setdefault(key, {"period": key, "label": label, "lead_value": 0, "leads": 0})
+        b["lead_value"] += _as_rupee(val)
+        b["leads"] += 1
+
+    by_period = [
+        {**buckets[k], "lead_value": _as_rupee(buckets[k]["lead_value"])}
+        for k in sorted(buckets.keys())
+    ]
+    return {
+        "mode": mode,
+        "from_date": start.isoformat() if start else None,
+        "to_date": end.isoformat() if end else None,
+        "total_lead_value": total_value,
+        "total_leads": total_leads,
+        "total_cars": total_cars,
+        "average_lead_value": avg_value,
+        "by_product": by_product,
+        "by_period": by_period,
+    }
+
+
+@router.get("/reports/lead-value")
+def reports_lead_value(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    return _lead_value_for_range(db, start, end, resolved, u)
+
+
+@router.get("/reports/lead-value/export")
+def reports_lead_value_export(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    payload = _lead_value_for_range(db, start, end, resolved, u)
+    headers = ["Product", "Leads", "Lead Value"]
+    body = [[r["product"], r["leads"], r["lead_value"]] for r in payload["by_product"]]
+    body.append(["TOTAL", payload["total_leads"], payload["total_lead_value"]])
+    # Append period sheet as extra rows with a blank separator
+    body.append(["", "", ""])
+    body.append(["Period", "Leads", "Lead Value"])
+    for r in payload["by_period"]:
+        body.append([r.get("label") or r.get("period"), r["leads"], r["lead_value"]])
+    return _xlsx_download(
+        f"lead-value-{start or 'all'}-to-{end or 'all'}.xlsx",
+        headers,
+        body,
+        title="Lead Value Report",
+    )
 
 def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None, u: User | None = None) -> dict:
     # Single query from Lead: blank sources fold into "Others" via coalesce,
@@ -340,14 +535,16 @@ def by_product(db: Session = Depends(get_db), u: User = Depends(current_user)):
 
 
 @router.get("/reports/product-details")
-def product_details(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, from_date: str | None = None, to_date: str | None = None):
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+def product_details(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, week: str | None = None, from_date: str | None = None, to_date: str | None = None):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     return _product_details_payload(db, start, end, resolved)
 
 
 @router.get("/reports/product-details/export")
-def product_details_export(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, from_date: str | None = None, to_date: str | None = None):
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+def product_details_export(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, week: str | None = None, from_date: str | None = None, to_date: str | None = None):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _product_details_payload(db, start, end, resolved)
     headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
     body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]] for r in payload["rows"]]
@@ -362,10 +559,12 @@ def source_details(
     u: User = Depends(current_user),
     mode: str = Query("custom"),
     month: str | None = None,
+    week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ):
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     return _source_details_payload(db, start, end, resolved)
 
 
@@ -375,10 +574,12 @@ def source_details_export(
     u: User = Depends(current_user),
     mode: str = Query("custom"),
     month: str | None = None,
+    week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ):
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _source_details_payload(db, start, end, resolved)
     headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
     body = []
@@ -403,18 +604,23 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product)$"),
+    report_type: str = Query(..., pattern="^(source|product|lead_value)$"),
     mode: str = Query("custom"), month: str | None = None,
+    week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
 ):
-    if not u.role or u.role.name not in ("ADMIN", "MANAGER"):
-        raise HTTPException(403, "Reports require an admin or manager role")
+    _require_reports(u)
     from app.services.report_pdf import build_report_pdf
 
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date)
-    payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
-    content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
-    filename = f"{report_type}-report.pdf"
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    if report_type == "lead_value":
+        payload = _lead_value_for_range(db, start, end, resolved, u)
+        content = build_report_pdf(payload, "lead_value")
+        filename = "lead-value-report.pdf"
+    else:
+        payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
+        content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
+        filename = f"{report_type}-report.pdf"
     return StreamingResponse(BytesIO(content), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -464,9 +670,11 @@ def _customer_review_rows(db: Session):
 def product_wise(
     db: Session = Depends(get_db), u: User = Depends(current_user),
     mode: str = Query("custom"), month: str | None = None,
+    week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
 ):
-    start, end, _ = _resolve_range(mode, month, from_date, to_date)
+    _require_reports(u)
+    start, end, _ = _resolve_range(mode, month, from_date, to_date, week)
     return _product_wise_rows(db, start, end)
 
 
@@ -474,9 +682,11 @@ def product_wise(
 def product_wise_export(
     db: Session = Depends(get_db), u: User = Depends(current_user),
     mode: str = Query("custom"), month: str | None = None,
+    week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
 ):
-    start, end, _ = _resolve_range(mode, month, from_date, to_date)
+    _require_reports(u)
+    start, end, _ = _resolve_range(mode, month, from_date, to_date, week)
     rows = _product_wise_rows(db, start, end)
     return _xlsx_download(
         f"product-wise-report-{start or 'all'}-to-{end or 'all'}.xlsx",
@@ -488,11 +698,13 @@ def product_wise_export(
 
 @router.get("/reports/source-wise")
 def source_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     return _source_wise_rows(db)
 
 
 @router.get("/reports/source-wise/export")
 def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     rows = _source_wise_rows(db)
     return _xlsx_download(
         "source-wise-report.xlsx",
@@ -503,11 +715,13 @@ def source_wise_export(db: Session = Depends(get_db), u: User = Depends(current_
 
 @router.get("/reports/customer-review")
 def customer_review_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     return _customer_review_rows(db)
 
 
 @router.get("/reports/customer-review/export")
 def customer_review_wise_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     rows = _customer_review_rows(db)
     return _xlsx_download(
         "customer-review-report.xlsx",
@@ -519,6 +733,7 @@ def customer_review_wise_export(db: Session = Depends(get_db), u: User = Depends
 
 @router.get("/reports/employee-wise")
 def employee_wise(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     rows = db.query(User.name, func.count(Lead.id)).join(
         Lead, Lead.primary_employee_id == User.id, isouter=True).group_by(User.name).all()
     return [{"employee": n, "assigned": c} for n, c in rows]
@@ -564,11 +779,13 @@ def _monthly_rows(db: Session, u: User | None = None):
 
 @router.get("/reports/monthly")
 def monthly(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     return _monthly_rows(db, u)
 
 
 @router.get("/reports/monthly/export")
 def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    _require_reports(u)
     rows = _monthly_rows(db, u)
     return _xlsx_download(
         "monthly-lead-volume.xlsx",
@@ -590,9 +807,27 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
         .order_by(User.name)
         .all()
     )
+    products = (
+        db.query(Product)
+        .filter_by(is_active=True)
+        .order_by(Product.name)
+        .all()
+    )
+    # Keep canonical order for the 7 parking products
+    order = {n: i for i, n in enumerate(CANONICAL_PRODUCTS)}
+    products.sort(key=lambda p: order.get(p.name, 100 + hash(p.name) % 50))
     return {
         "sources": [{"id": str(s.id), "name": s.name} for s in db.query(LeadSource).filter_by(is_active=True).all()],
-        "products": [{"id": str(p.id), "name": p.name} for p in db.query(Product).filter_by(is_active=True).all()],
+        "products": [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "price_per_car": int(round(float(p.price_per_car or PRODUCT_PRICES.get(p.name, 0) or 0))),
+                "gst_percent": 18,
+            }
+            for p in products
+            if p.name in PRODUCT_PRICES
+        ],
         "statuses": [{"id": str(s.id), "name": s.name} for s in db.query(LeadStatus).order_by(LeadStatus.sort_order).all()],
         "customer_reviews": CUSTOMER_REVIEW_ORDER,
         "employees": [{"id": str(e.id), "name": e.name} for e in staff],
@@ -601,6 +836,26 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
 
 @router.get("/notifications")
 def notifs(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    from app.models import Notification
     rows = db.query(Notification).filter(Notification.user_id == u.id).order_by(Notification.created_at.desc()).limit(50).all()
-    return [{"id": str(n.id), "title": n.title, "body": n.body, "is_read": n.is_read} for n in rows]
+    return [{"id": str(n.id), "title": n.title, "body": n.body, "is_read": n.is_read,
+             "kind": n.kind, "lead_id": str(n.lead_id) if n.lead_id else None,
+             "created_at": n.created_at.isoformat() if n.created_at else None} for n in rows]
+
+
+@router.post("/notifications/read-all")
+def mark_all_read(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    db.query(Notification).filter(
+        Notification.user_id == u.id, Notification.is_read.is_(False),
+    ).update({"is_read": True}, synchronize_session=False)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/notifications/{nid}/read")
+def mark_read(nid: UUID, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    n = db.get(Notification, nid)
+    if not n or n.user_id != u.id:
+        raise HTTPException(404, "Notification not found")
+    n.is_read = True
+    db.commit()
+    return {"ok": True}

@@ -8,6 +8,7 @@ const NAV = [
   { to: '/import', label: 'Import', icon: '⤴', roles: ['ADMIN'] },
   { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
   { to: '/employee-leads', label: 'Employee Leads', icon: '👥', roles: ['ADMIN'] },
+  { to: '/reassignments', label: 'Reassign', icon: '⇄', roles: ['ADMIN'] },
   { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
   { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
 ];
@@ -26,7 +27,12 @@ export function AppShell() {
     };
     loadUnread();
     const t = setInterval(loadUnread, 60000);
-    return () => clearInterval(t);
+    const onRead = () => setUnread(0);
+    window.addEventListener('crm:notifications-read', onRead);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('crm:notifications-read', onRead);
+    };
   }, []);
   useEffect(() => {
     if (localStorage.getItem('user_name')) return;
@@ -49,7 +55,7 @@ export function AppShell() {
       {/* sidebar — graphite gradient, signal active pill */}
       <aside className="w-60 shrink-0 hidden md:flex flex-col text-white bg-gradient-to-b from-graphite-500 via-graphite-700 to-graphite-800">
         <div className="px-5 py-5 flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg bg-brand-400 flex items-center justify-center text-signalink font-bold">E★</div>
+          <img src="/estar-logo.jpg" alt="E-Star" className="w-9 h-9 rounded-lg object-contain bg-white" />
           <div>
             <div className="text-white font-bold leading-tight">E-Star CRM</div>
             <div className="text-[11px] text-graphite-200">Lead Management</div>
@@ -85,7 +91,8 @@ export function AppShell() {
       {/* main */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* mobile nav */}
-        <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm sticky top-0 z-20">
+        <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm sticky top-0 z-20 items-center">
+          <img src="/estar-logo.jpg" alt="E-Star" className="w-7 h-7 rounded object-contain bg-white shrink-0" />
           {NAV.filter((n) => n.roles.includes(role)).map((n) => (
             <NavLink
               key={n.to}
@@ -100,8 +107,11 @@ export function AppShell() {
         </div>
         {/* topbar */}
         <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
-          <div className="text-sm text-graphite-500">
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+          <div className="flex items-center gap-3">
+            <img src="/estar-logo.jpg" alt="E-Star" className="hidden md:block w-8 h-8 rounded object-contain" />
+            <div className="text-sm text-graphite-500">
+              {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+            </div>
           </div>
           <div className="flex items-center gap-4">
             {role === 'EMPLOYEE' && <span className="text-sm font-semibold text-graphite-700">{userName}</span>}

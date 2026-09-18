@@ -22,11 +22,30 @@ function fmtDT(v: any, len = 16) {
 }
 
 function prodName(l: any, nameOf: (kind: any, id?: string) => string) {
-  // Show the exact Excel Product/Type text as-is; mapped name is only a fallback.
-  if (l.product_raw) return l.product_raw;
+  // Prefer mapped master product name (canonical 7); fall back to raw Excel text.
   if (l.product_name) return l.product_name;
-  const mapped = l.product_id ? nameOf('products', l.product_id) : '—';
-  return mapped || '—';
+  const mapped = l.product_id ? nameOf('products', l.product_id) : '';
+  if (mapped && mapped !== '—') return mapped;
+  if (l.product_raw) return l.product_raw;
+  return '—';
+}
+
+function inr(n: any) {
+  if (n == null || n === '') return '—';
+  const v = Math.round(Number(n));
+  if (Number.isNaN(v)) return '—';
+  return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
+}
+
+function previewLeadValue(pricePerCar: any, cars: any) {
+  const p = Math.round(Number(pricePerCar));
+  const c = Math.round(Number(cars));
+  if (!Number.isFinite(p) || !Number.isFinite(c) || p < 0 || c <= 0) {
+    return { price_per_car: Number.isFinite(p) && p >= 0 ? p : null, base_value: null, gst_amount: null, lead_value: null };
+  }
+  const base = Math.round(c * p);
+  const gst = Math.round(base * 0.18);
+  return { price_per_car: p, base_value: base, gst_amount: gst, lead_value: Math.round(base + gst) };
 }
 
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
@@ -79,7 +98,7 @@ export function Login() {
       <div className="hidden md:flex flex-col justify-between text-white p-12 relative overflow-hidden bg-gradient-to-br from-graphite-700 via-graphite-800 to-graphite-950">
         <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-brand-400/20 blur-3xl pointer-events-none" />
         <div className="flex items-center gap-2.5 relative">
-          <div className="w-10 h-10 rounded-xl bg-brand-400 flex items-center justify-center text-signalink font-bold">E★</div>
+          <img src="/estar-logo.jpg" alt="E-Star" className="w-10 h-10 rounded-xl object-contain bg-white" />
           <div className="font-bold text-lg">E-Star CRM</div>
         </div>
         <div className="relative">
@@ -98,6 +117,10 @@ export function Login() {
       </div>
       <div className="flex items-center justify-center p-8 bg-graphite-100">
         <form onSubmit={submit} className="card p-8 w-full max-w-sm space-y-4">
+          <div className="flex items-center gap-3 md:hidden">
+            <img src="/estar-logo.jpg" alt="E-Star" className="w-10 h-10 rounded-xl object-contain" />
+            <div className="font-bold text-graphite-900">E-Star CRM</div>
+          </div>
           <div>
             <h2 className="text-xl font-bold text-graphite-900">Welcome back</h2>
             <p className="text-sm text-graphite-500">Sign in to your CRM account</p>
@@ -196,8 +219,14 @@ export function Dashboard() {
   }
   if (!d) return <Spinner />;
   const f = d.funnel || {};
+  const lv = d.lead_value || {};
+  const leadValueByProduct = (lv.by_product || []).map((r: any) => ({
+    product: r.product,
+    lead_value: Number(r.lead_value || 0),
+  }));
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
+    { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value), bg: 'bg-[#3F6212]', text: 'text-white', isText: true },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#c0392b]', text: 'text-white' },
     { label: 'Meeting', value: f.meeting ?? 0, bg: 'bg-[#0284c7]', text: 'text-white' },
     { label: 'Site Visit', value: f.site_visit ?? 0, bg: 'bg-[#65A30D]', text: 'text-white' },
@@ -208,7 +237,7 @@ export function Dashboard() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and monthly volume from live database data." />
+      <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and monthly volume from live database data." />
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
@@ -228,7 +257,7 @@ export function Dashboard() {
               ) : (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
                   <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                  <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+                  <div className={`${(t as any).isText ? 'text-sm sm:text-base' : 'text-2xl'} font-bold mt-1 tabular-nums break-all`}>{t.value}</div>
                 </div>
               )
             ))}
@@ -242,9 +271,9 @@ export function Dashboard() {
                 </div>
                 {(d.latest_assigned || []).length === 0 ? <EmptyState title="No assigned customers" /> : (
                   <div className="overflow-x-auto -mx-6 px-6">
-                    <table className="w-full min-w-[560px] text-sm">
+                    <table className="w-full min-w-[640px] text-sm">
                       <thead className="bg-graphite-50"><tr>
-                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Phone</th><th className="th">Email</th>
+                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th>
                         <th className="th">Employee</th><th className="th">Assigned</th>
                       </tr></thead>
                       <tbody>
@@ -252,8 +281,11 @@ export function Dashboard() {
                           <tr key={l.lead_id} className="hover:bg-brand-50/50">
                             <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
                             <td className="td">{l.customer_name}</td>
-                            <td className="td whitespace-nowrap">{l.contact_number}</td>
-                            <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
+                            <td className="td">
+                              <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                              <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                            </td>
+                            <td className="td text-center">{l.quantity_raw || '—'}</td>
                             <td className="td">{l.employee}</td>
                             <td className="td whitespace-nowrap">{l.assigned_date}</td>
                           </tr>
@@ -272,39 +304,39 @@ export function Dashboard() {
 
           <Card title="Leads by Source">
             <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[640px] text-sm">
+              <table className="w-full min-w-[640px] text-sm text-center">
                 <thead>
                   <tr className="bg-[#0e7490] text-white">
-                    <th className="th !text-white !bg-transparent">Source</th>
-                    <th className="th text-right !text-white !bg-transparent">Total Leads</th>
-                    <th className="th text-right !text-white !bg-transparent">In Followup</th>
-                    <th className="th text-right !text-white !bg-transparent">Meeting</th>
-                    <th className="th text-right !text-white !bg-transparent">Site Visit</th>
-                    <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
-                    <th className="th text-right !text-white !bg-transparent">Not Interested</th>
+                    <th className="th !text-white !bg-transparent !text-center">Source</th>
+                    <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                    <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                    <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                    <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                    <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                    <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
                   </tr>
                 </thead>
                 <tbody>
                   {srcRows.map((r: any, i: number) => (
                     <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                      <td className="td font-medium">{r.name}</td>
-                      <td className="td text-right font-bold">{r.total}</td>
-                      <td className="td text-right">{r['In Followup'] ?? 0}</td>
-                      <td className="td text-right">{r.Meeting ?? 0}</td>
-                      <td className="td text-right">{r['Site Visit'] ?? 0}</td>
-                      <td className="td text-right">{r['Quotation sent'] ?? 0}</td>
-                      <td className="td text-right">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                      <td className="td font-medium text-center">{r.name}</td>
+                      <td className="td font-bold text-center">{r.total}</td>
+                      <td className="td text-center">{r['In Followup'] ?? 0}</td>
+                      <td className="td text-center">{r.Meeting ?? 0}</td>
+                      <td className="td text-center">{r['Site Visit'] ?? 0}</td>
+                      <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
+                      <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
                     </tr>
                   ))}
                   {srcRows.length > 0 && (
                     <tr className="bg-graphite-100 font-bold">
-                      <td className="td">TOTAL</td>
-                      <td className="td text-right">{srcTotals.total}</td>
-                      <td className="td text-right">{srcTotals.follow}</td>
-                      <td className="td text-right">{srcTotals.meeting}</td>
-                      <td className="td text-right">{srcTotals.siteVisit}</td>
-                      <td className="td text-right">{srcTotals.quote}</td>
-                      <td className="td text-right">{srcTotals.notInt}</td>
+                      <td className="td text-center">TOTAL</td>
+                      <td className="td text-center">{srcTotals.total}</td>
+                      <td className="td text-center">{srcTotals.follow}</td>
+                      <td className="td text-center">{srcTotals.meeting}</td>
+                      <td className="td text-center">{srcTotals.siteVisit}</td>
+                      <td className="td text-center">{srcTotals.quote}</td>
+                      <td className="td text-center">{srcTotals.notInt}</td>
                     </tr>
                   )}
                 </tbody>
@@ -364,39 +396,39 @@ export function Dashboard() {
       <div className="grid xl:grid-cols-[1.4fr_1fr] gap-5">
         <Card title="Leads by Product">
             <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[640px] text-sm">
+              <table className="w-full min-w-[640px] text-sm text-center">
                 <thead>
                   <tr className="bg-[#0e7490] text-white">
-                    <th className="th !text-white !bg-transparent">Product</th>
-                    <th className="th text-right !text-white !bg-transparent">Total Leads</th>
-                    <th className="th text-right !text-white !bg-transparent">In Followup</th>
-                    <th className="th text-right !text-white !bg-transparent">Meeting</th>
-                    <th className="th text-right !text-white !bg-transparent">Site Visit</th>
-                    <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
-                    <th className="th text-right !text-white !bg-transparent">Not Interested</th>
+                    <th className="th !text-white !bg-transparent !text-center">Product</th>
+                    <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                    <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                    <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                    <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                    <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                    <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
                   </tr>
                 </thead>
                 <tbody>
                   {productRows.map((r: any, i: number) => (
                     <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                      <td className="td font-medium">{r.name}</td>
-                      <td className="td text-right font-bold">{r.total}</td>
-                      <td className="td text-right">{r['In Followup'] ?? 0}</td>
-                      <td className="td text-right">{r.Meeting ?? 0}</td>
-                      <td className="td text-right">{r['Site Visit'] ?? 0}</td>
-                      <td className="td text-right">{r['Quotation sent'] ?? 0}</td>
-                      <td className="td text-right">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                      <td className="td font-medium text-center">{r.name}</td>
+                      <td className="td font-bold text-center">{r.total}</td>
+                      <td className="td text-center">{r['In Followup'] ?? 0}</td>
+                      <td className="td text-center">{r.Meeting ?? 0}</td>
+                      <td className="td text-center">{r['Site Visit'] ?? 0}</td>
+                      <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
+                      <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
                     </tr>
                   ))}
                   {productRows.length > 0 && (
                     <tr className="bg-graphite-100 font-bold">
-                      <td className="td">TOTAL</td>
-                      <td className="td text-right">{productTotals.total}</td>
-                      <td className="td text-right">{productTotals.follow}</td>
-                      <td className="td text-right">{productTotals.meeting}</td>
-                      <td className="td text-right">{productTotals.siteVisit}</td>
-                      <td className="td text-right">{productTotals.quote}</td>
-                      <td className="td text-right">{productTotals.notInt}</td>
+                      <td className="td text-center">TOTAL</td>
+                      <td className="td text-center">{productTotals.total}</td>
+                      <td className="td text-center">{productTotals.follow}</td>
+                      <td className="td text-center">{productTotals.meeting}</td>
+                      <td className="td text-center">{productTotals.siteVisit}</td>
+                      <td className="td text-center">{productTotals.quote}</td>
+                      <td className="td text-center">{productTotals.notInt}</td>
                     </tr>
                   )}
                 </tbody>
@@ -427,9 +459,39 @@ export function Dashboard() {
               <tbody>{d.quoted_customers.map((lead: any) => <tr key={lead.lead_id}>
                 <td className="td"><Link className="text-brand-700 hover:underline" to={`/leads/${lead.lead_id}`}>{lead.enquiry_number}</Link></td>
                 <td className="td">{lead.customer_name}</td><td className="td">{lead.employee || '—'}</td>
-                <td className="td text-right">{Number(lead.quotation_value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                <td className="td text-right">{inr(lead.quotation_value)}</td>
               </tr>)}</tbody>
             </table>
+          </div>
+        )}
+      </Card>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value) },
+          { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN') },
+          { label: 'Average Lead Value', value: inr(lv.average_lead_value) },
+          { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0 },
+        ].map((k) => (
+          <div key={k.label} className="card p-4 text-center">
+            <div className="text-lg sm:text-xl font-bold text-graphite-900 tabular-nums">{k.value}</div>
+            <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{k.label}</div>
+          </div>
+        ))}
+      </div>
+      <Card title="Lead Value by Product">
+        {leadValueByProduct.every((r: any) => !r.lead_value) ? (
+          <EmptyState title="No lead values yet" hint="Set product and number of cars on leads to populate this chart." />
+        ) : (
+          <div className="h-80">
+            <ResponsiveContainer>
+              <BarChart data={leadValueByProduct} margin={{ top: 8, right: 12, left: 8, bottom: 64 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="product" interval={0} angle={-28} textAnchor="end" height={70} tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                <Tooltip formatter={(v: any) => inr(v)} />
+                <Bar dataKey="lead_value" name="Lead Value" fill="#3F6212" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         )}
       </Card>
@@ -475,7 +537,8 @@ function TodoRow({ lead: l, state, leaving, statusLabel, now }: {
         </div>
         <div className="text-sm text-graphite-600 mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5">
           <span>📞 {l.contact_number ? <a className="text-brand-700 hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}</span>
-          {l.email ? <span>✉️ <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a></span> : null}
+          <span>✉️ {l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</span>
+          <span>🚗 {(l.quantity_raw || l.cars) ? `${l.quantity_raw || l.cars} cars` : '—'}</span>
           {l.company_name && <span>🏢 {l.company_name}</span>}
           {l.city && <span>📍 {l.city}</span>}
           {l.sla_deadline && !done && <span>⏱ Contact by {fmtDT(l.sla_deadline)}</span>}
@@ -622,17 +685,20 @@ export function EmployeeDashboard() {
         <Card title="Needs attention — overdue SLA" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
           {overduePending.length === 0 ? <EmptyState title="Nothing overdue" hint="All caught up on SLAs." /> : (
             <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[480px] text-sm">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">Email</th><th className="th">Due</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Due</th>
                 </tr></thead>
                 <tbody>
                   {overduePending.map((l: any) => (
                     <tr key={l.id} className="hover:bg-brand-50/50">
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td">{l.customer_name || '—'}</td>
-                      <td className="td whitespace-nowrap">{l.contact_number || '—'}</td>
-                      <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
+                      <td className="td">
+                        <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                        <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                      </td>
+                      <td className="td text-center">{l.quantity_raw || '—'}</td>
                       <td className="td whitespace-nowrap text-red-700 font-semibold tabular-nums">{fmtDT(l.sla_deadline)}</td>
                     </tr>
                   ))}
@@ -644,15 +710,20 @@ export function EmployeeDashboard() {
         <Card title="My recent leads" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
           {recent.length === 0 ? <EmptyState title="No leads assigned yet" hint="New Excel imports will appear here once assigned to you." /> : (
             <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[480px] text-sm">
+              <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Status</th><th className="th">SLA</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Status</th><th className="th">SLA</th>
                 </tr></thead>
                 <tbody>
                   {recent.map((l: any) => (
                     <tr key={l.id} className="hover:bg-brand-50/50">
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td">{l.customer_name || '—'}</td>
+                      <td className="td">
+                        <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                        <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                      </td>
+                      <td className="td text-center">{l.quantity_raw || '—'}</td>
                       <td className="td"><StatusBadge value={statusName(l.status_id)} /></td>
                       <td className="td"><SlaBadge value={l.sla_state} /></td>
                     </tr>
@@ -690,6 +761,7 @@ export function Leads() {
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
   const [sla, setSla] = useState('');
+  const [sort, setSort] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
   const [conversionToConfirm, setConversionToConfirm] = useState<any>(null);
   const [page, setPage] = useState(1);
@@ -709,7 +781,7 @@ export function Leads() {
     const t = setTimeout(() => {
       setLoading(true); setError('');
       api.get('/leads', {
-        params: { search, status, source, sla, page, size },
+        params: { search, status, source, sla, page, size, ...(sort ? { sort } : {}) },
         signal: ctrl.signal,
       })
         .then((r) => {
@@ -725,7 +797,7 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, sla, page, liveSeq]);
+  }, [search, status, source, sla, sort, page, liveSeq]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const statusLabel = (lead: any) => {
@@ -747,8 +819,8 @@ export function Leads() {
       setValidationMessage('Please fill Remarks, Category, and Work Action before saving or completing this lead.');
       return;
     }
-    if (actionName === 'Quotation sent' && draft.quotationValue && !/^\d+(\.\d{1,2})?$/.test(draft.quotationValue)) {
-      setValidationMessage('Enter a valid quotation value with up to two decimal places.');
+    if (actionName === 'Quotation sent' && draft.quotationValue && !/^\d+$/.test(String(draft.quotationValue).trim())) {
+      setValidationMessage('Enter a whole-number quotation value (no decimals).');
       return;
     }
     if (done && actionName === 'Converted' && !conversionConfirmed) {
@@ -795,8 +867,8 @@ export function Leads() {
       setValidationMessage('Please fill Remarks, Category, and Work Action for this follow-up.');
       return;
     }
-    if (actionName === 'Quotation sent' && form.quotationValue && !/^\d+(\.\d{1,2})?$/.test(form.quotationValue)) {
-      setValidationMessage('Enter a valid quotation value with up to two decimal places.');
+    if (actionName === 'Quotation sent' && form.quotationValue && !/^\d+$/.test(String(form.quotationValue).trim())) {
+      setValidationMessage('Enter a whole-number quotation value (no decimals).');
       return;
     }
     setSavingId(lead.id);
@@ -810,7 +882,7 @@ export function Leads() {
   return (
     <div className="min-w-0 max-w-full">
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
-      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr]">
+      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr]">
         <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input min-w-0" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">All statuses</option>
@@ -828,19 +900,27 @@ export function Leads() {
           <option value="COMPLETED">Completed</option>
           <option value="NOT_INTERESTED">Not Interested</option>
         </select>
+        <select className="input min-w-0" value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}>
+          <option value="">Sort: Recent</option>
+          <option value="lead_value_desc">Lead Value ↓</option>
+          <option value="lead_value">Lead Value ↑</option>
+        </select>
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="relative isolate w-full overflow-x-auto">
-            <table className="w-full table-fixed min-w-[1800px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
+            <table className="w-full table-fixed min-w-[2200px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
                 <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
                 <th className="th whitespace-nowrap align-top w-[120px]">City</th>
-                <th className="th whitespace-nowrap align-top w-[150px]">Contact</th>
-                <th className="th whitespace-nowrap align-top w-[160px]">Product</th>
+                <th className="th whitespace-nowrap align-top w-[170px]">Contact / Email</th>
+                <th className="th whitespace-nowrap align-top w-[90px] text-center">Cars</th>
+                <th className="th whitespace-nowrap align-top w-[180px]">Product</th>
+                <th className="th whitespace-nowrap align-top w-[120px] text-right">Price / Car</th>
+                <th className="th whitespace-nowrap align-top w-[130px] text-right">Lead Value</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Work action</th>
                 <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
                 <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
@@ -864,8 +944,18 @@ export function Leads() {
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                     <td className="td align-top">{l.company_name || '—'}</td>
                     <td className="td align-top">{l.city || '—'}</td>
-                    <td className="td align-top whitespace-nowrap">{l.contact_number || '—'}</td>
+                    <td className="td align-top">
+                      <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                      <div className="text-xs mt-0.5 break-all">
+                        {l.email
+                          ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a>
+                          : <span className="text-graphite-400">No email</span>}
+                      </div>
+                    </td>
+                    <td className="td align-top text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
                     <td className="td align-top">{prodName(l, nameOf)}</td>
+                    <td className="td align-top text-right whitespace-nowrap tabular-nums">{inr(l.price_per_car)}</td>
+                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
                     <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
@@ -876,19 +966,19 @@ export function Leads() {
                             return <option key={option} value={match?.id || l.status_id}>{option}</option>;
                           })}
                         </select>
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {entry.quotation_value}</span>}</div>) : nameOf('statuses', l.status_id)}</div>)}
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">                      {l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {inr(entry.quotation_value)}</span>}</div>) : nameOf('statuses', l.status_id)}</div>)}
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && nameOf('statuses', draftFor(l).progress) === 'Quotation sent' && (
                         <label className="block text-xs text-graphite-600 mt-2">Quotation value
-                          <input type="number" min="0" step="0.01" className="input text-xs mt-1" placeholder="Enter quotation value" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value } }))} />
+                          <input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value.replace(/[^\d]/g, '') } }))} />
                         </label>
                       )}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="0.01" className="input text-xs mt-1" placeholder="Enter quotation value" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value } : item) }))} /></label>}</div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} /></label>}</div>)}
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top text-right whitespace-nowrap">
                       {l.quotation_value != null && l.quotation_value !== '' ? (
                         <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
-                          {Number(l.quotation_value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {inr(l.quotation_value).replace(/^₹/, '')}
                         </span>
                       ) : <span className="text-graphite-400">—</span>}
                     </td>
@@ -1039,10 +1129,10 @@ export function EmployeeLeads() {
           </div>
           <div className="card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1200px]">
+              <table className="w-full min-w-[1280px]">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
-                  <th className="th">City</th><th className="th">Contact</th><th className="th">Email</th><th className="th">Source</th>
+                  <th className="th">City</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">Lead Value</th><th className="th">Source</th>
                   <th className="th">Product</th><th className="th">Status</th><th className="th">SLA</th>
                   <th className="th">Due date</th>
                   <th className="th">First contact</th><th className="th">Enquiry date</th>
@@ -1051,11 +1141,15 @@ export function EmployeeLeads() {
                   {items.map((l) => (
                     <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}>
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                      <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div><div className="text-xs text-graphite-400">{l.email || ''}</div></td>
+                      <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
                       <td className="td">{l.company_name || '—'}</td>
                       <td className="td">{l.city || '—'}</td>
-                      <td className="td whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</td>
-                      <td className="td whitespace-nowrap">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : '—'}</td>
+                      <td className="td">
+                        <div className="whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</div>
+                        <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                      </td>
+                      <td className="td text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
+                      <td className="td text-right whitespace-nowrap tabular-nums font-semibold">{inr(l.lead_value)}</td>
                       <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
                       <td className="td">{l.product_name || prodName(l, nameOf)}</td>
                       <td className="td"><StatusBadge value={l.primary_employee_id && nameOf('statuses', l.status_id) === 'New Lead' ? 'Assigned' : nameOf('statuses', l.status_id)} /></td>
@@ -1084,7 +1178,11 @@ export function LeadDetail({ id }: { id: string }) {
   const [progressId, setProgressId] = useState('');
   const [remarks, setRemarks] = useState('');
   const [assignEmp, setAssignEmp] = useState('');
+  const [reassignReason, setReassignReason] = useState('');
+  const [productId, setProductId] = useState('');
+  const [cars, setCars] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pricingBusy, setPricingBusy] = useState(false);
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [tab, setTab] = useState<'timeline' | 'history'>('timeline');
@@ -1097,7 +1195,11 @@ export function LeadDetail({ id }: { id: string }) {
   }, [id]);
   useEffect(() => {
     if (l?.status_id) setProgressId((cur) => cur || l.status_id);
-  }, [l?.status_id]);
+    if (l) {
+      setProductId(l.product_id || '');
+      setCars(l.quantity_raw || (l.quantity_num != null ? String(l.quantity_num) : ''));
+    }
+  }, [l?.status_id, l?.id, l?.product_id, l?.quantity_raw, l?.quantity_num]);
   if (loadError && !l) {
     return (
       <div className="card p-8 text-center">
@@ -1109,8 +1211,14 @@ export function LeadDetail({ id }: { id: string }) {
   }
   if (!l) return <Spinner />;
   const nameOf = (kind: string, v?: string) => masters?.[kind]?.find((x: any) => x.id === v)?.name ?? (v ?? '—');
+  const selectedProduct = masters?.products?.find((p: any) => p.id === productId);
+  const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, cars);
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
   const canUpdateProgress = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id);
+  const canEditPricing = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id);
+  const rr = l.reassignment_request;
+  const canRequestReassign = role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
+  const canAdminReassign = role === 'ADMIN' && (l.pending_assignment || rr?.status === 'ACCEPTED');
   const addNote = async () => {
     if (!note.trim() || busy) return;
     setBusy(true); setErr('');
@@ -1140,13 +1248,44 @@ export function LeadDetail({ id }: { id: string }) {
   };
   const doAssign = async () => {
     if (!assignEmp) return;
-    setBusy(true); setErr('');
+    setBusy(true); setErr(''); setOkMsg('');
     try {
       await api.post(`/leads/${id}/assign`, { employee_id: assignEmp, role: 'PRIMARY' });
+      setOkMsg(rr?.status === 'ACCEPTED' ? 'Lead reassigned to the selected employee' : 'Lead assigned');
+      setAssignEmp('');
       reload();
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Assign failed');
     } finally { setBusy(false); }
+  };
+  const requestReassign = async () => {
+    if (!reassignReason.trim() || busy) return;
+    setBusy(true); setErr(''); setOkMsg('');
+    try {
+      await api.post(`/leads/${id}/reassign-request`, { reason: reassignReason.trim() });
+      setReassignReason('');
+      setOkMsg('Reassignment request sent to admin');
+      reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not send reassignment request');
+    } finally { setBusy(false); }
+  };
+  const savePricing = async () => {
+    if (!canEditPricing) return;
+    setPricingBusy(true); setErr(''); setOkMsg('');
+    try {
+      const { data } = await api.put(`/leads/${id}`, {
+        product_id: productId || null,
+        quantity_raw: cars,
+        lead_value: 1,
+        price_per_car: 1,
+        gst_amount: 1,
+      });
+      setL(data);
+      setOkMsg('Product & lead value updated');
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not save product / cars');
+    } finally { setPricingBusy(false); }
   };
   return (
     <div className="space-y-5">
@@ -1164,12 +1303,13 @@ export function LeadDetail({ id }: { id: string }) {
             <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm">
               <span>📞 {l.contact_number ? <a className="text-brand-700 font-semibold hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}{l.alternate_contact ? <span className="text-graphite-400"> (alt: {l.alternate_contact})</span> : null}</span>
-              <span>✉️ {l.email ? <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">—</span>}</span>
+              <span>✉️ {l.email ? <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</span>
+              <span>🚗 {l.quantity_raw ? `${l.quantity_raw} cars` : '—'}</span>
+              <span className="font-semibold text-graphite-900">💰 Lead Value {inr(l.lead_value)}</span>
             </div>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-graphite-500">
               <span>📍 {l.city || '—'}</span>
               <span>📅 {l.enquiry_date || '—'}</span>
-              <span>🚗 {l.quantity_raw || '—'}</span>
               <span>🏷 {nameOf('sources', l.source_id)}</span>
               <span>📦 {prodName(l, nameOf)}</span>
               <span>👤 {nameOf('employees', l.primary_employee_id)}</span>
@@ -1182,18 +1322,111 @@ export function LeadDetail({ id }: { id: string }) {
       {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{err}</div>}
       {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3">{okMsg}</div>}
 
-      {role === 'ADMIN' && l.pending_assignment && (
-        <Card title="Assign to employee">
+      <Card title="Product & Lead Value">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Product</label>
+            <select className="input mt-1" disabled={!canEditPricing} value={productId} onChange={(e) => setProductId(e.target.value)}>
+              <option value="">Select product…</option>
+              {(masters?.products || []).map((p: any) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Number of Cars</label>
+            <input className="input mt-1" type="number" min="1" step="1" disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} placeholder="e.g. 10" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Price / Car</label>
+            <input className="input mt-1 bg-graphite-50" readOnly value={inr(selectedProduct?.price_per_car ?? preview.price_per_car ?? l.price_per_car)} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">GST %</label>
+            <input className="input mt-1 bg-graphite-50" readOnly value="18%" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">GST Amount</label>
+            <input className="input mt-1 bg-graphite-50" readOnly value={inr(preview.gst_amount ?? l.gst_amount)} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Lead Value</label>
+            <input className="input mt-1 bg-graphite-50 font-semibold" readOnly value={inr(preview.lead_value ?? l.lead_value)} />
+          </div>
+        </div>
+        <p className="text-xs text-graphite-500 mt-3">Lead Value = Cars × Price/Car × 1.18 (GST 18%). Calculated and stored by the server — not editable.</p>
+        {canEditPricing && (
+          <button type="button" className="btn-primary mt-3" disabled={pricingBusy} onClick={savePricing}>
+            {pricingBusy ? 'Saving…' : 'Save product & cars'}
+          </button>
+        )}
+      </Card>
+
+      {canAdminReassign && (
+        <Card title={l.pending_assignment ? 'Assign to employee' : 'Reassign to another employee'}>
+          {rr?.status === 'ACCEPTED' && (
+            <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+              Reassignment accepted for <b>{rr.requested_by_name}</b>. Choose a new employee below — ownership stays unchanged until you assign.
+              {rr.reason ? <span className="block text-xs mt-1 text-amber-700">Reason: {rr.reason}</span> : null}
+            </p>
+          )}
           <div className="flex flex-wrap gap-3 items-end">
             <div className="flex-1 min-w-[200px]">
               <label className="text-xs font-medium text-graphite-600">Employee</label>
               <select className="input mt-1" value={assignEmp} onChange={(e) => setAssignEmp(e.target.value)}>
                 <option value="">Select…</option>
-                {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                {masters?.employees?.filter((e: any) => e.id !== l.primary_employee_id).map((e: any) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
               </select>
             </div>
-            <button className="btn-primary" disabled={!assignEmp || busy} onClick={doAssign}>Assign</button>
+            <button className="btn-primary" disabled={!assignEmp || busy} onClick={doAssign}>
+              {l.pending_assignment ? 'Assign' : 'Reassign'}
+            </button>
           </div>
+        </Card>
+      )}
+
+      {role === 'ADMIN' && rr?.status === 'PENDING' && (
+        <Card title="Reassignment request pending">
+          <p className="text-sm text-graphite-700">
+            <b>{rr.requested_by_name}</b> asked to move this lead. Review it on the{' '}
+            <Link className="text-brand-700 underline" to="/reassignments">Reassign</Link> page (accept or decline).
+          </p>
+          <p className="text-xs text-graphite-500 mt-2">Reason: {rr.reason || '—'}</p>
+        </Card>
+      )}
+
+      {canRequestReassign && (
+        <Card title="Cannot follow this customer?">
+          <p className="text-xs text-graphite-500 mb-3">
+            Request admin to reassign this lead to another employee. Your ownership stays until admin accepts and manually assigns someone else.
+          </p>
+          <textarea
+            className="input min-h-[90px]"
+            placeholder="Why can’t you follow this lead? (language, region, conflict…)"
+            value={reassignReason}
+            onChange={(e) => setReassignReason(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-secondary mt-3"
+            disabled={busy || reassignReason.trim().length < 3}
+            onClick={requestReassign}
+          >
+            {busy ? 'Sending…' : 'Request reassignment'}
+          </button>
+        </Card>
+      )}
+
+      {role === 'EMPLOYEE' && rr && (
+        <Card title="Reassignment request">
+          <p className="text-sm">
+            Status: <b>{rr.status}</b>
+            {rr.status === 'PENDING' && ' — waiting for admin.'}
+            {rr.status === 'ACCEPTED' && ' — admin will assign another employee.'}
+          </p>
+          <p className="text-xs text-graphite-500 mt-2">Reason: {rr.reason || '—'}</p>
         </Card>
       )}
 
@@ -1304,10 +1537,14 @@ export function ImportPage() {
   const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'duplicates' | 'invalid' | 'ready'>('duplicates');
+  const [importMasters, setImportMasters] = useState<any>(null);
   const errMsg = (e: any) => e?.response?.data?.detail || 'Upload failed. Is the backend running?';
 
   const loadBatches = () => api.get('/import/batches').then((r) => setBatches(r.data || [])).catch(() => {});
-  useEffect(() => { loadBatches(); }, []);
+  useEffect(() => {
+    loadBatches();
+    api.get('/masters').then((r) => setImportMasters(r.data)).catch(() => {});
+  }, []);
 
   const loadErrors = async (batchId: string) => {
     const { data } = await api.get(`/import/${batchId}/errors`);
@@ -1580,7 +1817,11 @@ export function ImportPage() {
               <tbody>
                 {batches.filter((b) => b.status === 'DONE').slice(0, 10).map((b) => (
                   <tr key={b.id} className="hover:bg-graphite-50">
-                    <td className="td text-sm">{b.file_name}<div className="text-xs text-graphite-400">{b.sheet_name}</div></td>
+                    <td className="td text-sm">
+                      <span className="text-[10px] uppercase tracking-wide text-graphite-400 mr-2">{b.source === 'sheets' ? 'Google Sheet' : 'Excel'}</span>
+                      {b.source === 'sheets' ? (b.sheet_name || 'Sheet sync') : b.file_name}
+                      <div className="text-xs text-graphite-400">{b.source === 'sheets' ? b.file_name : b.sheet_name}</div>
+                    </td>
                     <td className="td">{b.status}</td>
                     <td className="td text-right">{b.imported}</td>
                     <td className="td text-right">{b.duplicates}</td>
@@ -1638,8 +1879,13 @@ export function ImportPage() {
                 <input className="input mt-1" value={editForm.source} onChange={(e) => setEditForm({ ...editForm, source: e.target.value })} />
               </div>
               <div className="col-span-2">
-                <label className="text-xs font-medium text-graphite-600">Product / type</label>
-                <input className="input mt-1" value={editForm.product} onChange={(e) => setEditForm({ ...editForm, product: e.target.value })} />
+                <label className="text-xs font-medium text-graphite-600">Product</label>
+                <select className="input mt-1" value={editForm.product} onChange={(e) => setEditForm({ ...editForm, product: e.target.value })}>
+                  <option value="">Select product…</option>
+                  {(importMasters?.products || []).map((p: any) => (
+                    <option key={p.id} value={p.name}>{p.name}</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="flex gap-2 justify-end">
@@ -1691,26 +1937,42 @@ function BarCard({ title, data, x, y, onDownload }: {
 export function Reports() {
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const defaultWeek = today.toISOString().slice(0, 10);
   const [prod, setProd] = useState<any[]>([]);
   const [emp, setEmp] = useState<any[]>([]);
-  const [mode, setMode] = useState<'custom' | 'month'>('custom');
+  const [mode, setMode] = useState<'custom' | 'week' | 'month'>('custom');
   const [month, setMonth] = useState(defaultMonth);
+  const [week, setWeek] = useState(defaultWeek);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [details, setDetails] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>(null);
+  const [leadValueReport, setLeadValueReport] = useState<any>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   useEffect(() => {
-    api.get('/reports/product-wise').then((r) => setProd(Array.isArray(r.data) ? r.data : [])).catch(() => setErr('Could not load product report.'));
-    api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => setErr('Could not load employee report.'));
+    api.get('/reports/product-wise').then((r) => setProd(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => {});
   }, []);
 
   const filterParams = (): Record<string, string> => {
     if (mode === 'month') return { mode: 'month', month };
+    if (mode === 'week') return { mode: 'week', week };
     return { mode: 'custom', from_date: fromDate, to_date: toDate };
+  };
+
+  const fetchWithRetry = async (path: string, params: Record<string, string>) => {
+    try {
+      return await api.get(path, { params });
+    } catch (e: any) {
+      if (e?.response?.status === 503) {
+        await new Promise((r) => setTimeout(r, 800));
+        return await api.get(path, { params });
+      }
+      throw e;
+    }
   };
 
   const loadDetails = async () => {
@@ -1721,14 +1983,22 @@ export function Reports() {
     setBusy(true); setErr('');
     try {
       const params = filterParams();
-      const [{ data }, productResponse, productDetailsResponse] = await Promise.all([
-        api.get('/reports/source-details', { params }),
-        api.get('/reports/product-wise', { params }),
-        api.get('/reports/product-details', { params }),
+      const settled = await Promise.allSettled([
+        fetchWithRetry('/reports/source-details', params),
+        fetchWithRetry('/reports/product-wise', params),
+        fetchWithRetry('/reports/product-details', params),
+        fetchWithRetry('/reports/lead-value', params),
       ]);
-      setDetails(data);
-      setProd(productResponse.data);
-      setProductDetails(productDetailsResponse.data);
+      const fails: string[] = [];
+      if (settled[0].status === 'fulfilled') setDetails(settled[0].value.data);
+      else fails.push(settled[0].reason?.response?.data?.detail || 'Source report failed');
+      if (settled[1].status === 'fulfilled') setProd(settled[1].value.data);
+      else fails.push(settled[1].reason?.response?.data?.detail || 'Product report failed');
+      if (settled[2].status === 'fulfilled') setProductDetails(settled[2].value.data);
+      else fails.push(settled[2].reason?.response?.data?.detail || 'Product details failed');
+      if (settled[3].status === 'fulfilled') setLeadValueReport(settled[3].value.data);
+      else fails.push(settled[3].reason?.response?.data?.detail || 'Lead value report failed');
+      if (fails.length) setErr(fails[0]);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Failed to load details report');
     } finally { setBusy(false); }
@@ -1752,7 +2022,9 @@ export function Reports() {
     const p = filterParams();
     const name = mode === 'month'
       ? `leads-by-source-${month}.xlsx`
-      : `leads-by-source-${fromDate}_to_${toDate}.xlsx`;
+      : mode === 'week'
+        ? `leads-by-source-week-${week}.xlsx`
+        : `leads-by-source-${fromDate || 'all'}_to_${toDate || 'all'}.xlsx`;
     try {
       await downloadReport('/reports/source-details/export', name, p);
     } catch (e: any) {
@@ -1768,15 +2040,20 @@ export function Reports() {
     return dl('/reports/product-details/export', 'product-wise-details.xlsx', filterParams());
   };
 
-  const downloadPdf = async (isProduct: boolean) => {
+  const downloadPdf = async (kind: 'source' | 'product' | 'lead_value' = 'source') => {
     if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
       setErr('From date must be on or before To date.');
       return;
     }
     setPdfBusy(true);
     setErr('');
+    const names = {
+      source: 'lead-source-report.pdf',
+      product: 'product-wise-report.pdf',
+      lead_value: 'lead-value-report.pdf',
+    };
     try {
-      await downloadReport('/reports/pdf', isProduct ? 'product-wise-report.pdf' : 'lead-source-report.pdf', { ...filterParams(), report_type: isProduct ? 'product' : 'source' });
+      await downloadReport('/reports/pdf', names[kind], { ...filterParams(), report_type: kind });
     } catch (e: any) {
       const response = e?.response?.data;
       let message = e?.message || 'PDF download failed';
@@ -1787,13 +2064,14 @@ export function Reports() {
     } finally { setPdfBusy(false); }
   };
 
-  const reportFilters = (isProduct = false) => (
+  const reportFilters = (kind: 'source' | 'product' | 'lead_value' = 'source') => (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
             <div>
               <label className="text-xs font-medium text-graphite-600">Report Mode</label>
-              <select className="input mt-1" value={mode} onChange={(e) => setMode(e.target.value as 'custom' | 'month')}>
-                <option value="custom">All time / Custom Date Range</option>
-                <option value="month">Month-wise</option>
+              <select className="input mt-1" value={mode} onChange={(e) => setMode(e.target.value as 'custom' | 'week' | 'month')}>
+                <option value="custom">From date → To date</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
               </select>
             </div>
             {mode === 'month' ? (
@@ -1801,76 +2079,172 @@ export function Reports() {
                 <label className="text-xs font-medium text-graphite-600">Select Month</label>
                 <input type="month" className="input mt-1" value={month} onChange={(e) => setMonth(e.target.value)} />
               </div>
+            ) : mode === 'week' ? (
+              <div>
+                <label className="text-xs font-medium text-graphite-600">Any day in the week</label>
+                <input type="date" className="input mt-1" value={week} onChange={(e) => setWeek(e.target.value)} />
+              </div>
             ) : (
               <>
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Custom From Date (optional)</label>
+                  <label className="text-xs font-medium text-graphite-600">From Date</label>
                   <input type="date" className="input mt-1" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-graphite-600">Custom To Date (optional)</label>
+                  <label className="text-xs font-medium text-graphite-600">To Date</label>
                   <input type="date" className="input mt-1" value={toDate} onChange={(e) => setToDate(e.target.value)} />
                 </div>
               </>
             )}
             <div className="flex flex-wrap items-end gap-2">
               <button type="button" className="btn-primary" disabled={busy} onClick={loadDetails}>{busy ? 'Loading…' : 'Apply'}</button>
-              <button type="button" className="btn-secondary" disabled={isProduct ? !productDetails : !details} onClick={isProduct ? downloadProductDetails : downloadDetails}>Download Excel</button>
-              <button type="button" className="btn-secondary" disabled={pdfBusy || busy} onClick={() => downloadPdf(isProduct)}>{pdfBusy ? 'Creating PDF…' : 'Download PDF'}</button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={kind === 'product' ? !productDetails : kind === 'lead_value' ? !leadValueReport : !details}
+                onClick={() => {
+                  if (kind === 'product') return downloadProductDetails();
+                  if (kind === 'lead_value') return dl('/reports/lead-value/export', 'lead-value-report.xlsx', filterParams());
+                  return downloadDetails();
+                }}
+              >Download Excel</button>
+              <button type="button" className="btn-secondary" disabled={pdfBusy || busy} onClick={() => downloadPdf(kind)}>{pdfBusy ? 'Creating PDF…' : 'Download PDF'}</button>
             </div>
           </div>
   );
+
+  const lvPeriod = leadValueReport?.by_period || [];
+  const lvProducts = leadValueReport?.by_product || [];
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Reports"
-        subtitle="Details report by lead source (date range / month), product-wise counts, and monthly volume downloads."
+        subtitle="Lead source & product details, lead value by date range / week / month, and downloads."
       />
+
+      <div className="card overflow-hidden">
+        <div className="bg-[#3F6212] text-white px-5 py-3 font-semibold tracking-wide">
+          LEAD VALUE REPORT
+        </div>
+        <div className="p-5 space-y-4">
+          {reportFilters('lead_value')}
+          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { label: 'Total Lead Value', value: inr(leadValueReport?.total_lead_value) },
+              { label: 'Total Leads', value: leadValueReport?.total_leads ?? '—' },
+              { label: 'Total Cars', value: leadValueReport?.total_cars != null ? Number(leadValueReport.total_cars).toLocaleString('en-IN') : '—' },
+              { label: 'Average Lead Value', value: inr(leadValueReport?.average_lead_value) },
+            ].map((k) => (
+              <div key={k.label} className="bg-graphite-50 border border-graphite-200 rounded-lg p-3 text-center">
+                <div className="text-base font-bold text-graphite-900 tabular-nums">{k.value}</div>
+                <div className="text-[10px] uppercase tracking-wide text-graphite-500 mt-1">{k.label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Lead Value by Product</h3>
+              {lvProducts.every((r: any) => !r.lead_value) ? <EmptyState title="No lead value in this range" /> : (
+                <div className="h-72">
+                  <ResponsiveContainer>
+                    <BarChart data={lvProducts} margin={{ top: 8, right: 8, left: 0, bottom: 56 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="product" interval={0} angle={-25} textAnchor="end" height={60} tick={{ fontSize: 9 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                      <Tooltip formatter={(v: any) => inr(v)} />
+                      <Bar dataKey="lead_value" name="Lead Value" fill="#3F6212" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">
+                {mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
+              </h3>
+              {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
+                <div className="h-72">
+                  <ResponsiveContainer>
+                    <BarChart data={lvPeriod} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} tick={{ fontSize: 9 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                      <Tooltip formatter={(v: any) => inr(v)} />
+                      <Bar dataKey="lead_value" name="Lead Value" fill="#65A30D" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </div>
+          {lvPeriod.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] text-sm text-center">
+                <thead><tr className="bg-graphite-100">
+                  <th className="th text-center">Period</th>
+                  <th className="th text-center">Leads</th>
+                  <th className="th text-center">Lead Value</th>
+                </tr></thead>
+                <tbody>
+                  {lvPeriod.map((r: any) => (
+                    <tr key={r.period} className="hover:bg-graphite-50">
+                      <td className="td text-center">{r.label}</td>
+                      <td className="td text-center">{r.leads}</td>
+                      <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="card overflow-hidden">
         <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">
           DETAILS REPORT — LEADS BY SOURCE
         </div>
         <div className="p-5 space-y-4">
-          {reportFilters()}
+          {reportFilters('source')}
 
           {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-sm">
+            <table className="w-full min-w-[960px] text-sm text-center">
               <thead>
                 <tr className="bg-[#1e3a5f] text-white">
-                  <th className="th !text-white !bg-transparent">Lead Source</th>
-                  <th className="th text-right !text-white !bg-transparent">Total Leads</th>
-                  <th className="th text-right !text-white !bg-transparent">In Followup</th>
-                  <th className="th text-right !text-white !bg-transparent">Meeting</th>
-                  <th className="th text-right !text-white !bg-transparent">Site Visit</th>
-                  <th className="th text-right !text-white !bg-transparent">Quotation sent</th>
-                  <th className="th text-right !text-white !bg-transparent">Not Interested</th>
+                  <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
+                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
                 </tr>
               </thead>
               <tbody>
                 {(details?.rows || []).map((r: any, i: number) => (
                   <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                    <td className="td font-medium">{r.source}</td>
-                    <td className="td text-right font-bold">{r.total}</td>
-                    <td className="td text-right">{r.in_followup}</td>
-                    <td className="td text-right">{r.meeting}</td>
-                    <td className="td text-right">{r.site_visit}</td>
-                    <td className="td text-right">{r.quote_sent}</td>
-                    <td className="td text-right">{r.not_interested}</td>
+                    <td className="td font-medium text-center">{r.source}</td>
+                    <td className="td font-bold text-center">{r.total}</td>
+                    <td className="td text-center">{r.in_followup}</td>
+                    <td className="td text-center">{r.meeting}</td>
+                    <td className="td text-center">{r.site_visit}</td>
+                    <td className="td text-center">{r.quote_sent}</td>
+                    <td className="td text-center">{r.not_interested}</td>
                   </tr>
                 ))}
                 {details?.totals && (
                   <tr className="bg-graphite-100 font-bold">
-                    <td className="td">TOTAL</td>
-                    <td className="td text-right">{details.totals.total}</td>
-                    <td className="td text-right">{details.totals.in_followup}</td>
-                    <td className="td text-right">{details.totals.meeting}</td>
-                    <td className="td text-right">{details.totals.site_visit}</td>
-                    <td className="td text-right">{details.totals.quote_sent}</td>
-                    <td className="td text-right">{details.totals.not_interested}</td>
+                    <td className="td text-center">TOTAL</td>
+                    <td className="td text-center">{details.totals.total}</td>
+                    <td className="td text-center">{details.totals.in_followup}</td>
+                    <td className="td text-center">{details.totals.meeting}</td>
+                    <td className="td text-center">{details.totals.site_visit}</td>
+                    <td className="td text-center">{details.totals.quote_sent}</td>
+                    <td className="td text-center">{details.totals.not_interested}</td>
                   </tr>
                 )}
               </tbody>
@@ -1885,18 +2259,18 @@ export function Reports() {
           <span>DETAILS REPORT — PRODUCT WISE</span>
         </div>
         <div className="p-5 space-y-4">
-          {reportFilters(true)}
+          {reportFilters('product')}
           {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
           <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[900px] text-sm text-center">
             <thead><tr className="bg-[#1e3a5f] text-white">
-              {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent">{header}</th>)}
+              {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
             </tr></thead>
             <tbody>
               {(productDetails?.rows || []).map((row: any, i: number) => <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                <td className="td font-medium">{row.product}</td><td className="td text-right font-bold">{row.total}</td><td className="td text-right">{row.in_followup}</td><td className="td text-right">{row.meeting}</td><td className="td text-right">{row.site_visit}</td><td className="td text-right">{row.quote_sent}</td><td className="td text-right">{row.not_interested}</td>
+                <td className="td font-medium text-center">{row.product}</td><td className="td font-bold text-center">{row.total}</td><td className="td text-center">{row.in_followup}</td><td className="td text-center">{row.meeting}</td><td className="td text-center">{row.site_visit}</td><td className="td text-center">{row.quote_sent}</td><td className="td text-center">{row.not_interested}</td>
               </tr>)}
-              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td">TOTAL</td><td className="td text-right">{productDetails.totals.total}</td><td className="td text-right">{productDetails.totals.in_followup}</td><td className="td text-right">{productDetails.totals.meeting}</td><td className="td text-right">{productDetails.totals.site_visit}</td><td className="td text-right">{productDetails.totals.quote_sent}</td><td className="td text-right">{productDetails.totals.not_interested}</td></tr>}
+              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td text-center">TOTAL</td><td className="td text-center">{productDetails.totals.total}</td><td className="td text-center">{productDetails.totals.in_followup}</td><td className="td text-center">{productDetails.totals.meeting}</td><td className="td text-center">{productDetails.totals.site_visit}</td><td className="td text-center">{productDetails.totals.quote_sent}</td><td className="td text-center">{productDetails.totals.not_interested}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1922,8 +2296,8 @@ export function Reports() {
 
       <Card title="Employee workload">
         {emp.length === 0 ? <EmptyState title="No data" /> : (
-          <table className="w-full"><thead className="bg-graphite-50"><tr><th className="th">Employee</th><th className="th text-right">Assigned leads</th></tr></thead>
-            <tbody>{emp.map((e: any) => <tr key={e.employee} className="hover:bg-graphite-50"><td className="td font-medium">{e.employee}</td><td className="td text-right font-bold">{e.assigned}</td></tr>)}</tbody></table>
+          <table className="w-full text-center"><thead className="bg-graphite-50"><tr><th className="th text-center">Employee</th><th className="th text-center">Assigned leads</th></tr></thead>
+            <tbody>{emp.map((e: any) => <tr key={e.employee} className="hover:bg-graphite-50"><td className="td font-medium text-center">{e.employee}</td><td className="td font-bold text-center">{e.assigned}</td></tr>)}</tbody></table>
         )}
       </Card>
     </div>
@@ -2085,19 +2459,27 @@ export function EmployeesPage() {
         }>
           {loadingEmployeeLeads ? <Spinner /> : employeeLeads.length === 0 ? <EmptyState title="No leads assigned" /> : (
             <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[1050px]">
+              <table className="w-full min-w-[1280px]">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
+                  <th className="th text-right">Lead Value</th>
                   <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Quotation value</th><th className="th">Completion</th>
                 </tr></thead>
                 <tbody>{employeeLeads.map((lead) => (
                   <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
                     <td className="td font-semibold"><Link className="text-brand-700" to={`/leads/${lead.id}`}>{lead.enquiry_number}</Link></td>
-                    <td className="td">{lead.customer_name || '—'}</td><td className="td">{lead.contact_number || '—'}</td><td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
+                    <td className="td">{lead.customer_name || '—'}</td>
+                    <td className="td">
+                      <div>{lead.contact_number || '—'}</div>
+                      <div className="text-xs mt-0.5 break-all">{lead.email ? <a className="text-brand-700 hover:underline" href={`mailto:${lead.email}`}>{lead.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                    </td>
+                    <td className="td text-center">{lead.quantity_raw || '—'}</td>
+                    <td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
+                    <td className="td text-right tabular-nums font-semibold">{inr(lead.lead_value)}</td>
                     <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
                     <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
                     <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>
-                    <td className="td">{lead.quotation_value != null ? Number(lead.quotation_value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
+                    <td className="td">{lead.quotation_value != null ? inr(lead.quotation_value) : '—'}</td>
                     <td className="td">{lead.sla_state === 'COMPLETED' ? 'Completed' : 'Pending'}</td>
                   </tr>
                 ))}</tbody>
@@ -2123,26 +2505,158 @@ export function EmployeesPage() {
   );
 }
 
+/* ================= REASSIGNMENT REQUESTS (ADMIN) ================= */
+export function ReassignmentsPage() {
+  const [items, setItems] = useState<any[]>([]);
+  const [filter, setFilter] = useState('PENDING');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState('');
+  const [note, setNote] = useState<Record<string, string>>({});
+  const [okMsg, setOkMsg] = useState('');
+
+  const load = async (status = filter) => {
+    setLoading(true); setError('');
+    try {
+      const { data } = await api.get('/leads/reassignment-requests', { params: { status } });
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not load reassignment requests');
+      setItems([]);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(filter); }, [filter]);
+
+  const decide = async (id: string, action: 'accept' | 'decline', leadId?: string) => {
+    setBusyId(id); setError(''); setOkMsg('');
+    try {
+      const { data } = await api.post(`/leads/reassignment-requests/${id}/${action}`, { note: note[id] || '' });
+      setOkMsg(data?.message || (action === 'accept' ? 'Accepted — assign a new employee on the lead page.' : 'Declined — lead unchanged.'));
+      await load(filter);
+      if (action === 'accept' && (leadId || data?.lead_id)) {
+        // keep admin on page; message points them to lead
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || `Could not ${action} request`);
+    } finally { setBusyId(''); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Reassignment requests"
+        subtitle="Employees ask to move a lead they cannot follow. Accept, then manually assign another employee — decline leaves ownership unchanged."
+      />
+      <div className="flex flex-wrap gap-2">
+        {['PENDING', 'ACCEPTED', 'DECLINED', 'FULFILLED'].map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={`px-3 py-1.5 rounded-lg text-sm ${filter === s ? 'bg-brand-100 text-brand-900 font-semibold' : 'bg-graphite-100 text-graphite-600'}`}
+            onClick={() => setFilter(s)}
+          >
+            {s.charAt(0) + s.slice(1).toLowerCase()}
+          </button>
+        ))}
+      </div>
+      {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3">{okMsg}</div>}
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{error}</div>}
+      {loading ? <div className="card p-6"><Spinner /></div>
+        : items.length === 0 ? <div className="card"><EmptyState title={`No ${filter.toLowerCase()} requests`} /></div>
+        : items.map((r) => (
+          <div key={r.id} className="card p-4 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold text-graphite-900">
+                  <Link className="text-brand-700 hover:underline" to={`/leads/${r.lead_id}`}>{r.enquiry_number}</Link>
+                  {' · '}{r.customer_name || '—'}
+                </div>
+                <div className="text-sm text-graphite-600 mt-0.5">
+                  Requested by <b>{r.requested_by_name}</b>
+                  {r.created_at ? ` · ${fmtDT(r.created_at)}` : ''}
+                </div>
+                <p className="text-sm mt-2 whitespace-pre-wrap">{r.reason || '—'}</p>
+              </div>
+              <span className="text-xs font-semibold uppercase tracking-wide text-graphite-600 bg-graphite-100 px-2 py-1 rounded">{r.status}</span>
+            </div>
+            {r.status === 'PENDING' && (
+              <div className="border-t border-graphite-100 pt-3 space-y-2">
+                <input
+                  className="input text-sm"
+                  placeholder="Optional note to employee"
+                  value={note[r.id] || ''}
+                  onChange={(e) => setNote((cur) => ({ ...cur, [r.id]: e.target.value }))}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className="btn-primary" disabled={busyId === r.id} onClick={() => decide(r.id, 'accept', r.lead_id)}>
+                    Accept
+                  </button>
+                  <button type="button" className="btn-danger" disabled={busyId === r.id} onClick={() => decide(r.id, 'decline', r.lead_id)}>
+                    Decline
+                  </button>
+                  <Link className="btn-secondary" to={`/leads/${r.lead_id}`}>Open lead</Link>
+                </div>
+              </div>
+            )}
+            {r.status === 'ACCEPTED' && (
+              <div className="border-t border-graphite-100 pt-3 flex flex-wrap gap-2 items-center">
+                <p className="text-sm text-amber-800 flex-1">Accepted — manually assign another employee on the lead page.</p>
+                <Link className="btn-primary" to={`/leads/${r.lead_id}`}>Assign now</Link>
+              </div>
+            )}
+          </div>
+        ))}
+    </div>
+  );
+}
+
 /* ================= NOTIFICATIONS ================= */
 export function NotificationsPage() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   useEffect(() => {
-    api.get('/notifications')
-      .then((r) => setItems(Array.isArray(r.data) ? r.data : []))
-      .catch(() => setError('Could not load notifications. Check your connection.'))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get('/notifications');
+        const list = Array.isArray(data) ? data : [];
+        if (cancelled) return;
+        setItems(list);
+        const unread = list.filter((n: any) => !n.is_read);
+        if (unread.length) {
+          await api.post('/notifications/read-all').catch(() => null);
+          if (!cancelled) {
+            setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
+            window.dispatchEvent(new Event('crm:notifications-read'));
+          }
+        }
+      } catch {
+        if (!cancelled) setError('Could not load notifications. Check your connection.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
   return (
     <div className="max-w-3xl space-y-4">
-      <PageHeader title="Notifications" subtitle="SLA breaches, assignments and follow-up reminders." />
+      <PageHeader title="Notifications" subtitle="SLA breaches, assignments, reassignment requests and follow-up reminders." />
       {loading ? <div className="card"><Spinner /></div>
       : error ? <div className="card"><EmptyState title="Could not load notifications" hint={error} /></div>
       : items.length === 0 ? <div className="card"><EmptyState title="All caught up" hint="No notifications." /></div> : items.map((n) => (
-        <div key={n.id} className="card p-4 flex gap-3">
+        <div key={n.id} className={`card p-4 flex gap-3 ${n.is_read ? 'opacity-80' : ''}`}>
           <div className="w-9 h-9 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0">⚠</div>
-          <div><div className="font-semibold text-sm">{n.title}</div><div className="text-sm text-graphite-600 mt-0.5">{n.body}</div></div>
+          <div>
+            <div className="font-semibold text-sm">{n.title}</div>
+            <div className="text-sm text-graphite-600 mt-0.5">{n.body}</div>
+            <div className="flex flex-wrap gap-3 mt-1 text-xs">
+              {n.created_at && <span className="text-graphite-400">{fmtDT(n.created_at, 19)}</span>}
+              {n.lead_id && <Link className="text-brand-700 underline" to={`/leads/${n.lead_id}`}>Open lead</Link>}
+              {n.kind === 'REASSIGN_REQUEST' && <Link className="text-brand-700 underline" to="/reassignments">Review request</Link>}
+            </div>
+          </div>
         </div>
       ))}
     </div>

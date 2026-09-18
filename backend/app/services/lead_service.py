@@ -5,7 +5,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
-from app.models import AssignmentState, EnquirySequence, Lead, LeadActivity, LeadAssignment, LeadStatus, LeadStatusHistory, Notification, Role, User
+from app.models import (
+    AssignmentState, EnquirySequence, Lead, LeadActivity, LeadAssignment,
+    LeadReassignmentRequest, LeadStatus, LeadStatusHistory, Notification, Role, User,
+)
 
 
 def next_enquiry_number(db: Session) -> str:
@@ -65,26 +68,46 @@ def free_employees(db: Session) -> list[User]:
 
 
 def auto_assign(db: Session, lead: Lead, by: User | None = None) -> User | None:
-    """Assign the next employee in the ring. Every lead gets an owner — no pending queue."""
+    """Round-robin among employees under OPEN_LEAD_LIMIT; otherwise leave pending."""
     if lead.primary_employee_id:
         return None
+    free = free_employees(db)
+    if not free:
+        return None  # all at capacity (or none exist); stays pending
     all_emps = eligible_employees(db)
-    if not all_emps:
-        return None  # no employees exist yet; stays pending until one is created
     st = db.query(AssignmentState).with_for_update().first()
     if not st:
         st = AssignmentState()
         db.add(st)
         db.flush()
     all_ids = [u.id for u in all_emps]
+    free_ids = {u.id for u in free}
     try:
         start = all_ids.index(st.last_employee_id) + 1 if st.last_employee_id in all_ids else 0
     except ValueError:
         start = 0
-    chosen = next(u for u in all_emps if u.id == all_ids[start % len(all_ids)])
+    chosen = None
+    for i in range(len(all_ids)):
+        cand_id = all_ids[(start + i) % len(all_ids)]
+        if cand_id in free_ids:
+            chosen = next(u for u in free if u.id == cand_id)
+            break
+    if not chosen:
+        return None
     st.last_employee_id = chosen.id
     assign(db, lead, chosen, role="PRIMARY", by=by)
     return chosen
+
+
+def validate_assignee(emp: User | None) -> User:
+    """PRIMARY/TECHNICAL/SECONDARY assignees must be active EMPLOYEE accounts."""
+    if not emp:
+        raise ValueError("Employee not found")
+    if not emp.is_active:
+        raise ValueError("Cannot assign leads to an inactive employee")
+    if not emp.role or emp.role.name != "EMPLOYEE":
+        raise ValueError("Leads can only be assigned to employees")
+    return emp
 
 
 def assign_pending_leads(db: Session, by: User | None = None) -> int:
@@ -111,6 +134,56 @@ def assign_pending_leads(db: Session, by: User | None = None) -> int:
     return assigned
 
 
+def notify_admins(db: Session, *, lead_id, kind: str, title: str, body: str) -> None:
+    admins = (
+        db.query(User)
+        .join(Role, User.role_id == Role.id)
+        .filter(User.is_active.is_(True), Role.name == "ADMIN")
+        .all()
+    )
+    for admin in admins:
+        db.add(Notification(user_id=admin.id, lead_id=lead_id, kind=kind, title=title, body=body))
+
+
+def open_reassignment_request(db: Session, lead_id) -> LeadReassignmentRequest | None:
+    """Latest PENDING or ACCEPTED request for a lead (if any)."""
+    return (
+        db.query(LeadReassignmentRequest)
+        .filter(
+            LeadReassignmentRequest.lead_id == lead_id,
+            LeadReassignmentRequest.status.in_(("PENDING", "ACCEPTED")),
+        )
+        .order_by(LeadReassignmentRequest.created_at.desc())
+        .first()
+    )
+
+
+def fulfill_accepted_reassignment(db: Session, lead: Lead, by: User | None = None) -> None:
+    """Mark ACCEPTED reassignment request as FULFILLED after admin manually assigns."""
+    req = (
+        db.query(LeadReassignmentRequest)
+        .filter(
+            LeadReassignmentRequest.lead_id == lead.id,
+            LeadReassignmentRequest.status == "ACCEPTED",
+        )
+        .order_by(LeadReassignmentRequest.created_at.desc())
+        .first()
+    )
+    if not req:
+        return
+    now = datetime.now(timezone.utc)
+    req.status = "FULFILLED"
+    req.reviewed_at = req.reviewed_at or now
+    if by and not req.reviewed_by:
+        req.reviewed_by = by.id
+    if req.requested_by:
+        db.add(Notification(
+            user_id=req.requested_by, lead_id=lead.id, kind="REASSIGN_FULFILLED",
+            title="Lead reassigned",
+            body=f"{lead.enquiry_number} was reassigned by admin after your request.",
+        ))
+
+
 def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User | None = None):
     import logging
     log = logging.getLogger(__name__)
@@ -124,11 +197,21 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
         assigned_by=by.id if by else None, assigned_at=now, sla_deadline=deadline, is_current=True,
     ))
     if role == "PRIMARY":
+        prior_owner = lead.primary_employee_id
         lead.primary_employee_id = emp.id
         lead.sla_deadline = deadline
         lead.sla_state = "PENDING"
         # New assignment window: the overdue digest may fire again for the new due date.
         lead.overdue_digest_at = None
+        # Reset first-contact SLA only when reassigning — never null out NOT NULL
+        # string columns on a brand-new lead (that breaks Sheets/Excel intake).
+        if prior_owner is not None or lead.first_contact_at is not None:
+            lead.first_contact_at = None
+            lead.first_contact_method = ""
+            lead.first_contact_result = ""
+            lead.first_contact_by = None
+            lead.first_contact_notes = ""
+            lead.assignment_email_sent_at = None
         # New Lead -> Assigned on (auto or manual) primary assignment.
         try:
             current = db.get(LeadStatus, lead.status_id) if lead.status_id else None
@@ -143,6 +226,9 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
                     ))
         except Exception:
             log.exception("assign status flip failed for lead %s", lead.id)
+        # Close approved reassignment workflow after manual assign.
+        if prior_owner is not None and prior_owner != emp.id:
+            fulfill_accepted_reassignment(db, lead, by)
     elif role == "TECHNICAL":
         lead.technical_employee_id = emp.id
     elif role == "SECONDARY":

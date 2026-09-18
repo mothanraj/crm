@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 
@@ -15,9 +16,20 @@ from app.schemas import LoginIn
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _db_down(exc: Exception) -> HTTPException:
+    return HTTPException(
+        503,
+        "Database unreachable. Check internet/DNS and DATABASE_URL "
+        "(Supabase project must be Active; prefer the pooler connection string).",
+    )
+
+
 @router.post("/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.email == body.email.lower().strip()).first()
+    try:
+        u = db.query(User).filter(User.email == body.email.lower().strip()).first()
+    except OperationalError as exc:
+        raise _db_down(exc) from exc
     if not u or not u.is_active or not verify_password(body.password, u.password_hash):
         raise HTTPException(401, "Invalid credentials")
     role = u.role.name if u.role else "EMPLOYEE"
@@ -31,7 +43,10 @@ def refresh(body: RefreshBody, db: Session = Depends(get_db)):
         uid = decode_token(body.refresh_token, "refresh")
     except (TokenExpired, TokenInvalid) as exc:
         raise HTTPException(401, str(exc)) from exc
-    u = db.get(User, uid)
+    try:
+        u = db.get(User, uid)
+    except OperationalError as exc:
+        raise _db_down(exc) from exc
     if not u or not u.is_active:
         raise HTTPException(401, "User inactive")
     # Rotation: every refresh mints a fresh pair.

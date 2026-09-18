@@ -53,9 +53,8 @@ def test_converted_completion_locks_employee_mutations(status_name, state, role,
         assert leads._owned_lead(db, lead.id, user) is lead
 
 
-@pytest.mark.parametrize("amount", ["0", "150000.50"])
+@pytest.mark.parametrize("amount", ["0", "150000"])
 def test_quotation_value_saved_on_lead_and_history(amount):
-    from decimal import Decimal
     status_id = uuid4()
     lead = SimpleNamespace(id=uuid4(), status_id=status_id, employee_remarks="Old remarks",
                            customer_review="A+ (Immediate)", sla_state="PENDING", first_contact_at=True,
@@ -66,8 +65,8 @@ def test_quotation_value_saved_on_lead_and_history(amount):
                         sla_state="PENDING", quotation_value=amount)
     with patch.object(leads, "_owned_lead", return_value=lead), patch.object(leads, "change_status"):
         result = leads.set_status(lead.id, body, db, SimpleNamespace(id=uuid4()))
-        assert lead.quotation_value == Decimal(amount)
-        assert db.add.call_args.args[0].quotation_value == Decimal(amount)
+        assert lead.quotation_value == int(amount)
+        assert db.add.call_args.args[0].quotation_value == int(amount)
         assert result["activity_recorded"] is True
         db.reset_mock()
         body.sla_state = "COMPLETED"
@@ -76,7 +75,7 @@ def test_quotation_value_saved_on_lead_and_history(amount):
         db.add.assert_not_called()
 
 
-@pytest.mark.parametrize("amount", ["-1", "NaN", "Infinity", "1.234"])
+@pytest.mark.parametrize("amount", ["-1", "NaN", "Infinity", "1.234", "150000.50"])
 def test_invalid_quotation_values_rejected(amount):
     from pydantic import ValidationError
     with pytest.raises(ValidationError):

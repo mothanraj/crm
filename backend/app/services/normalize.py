@@ -87,30 +87,62 @@ STATUS_ALIASES = {
 EMPLOYEE_ALIASES = {"ram kumar": "Ram", "sundarm": "Sundaram"}
 
 PRODUCT_ALIASES = {
+    # Two Post
     "two post stack parking": "Two Post Stack Parking",
     "two post stack parking system": "Two Post Stack Parking",
     "two_post_stack_parking": "Two Post Stack Parking",
     "two post stack parking.": "Two Post Stack Parking",
-    "1+1": "Two Post Stack Parking", "1+1 car parking": "Two Post Stack Parking", "1+1 car parking system": "Two Post Stack Parking", "two level stack": "Two Post Stack Parking",
-    "stack": "Two Post Stack Parking", "stack parking": "Two Post Stack Parking",
+    "1+1": "Two Post Stack Parking",
+    "1+1 car parking": "Two Post Stack Parking",
+    "1+1 car parking system": "Two Post Stack Parking",
+    "two level stack": "Two Post Stack Parking",
+    "stack": "Two Post Stack Parking",
+    "stack parking": "Two Post Stack Parking",
     "stack parking ": "Two Post Stack Parking",
-    "puzzle parking system": "Puzzle Parking System",
-    "puzzle_parking_system": "Puzzle Parking System", "puzzle parking": "Puzzle Parking System", "puzzle": "Puzzle Parking System",
-    "pit puzzle parking": "Pit / Fixed Stack Parking", "pit stack": "Pit / Fixed Stack Parking",
-    "pit stack parking system": "Pit / Fixed Stack Parking",
-    "three level stack parking": "Pit / Fixed Stack Parking",
-    "tower parking system": "Tower Parking System",
-    "tower_parking_system": "Tower Parking System", "tower": "Tower Parking System",
-    "shuttle": "Shuttle / Robotic Parking", "shuttle parking system": "Shuttle / Robotic Parking", "shuttle/robotic_parking_": "Shuttle / Robotic Parking",
-    "robotic shuttle": "Shuttle / Robotic Parking", "robotic / shuttle parking": "Shuttle / Robotic Parking",
-    "ss car parking (238 cars)": "Shuttle / Robotic Parking",
-    "car lift": "Pit / Fixed Stack Parking",
+    # Four Post / Pit Stack
+    "four post parking / pit stack parking": "Four Post Parking / Pit Stack Parking",
+    "four post parking": "Four Post Parking / Pit Stack Parking",
+    "four post": "Four Post Parking / Pit Stack Parking",
+    "pit stack parking": "Four Post Parking / Pit Stack Parking",
+    "pit / fixed stack parking": "Four Post Parking / Pit Stack Parking",
+    "pit stack": "Four Post Parking / Pit Stack Parking",
+    "pit stack parking system": "Four Post Parking / Pit Stack Parking",
+    "three level stack parking": "Four Post Parking / Pit Stack Parking",
+    # Puzzle / Pit Puzzle
+    "puzzle parking / pit puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
+    "puzzle parking system": "Puzzle Parking / Pit Puzzle Parking",
+    "puzzle_parking_system": "Puzzle Parking / Pit Puzzle Parking",
+    "puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
+    "puzzle": "Puzzle Parking / Pit Puzzle Parking",
+    "pit puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
+    "pit puzzle": "Puzzle Parking / Pit Puzzle Parking",
+    # Tower
+    "tower parking": "Tower Parking",
+    "tower parking system": "Tower Parking",
+    "tower_parking_system": "Tower Parking",
+    "tower": "Tower Parking",
+    # Shuttle
+    "shuttle parking": "Shuttle Parking",
+    "shuttle": "Shuttle Parking",
+    "shuttle parking system": "Shuttle Parking",
+    "shuttle / robotic parking": "Shuttle Parking",
+    "shuttle/robotic_parking_": "Shuttle Parking",
+    "robotic shuttle": "Shuttle Parking",
+    "robotic / shuttle parking": "Shuttle Parking",
+    "ss car parking (238 cars)": "Shuttle Parking",
+    # Car Elevator
+    "car elevator": "Car Elevator",
+    "car lift": "Car Elevator",
+    "car lift parking": "Car Elevator",
+    # ASRS
+    "asrs parking": "ASRS Parking",
+    "asrs": "ASRS Parking",
+    "mlcp / asrs / custom": "ASRS Parking",
+    "mlcp": "ASRS Parking",
 }
 
-CANONICAL_PRODUCTS = [
-    "Two Post Stack Parking", "Puzzle Parking System", "Tower Parking System",
-    "Shuttle / Robotic Parking", "Pit / Fixed Stack Parking", "MLCP / ASRS / Custom",
-]
+# Re-export from pricing so product master stays a single source of truth.
+from app.services.pricing import CANONICAL_PRODUCTS, PRODUCT_PRICES  # noqa: E402
 CANONICAL_SOURCES = [
     "Facebook/Instagram", "Google Ads", "India Mart", "Direct Call", "Referral",
     "WhatsApp", "Email Campaign", "Email Enquiry", "SEO", "Others", "Expo/Stall",
@@ -196,5 +228,11 @@ def parse_excel_date(v):
 def parse_quantity(raw: str):
     if not raw:
         return None
-    m = re.search(r"\d+", str(raw).replace(",", ""))
-    return float(m.group()) if m else None
+    s = str(raw).replace(",", "").strip()
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group())
+    except ValueError:
+        return None

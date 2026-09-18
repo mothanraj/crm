@@ -23,11 +23,12 @@ from app.models import (
 )
 from app.services import email_service, live
 from app.services.lead_service import auto_assign, next_enquiry_number
+from app.services.pricing import apply_pricing_to_lead
 
 log = logging.getLogger(__name__)
 from app.services.normalize import (
-    PRODUCT_ALIASES, SOURCE_ALIASES, canonical_source, is_valid_email, norm_key, norm_phone, parse_excel_date,
-    parse_quantity,
+    PRODUCT_ALIASES, SOURCE_ALIASES, canonical_source, is_valid_email, is_valid_phone,
+    norm_key, norm_phone, parse_excel_date, parse_quantity,
 )
 
 router = APIRouter(prefix="/api/import", tags=["import"])
@@ -143,11 +144,16 @@ def _norm_product(db: Session, raw: str) -> Product | None:
         return None
     k = norm_key(str(raw))
     canon = PRODUCT_ALIASES.get(k, str(raw).strip())
-    p = db.query(Product).filter(func.lower(Product.name) == canon.lower()).first()
+    p = db.query(Product).filter(
+        func.lower(Product.name) == canon.lower(), Product.is_active.is_(True),
+    ).first()
     if p:
         return p
     al = db.query(ProductAlias).filter(func.lower(ProductAlias.alias) == k).first()
-    return db.get(Product, al.product_id) if al else None
+    if not al:
+        return None
+    prod = db.get(Product, al.product_id)
+    return prod if prod and prod.is_active else None
 
 
 def _cell(r, idx):
@@ -190,26 +196,64 @@ def _serialize_error(e: ImportError) -> dict:
     }
 
 
+def classify_intake_row(
+    db: Session,
+    *,
+    name: str,
+    phone: str,
+    enq,
+    email: str,
+    seen_phones: set[str] | None = None,
+    seen_enqs: set[int] | None = None,
+) -> dict:
+    """Shared Excel + Google Sheets rules: duplicates vs invalid.
+
+    Duplicate (review, do not auto-create): same phone or enquiry no in this
+    batch or already in leads.
+    Invalid (review, do not auto-create): missing name, bad/missing phone,
+    missing enquiry no, or invalid email.
+    If both apply, duplicate wins so the admin sees the conflict first.
+    """
+    seen_phones = seen_phones or set()
+    seen_enqs = seen_enqs or set()
+    phone_n = norm_phone(phone or "")
+    legacy = parse_legacy_enq(enq)
+    email_v = (email or "").strip()
+    email_bad = bool(email_v) and not is_valid_email(email_v)
+    errs: list[str] = []
+    dups: list[str] = []
+    if not (name or "").strip():
+        errs.append("missing name")
+    if not is_valid_phone(phone or ""):
+        errs.append("missing/invalid phone")
+    elif phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        dups.append("duplicate phone")
+    if legacy is None:
+        errs.append("missing/invalid enquiry no")
+    elif legacy in seen_enqs or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
+        dups.append("duplicate enquiry no")
+    if email_bad:
+        errs.append("invalid email")
+    return {
+        "phone_norm": phone_n,
+        "legacy_enq": legacy,
+        "email_invalid": email_bad,
+        "dups": dups,
+        "errs": errs,
+        "reason": "DUPLICATE" if dups else ("INVALID" if errs else "OK"),
+        "messages": dups or errs,
+    }
+
+
 def _row_issue_messages(db: Session, raw: dict) -> list[str]:
-    msgs: list[str] = []
-    if not str(raw.get("name") or "").strip():
-        msgs.append("missing name")
-    phone_n = raw.get("phone_norm") or norm_phone(str(raw.get("phone") or ""))
-    if not phone_n:
-        msgs.append("missing/invalid phone")
-    elif db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-        msgs.append("duplicate phone")
-    legacy = raw.get("legacy_enq")
-    if legacy is None:
-        legacy = parse_legacy_enq(raw.get("enq"))
-    if legacy is None:
-        msgs.append("missing/invalid enquiry no")
-    elif db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-        msgs.append("duplicate enquiry no")
-    email_v = str(raw.get("email") or "").strip()
-    if email_v and not is_valid_email(email_v):
-        msgs.append("invalid email")
-    return msgs
+    classified = classify_intake_row(
+        db,
+        name=str(raw.get("name") or ""),
+        phone=str(raw.get("phone") or ""),
+        enq=raw.get("enq") if raw.get("legacy_enq") is None else raw.get("legacy_enq"),
+        email=str(raw.get("email") or ""),
+    )
+    return classified["messages"]
 
 
 def _assigned_date_str(db: Session, lead: Lead) -> str:
@@ -318,7 +362,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     if not phone:
         raise HTTPException(400, "Phone is required")
     phone_n = norm_phone(phone)
-    if not phone_n:
+    if not is_valid_phone(phone):
         raise HTTPException(400, "Invalid phone number")
     if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
         raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
@@ -372,6 +416,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 sla_state="PENDING",
                 created_by=admin.id,
             )
+            apply_pricing_to_lead(lead, product=prod)
             db.add(lead)
             db.flush()
             db.add(LeadStatusHistory(
@@ -448,42 +493,29 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "source": str(_cell(r, cols["source"]) or "").strip(),
             "product": str(_cell(r, cols["product"]) or "").strip(),
         }
-        phone_n = norm_phone(rec["phone"])
-        legacy = parse_legacy_enq(rec["enq"])
-        rec["legacy_enq"] = legacy
-        rec["phone_norm"] = phone_n
-        # Non-blocking flags: unmapped product + invalid email (warn, don't block import).
-        prod_raw = (rec.get("product") or "").strip()
-        rec["product_unmapped"] = bool(prod_raw) and _norm_product(db, prod_raw) is None
-        email_v = (rec.get("email") or "").strip()
-        rec["email_invalid"] = bool(email_v) and not is_valid_email(email_v)
+        rec["legacy_enq"] = None
+        rec["phone_norm"] = ""
+        rec["product_unmapped"] = bool((rec.get("product") or "").strip()) and _norm_product(db, rec["product"]) is None
+        classified = classify_intake_row(
+            db, name=rec["name"], phone=rec["phone"], enq=rec["enq"], email=rec["email"],
+            seen_phones=seen_phones, seen_enqs=seen_enqs,
+        )
+        rec["legacy_enq"] = classified["legacy_enq"]
+        rec["phone_norm"] = classified["phone_norm"]
+        rec["email_invalid"] = classified["email_invalid"]
 
-        errs: list[str] = []
-        dup_reasons: list[str] = []
-        if not rec["name"]:
-            errs.append("missing name")
-        if phone_n:
-            if phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-                dup_reasons.append("duplicate phone")
-        else:
-            errs.append("missing/invalid phone")
-        if legacy is None:
-            errs.append("missing/invalid enquiry no")
-        else:
-            if legacy in seen_enqs or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-                dup_reasons.append("duplicate enquiry no")
-
-        if dup_reasons:
+        if classified["dups"]:
             rec["dup"] = True
-            rec["errors"] = dup_reasons
+            rec["errors"] = classified["dups"]
             duplicates.append(rec)
-        elif errs:
-            rec["errors"] = errs
+        elif classified["errs"]:
+            rec["errors"] = classified["errs"]
             invalids.append(rec)
         else:
-            if phone_n:
-                seen_phones.add(phone_n)
-            seen_enqs.add(legacy)  # type: ignore[arg-type]
+            if classified["phone_norm"]:
+                seen_phones.add(classified["phone_norm"])
+            if classified["legacy_enq"] is not None:
+                seen_enqs.add(classified["legacy_enq"])
         preview.append(rec)
 
     batch = ImportBatch(
@@ -505,7 +537,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "enquiry no", "received date", "name", "company/organisation (optional)",
             "contact no", "city", "no. of cars", "lead source", "product/type", "email",
         ],
-        "note": "Only listed columns are imported (email included). Invalid emails warn but don't block; admin can Correct in review. Admin can review duplicates/invalid and Add to leads or Delete.",
+        "note": "Only listed columns are imported. Duplicate phone/enquiry no and invalid name, phone, enquiry no, or email are held for admin review (same rules as Google Sheets). Unmapped product names still import as-is.",
     }
 
 
@@ -532,6 +564,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                 batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
                 error="duplicate enquiry no", reason="DUPLICATE",
             ))
+            batch.duplicates += 1
             continue
         phone_n = rec.get("phone_norm") or norm_phone(str(rec.get("phone") or ""))
         if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
@@ -539,6 +572,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                 batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
                 error="duplicate phone", reason="DUPLICATE",
             ))
+            batch.duplicates += 1
             continue
 
         cars = str(rec.get("cars") or "")
@@ -571,6 +605,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                     sla_state="PENDING",
                     created_by=admin.id,
                 )
+                apply_pricing_to_lead(lead, product=prod)
                 db.add(lead)
                 db.flush()
                 db.add(LeadStatusHistory(
@@ -583,8 +618,9 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
         except IntegrityError:
             db.add(ImportError(
                 batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error="duplicate enquiry no", reason="DUPLICATE",
+                error="duplicate enquiry no or phone", reason="DUPLICATE",
             ))
+            batch.duplicates += 1
             continue
         if emp:
             assigned += 1
@@ -614,11 +650,18 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
 
 @router.get("/batches")
 def list_batches(db: Session = Depends(get_db), _: User = Depends(admin_only), limit: int = 20):
-    rows = db.query(ImportBatch).order_by(ImportBatch.created_at.desc()).limit(limit).all()
+    rows = (
+        db.query(ImportBatch)
+        .filter(ImportBatch.status != "SYNCED")
+        .order_by(ImportBatch.created_at.desc())
+        .limit(limit)
+        .all()
+    )
     return [{
         "id": str(b.id), "file_name": b.file_name, "sheet_name": b.sheet_name,
         "status": b.status, "total_rows": b.total_rows, "imported": b.imported,
         "duplicates": b.duplicates, "invalid": b.invalid,
+        "source": "sheets" if (b.file_name or "").startswith("sheets:") else "excel",
         "created_at": b.created_at.isoformat() if b.created_at else None,
     } for b in rows]
 

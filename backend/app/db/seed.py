@@ -9,6 +9,7 @@ from app.models import AssignmentState, EnquirySequence, Lead, LeadSource, LeadS
 from app.services.normalize import (
     CANONICAL_SOURCES, CANONICAL_STATUSES, CANONICAL_PRODUCTS, PRODUCT_ALIASES,
 )
+from app.services.pricing import PRODUCT_PRICES
 
 
 def run():
@@ -30,14 +31,28 @@ def run():
         for i, s in enumerate(CANONICAL_SOURCES):
             if not db.query(LeadSource).filter_by(name=s).first():
                 db.add(LeadSource(name=s, sort_order=i))
-        for p in CANONICAL_PRODUCTS:
-            if not db.query(Product).filter_by(name=p).first():
-                db.add(Product(name=p))
+        for p_name in CANONICAL_PRODUCTS:
+            price = PRODUCT_PRICES.get(p_name, 0)
+            existing = db.query(Product).filter_by(name=p_name).first()
+            if not existing:
+                db.add(Product(name=p_name, price_per_car=price, is_active=True))
+            else:
+                existing.price_per_car = price
+                existing.is_active = True
         db.flush()
-        pmap = {p.name: p for p in db.query(Product).all()}
+        # Hide any products outside the official 7
+        for p in db.query(Product).all():
+            if p.name not in PRODUCT_PRICES:
+                p.is_active = False
+        pmap = {p.name: p for p in db.query(Product).filter_by(is_active=True).all()}
         for alias, canon in PRODUCT_ALIASES.items():
-            if not db.query(ProductAlias).filter_by(alias=alias).first() and canon in pmap:
+            al = db.query(ProductAlias).filter_by(alias=alias).first()
+            if canon not in pmap:
+                continue
+            if not al:
                 db.add(ProductAlias(product_id=pmap[canon].id, alias=alias))
+            else:
+                al.product_id = pmap[canon].id
         if not db.query(User).filter_by(email=settings.ADMIN_EMAIL).first():
             db.add(User(name=settings.ADMIN_NAME, email=settings.ADMIN_EMAIL,
                         password_hash=hash_password(settings.ADMIN_PASSWORD),
@@ -48,7 +63,6 @@ def run():
             db.add(EnquirySequence(last_number=0))
         db.flush()
         # Backfill: leads already assigned but still "New Lead" -> "Assigned".
-        # Covers data created before the Assigned status existed.
         try:
             new_st = db.query(LeadStatus).filter_by(name="New Lead").first()
             assigned_st = db.query(LeadStatus).filter_by(name="Assigned").first()

@@ -4,5 +4,6 @@ node_modules/
 dist/
 .venv/
 .env
+.qa_ctx.json
 storage/*
 !.gitkeep

@@ -62,10 +62,22 @@ class LeadUpdate(BaseModel):
     requirement: Optional[str] = None
     next_followup_at: Optional[datetime] = None
     customer_review: Optional[str] = None
+    product_id: Optional[UUID] = None
+    quantity_raw: Optional[str] = None
+    # lead_value / price_per_car / gst_amount are server-calculated — ignored if sent
+    lead_value: Optional[Decimal] = None
+    price_per_car: Optional[Decimal] = None
+    gst_amount: Optional[Decimal] = None
+
+
+class LeadValueCalcIn(BaseModel):
+    product_id: Optional[UUID] = None
+    number_of_cars: Optional[Decimal] = None
+    quantity_raw: Optional[str] = None
 
 
 class StatusChange(BaseModel):
-    quotation_value: Optional[Decimal] = Field(default=None, ge=0, max_digits=16, decimal_places=2)
+    quotation_value: Optional[Decimal] = Field(default=None, ge=0, max_digits=16, decimal_places=0)
     new_status_id: UUID
     reason: str = ""  # remarks — required when employee updates work progress
     method: str = "Call"  # used if this is also the first contact
@@ -76,6 +88,14 @@ class StatusChange(BaseModel):
 class AssignIn(BaseModel):
     employee_id: UUID
     role: str = "PRIMARY"
+
+
+class ReassignRequestIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class ReassignDecisionIn(BaseModel):
+    note: str = ""
 
 
 class ContactIn(BaseModel):
