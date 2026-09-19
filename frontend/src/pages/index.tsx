@@ -37,13 +37,26 @@ function inr(n: any) {
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
 }
 
-/** Opens Gmail compose with To: prefilled to the customer email. */
+/** Opens Gmail web compose in a new browser tab (not the desktop mail app). */
 function openCustomerGmail(email: string, enquiry?: string) {
   const to = (email || '').trim();
   if (!to) return;
-  const params = new URLSearchParams({ view: 'cm', fs: '1', to });
+  const params = new URLSearchParams({
+    view: 'cm',
+    fs: '1',
+    tf: '1',
+    to,
+  });
   if (enquiry) params.set('su', `Regarding your enquiry ${enquiry}`);
-  window.open(`https://mail.google.com/mail/?${params.toString()}`, '_blank', 'noopener,noreferrer');
+  // /mail/u/0/ keeps this on Gmail web in the browser tab.
+  const url = `https://mail.google.com/mail/u/0/?${params.toString()}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function previewLeadValue(pricePerCar: any, cars: any) {
@@ -157,30 +170,21 @@ export function Dashboard() {
   const [d, setD] = useState<any>(null);
   const [src, setSrc] = useState<any>(null);
   const [products, setProducts] = useState<any>(null);
-  const [monthly, setMonthly] = useState<any[]>([]);
   const [error, setError] = useState('');
-  const [dlError, setDlError] = useState('');
   const [showLatest, setShowLatest] = useState(false);
   const [loading, setLoading] = useState(true);
-  const dl = async (path: string, filename: string, params?: Record<string, string>) => {
-    setDlError('');
-    try { await downloadReport(path, filename, params); }
-    catch (e: any) { setDlError(e?.message || 'Download failed'); }
-  };
   const load = () => {
     setLoading(true); setError('');
     Promise.allSettled([
       api.get('/dashboard'),
       api.get('/dashboard/by-source'),
-      api.get('/reports/monthly'),
       api.get('/dashboard/by-product'),
-    ]).then(([dr, sr, mr, pr]) => {
+    ]).then(([dr, sr, pr]) => {
       if (dr.status === 'fulfilled') setD(dr.value.data);
       else setError(dr.reason?.response?.data?.detail || 'Failed to load dashboard. Check backend / login again.');
       if (sr.status === 'fulfilled') setSrc(sr.value.data);
       if (pr.status === 'fulfilled') setProducts(pr.value.data);
       else setError('Could not load product data. Please refresh the dashboard.');
-      if (mr.status === 'fulfilled') setMonthly(Array.isArray(mr.value.data) ? mr.value.data : []);
     }).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
@@ -217,7 +221,7 @@ export function Dashboard() {
   if (error && !d) {
     return (
       <div>
-        <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and monthly volume from live database data." />
+        <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, source mix and product data from live database." />
         <div className="card p-8 text-center">
           <p className="font-medium text-graphite-700">Could not load dashboard</p>
           <p className="text-sm text-graphite-500 mt-1">{error}</p>
@@ -246,12 +250,9 @@ export function Dashboard() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and monthly volume from live database data." />
+      <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and product data from live database." />
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
-      )}
-      {dlError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">❌ {dlError}</div>
       )}
       <div className="grid lg:grid-cols-2 gap-5">
         <div className="space-y-5">
@@ -369,36 +370,6 @@ export function Dashboard() {
                 </ResponsiveContainer>
               </div>
             )}
-          </Card>
-          <Card title="Monthly Lead Volume" action={
-            <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
-              Download
-            </button>
-          }>
-            {monthly.length === 0 ? <EmptyState title="No dated leads" /> : (
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <BarChart data={monthly}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                    <Tooltip /><Legend />
-                    <Bar dataKey="leads" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="quotation_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-            {monthly.length > 0 && <div className="overflow-x-auto mt-4">
-              <table className="w-full text-xs">
-                <thead><tr className="bg-graphite-100"><th className="th">Month</th><th className="th">Sources</th><th className="th">Products</th></tr></thead>
-                <tbody>{monthly.map((row: any, i: number) => <tr key={row.month_key} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}><td className="td font-medium">{row.month}</td><td className="td">{row.sources}</td><td className="td">{row.products}</td></tr>)}</tbody>
-              </table>
-            </div>}
           </Card>
         </div>
       </div>
@@ -958,7 +929,7 @@ export function Leads() {
                       <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
                       <div className="text-xs mt-0.5 break-all">
                         {l.email
-                          ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a>
+                          ? <button type="button" className="text-brand-700 hover:underline text-left break-all" onClick={() => openCustomerGmail(l.email, l.enquiry_number)}>{l.email}</button>
                           : <span className="text-graphite-400">No email</span>}
                       </div>
                     </td>
@@ -968,7 +939,7 @@ export function Leads() {
                           type="button"
                           className="btn-secondary !px-2 !py-1 text-xs"
                           disabled={!l.email}
-                          title={l.email ? `Email ${l.email} via Gmail` : 'No customer email on this lead'}
+                          title={l.email ? `Open Gmail web compose to ${l.email}` : 'No customer email on this lead'}
                           onClick={() => openCustomerGmail(l.email, l.enquiry_number)}
                         >
                           ✉️ Email
@@ -1118,9 +1089,24 @@ export function EmployeeLeads() {
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const statusOf = (l: any) => {
+    const s = nameOf('statuses', l.status_id);
+    return s === 'New Lead' && l.primary_employee_id ? 'Assigned' : s;
+  };
   const needsContact = items.filter((l) => !l.first_contact_at).length;
   const overdue = items.filter((l) => l.sla_state === 'OVERDUE').length;
   const done = items.filter((l) => !!l.first_contact_at).length;
+  const workActionCounts = workActionOptions.map((label) => ({
+    label,
+    value: items.filter((l) => statusOf(l) === label).length,
+  }));
+  const reviewCounts = reviewOptions.map((label) => ({
+    label,
+    value: items.filter((l) => (l.customer_review || '') === label).length,
+  }));
+  const unreviewed = items.filter((l) => !(l.customer_review || '').trim()).length;
   return (
     <div>
       <PageHeader title="Employee Leads" subtitle="Select an employee to see all data of their assigned customers." />
@@ -1149,6 +1135,32 @@ export function EmployeeLeads() {
                 <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
               </div>
             ))}
+          </div>
+          <div className="mb-4">
+            <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {workActionCounts.map((s) => (
+                <div key={s.label} className="card p-4 text-center">
+                  <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                  <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4">
+            <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              {reviewCounts.map((s) => (
+                <div key={s.label} className="card p-4 text-center">
+                  <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                  <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+                </div>
+              ))}
+              <div className="card p-4 text-center">
+                <div className="text-2xl font-bold text-graphite-900 tabular-nums">{unreviewed}</div>
+                <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">Unreviewed</div>
+              </div>
+            </div>
           </div>
           <div className="card overflow-hidden">
             <div className="overflow-x-auto">
@@ -1377,7 +1389,7 @@ export function LeadDetail({ id }: { id: string }) {
             <input className="input mt-1 bg-graphite-50 font-semibold" readOnly value={inr(preview.lead_value ?? l.lead_value)} />
           </div>
         </div>
-        <p className="text-xs text-graphite-500 mt-3">Lead Value = Cars × Price/Car (excl. GST). GST 18% is shown separately. Calculated and stored by the server — not editable.</p>
+        <p className="text-xs text-graphite-500 mt-3">Lead Value = Cars × Price/Car (excl. GST). For Two Post, Four Post and Pit Stack Parking, Lead Value is half of that. GST 18% is shown separately. Calculated by the server — not editable.</p>
         {canEditPricing && (
           <button type="button" className="btn-primary mt-3" disabled={pricingBusy} onClick={savePricing}>
             {pricingBusy ? 'Saving…' : 'Save product & cars'}
@@ -1973,10 +1985,23 @@ export function Reports() {
     mode: 'custom', month: defaultMonth, week: defaultWeek, fromDate: '', toDate: '',
   });
 
+  type ReportId = 'source' | 'product' | 'lead_value' | 'quotation' | 'employee' | 'monthly';
+  const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
+    { id: 'source', title: 'Lead Source Report', description: 'Leads by source with follow-up, meeting, site visit and quotation counts, plus chart.', accent: 'bg-[#1e3a5f]' },
+    { id: 'product', title: 'Product Wise Report', description: 'Product funnel table plus product-wise lead bar chart.', accent: 'bg-[#0f766e]' },
+    { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product and period with charts.', accent: 'bg-[#3F6212]' },
+    { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
+    { id: 'employee', title: 'Employee Workload Report', description: 'Assigned lead count per employee.', accent: 'bg-[#334155]' },
+    { id: 'monthly', title: 'Monthly Lead Volume', description: 'Pick a month range, view the chart and table, then download Excel or PDF.', accent: 'bg-[#4338ca]' },
+  ];
+
+  const [activeReport, setActiveReport] = useState<ReportId | null>(null);
+
   const [lvFilter, setLvFilter] = useState<ReportFilter>(emptyFilter);
   const [quoteFilter, setQuoteFilter] = useState<ReportFilter>(emptyFilter);
   const [sourceFilter, setSourceFilter] = useState<ReportFilter>(emptyFilter);
   const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
+  const [monthlyFilter, setMonthlyFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
 
   const [leadValueReport, setLeadValueReport] = useState<any>(null);
   const [quotationReport, setQuotationReport] = useState<any>(null);
@@ -1984,17 +2009,22 @@ export function Reports() {
   const [productDetails, setProductDetails] = useState<any>(null);
   const [prod, setProd] = useState<any[]>([]);
   const [emp, setEmp] = useState<any[]>([]);
+  const [monthlyRows, setMonthlyRows] = useState<any[]>([]);
 
   const [lvBusy, setLvBusy] = useState(false);
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [productBusy, setProductBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [empBusy, setEmpBusy] = useState(false);
+  const [monthlyBusy, setMonthlyBusy] = useState(false);
 
   const [lvErr, setLvErr] = useState('');
   const [quoteErr, setQuoteErr] = useState('');
   const [sourceErr, setSourceErr] = useState('');
   const [productErr, setProductErr] = useState('');
+  const [empErr, setEmpErr] = useState('');
+  const [monthlyErr, setMonthlyErr] = useState('');
 
   const apiErr = (e: any, fallback: string) => {
     const d = e?.response?.data?.detail;
@@ -2080,14 +2110,47 @@ export function Reports() {
     } finally { setProductBusy(false); }
   };
 
+  const loadEmployees = async () => {
+    setEmpBusy(true); setEmpErr('');
+    try {
+      const { data } = await api.get('/reports/employee-wise');
+      setEmp(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setEmpErr(apiErr(e, 'Employee report failed'));
+    } finally { setEmpBusy(false); }
+  };
+
+  const monthlyParams = (f = monthlyFilter): Record<string, string> => {
+    const p: Record<string, string> = {};
+    if (f.fromMonth) p.from_month = f.fromMonth;
+    if (f.toMonth) p.to_month = f.toMonth;
+    return p;
+  };
+
+  const loadMonthly = async (f = monthlyFilter) => {
+    if (f.fromMonth && f.toMonth && f.fromMonth > f.toMonth) {
+      setMonthlyErr('From month must be on or before To month.');
+      return;
+    }
+    setMonthlyBusy(true); setMonthlyErr('');
+    try {
+      const { data } = await api.get('/reports/monthly', { params: monthlyParams(f) });
+      setMonthlyRows(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setMonthlyErr(apiErr(e, 'Monthly report failed'));
+    } finally { setMonthlyBusy(false); }
+  };
+
   useEffect(() => {
-    api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => {});
-    void loadLeadValue();
-    void loadQuotations();
-    void loadSource();
-    void loadProduct();
+    if (!activeReport) return;
+    if (activeReport === 'lead_value') void loadLeadValue();
+    if (activeReport === 'quotation') void loadQuotations();
+    if (activeReport === 'source') void loadSource();
+    if (activeReport === 'product') void loadProduct();
+    if (activeReport === 'employee') void loadEmployees();
+    if (activeReport === 'monthly') void loadMonthly();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeReport]);
 
   const dl = async (path: string, filename: string, params: Record<string, string>, setErr: (s: string) => void) => {
     try {
@@ -2097,18 +2160,35 @@ export function Reports() {
     }
   };
 
-  const downloadPdf = async (kind: 'source' | 'product' | 'lead_value' | 'quotation', f: ReportFilter, setErr: (s: string) => void) => {
-    const v = validate(f);
-    if (v) { setErr(v); return; }
+  const downloadPdf = async (
+    kind: 'source' | 'product' | 'lead_value' | 'quotation' | 'monthly',
+    f: ReportFilter | { fromMonth: string; toMonth: string },
+    setErr: (s: string) => void,
+  ) => {
     setPdfBusy(true); setErr('');
     const names = {
       source: 'lead-source-report.pdf',
       product: 'product-wise-report.pdf',
       lead_value: 'lead-value-report.pdf',
       quotation: 'quotation-report.pdf',
+      monthly: 'monthly-lead-volume.pdf',
     };
     try {
-      await downloadReport('/reports/pdf', names[kind], { ...toParams(f), report_type: kind });
+      const params = kind === 'monthly'
+        ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
+        : { ...toParams(f as ReportFilter), report_type: kind };
+      if (kind !== 'monthly') {
+        const v = validate(f as ReportFilter);
+        if (v) { setErr(v); setPdfBusy(false); return; }
+      } else {
+        const mf = f as { fromMonth: string; toMonth: string };
+        if (mf.fromMonth && mf.toMonth && mf.fromMonth > mf.toMonth) {
+          setErr('From month must be on or before To month.');
+          setPdfBusy(false);
+          return;
+        }
+      }
+      await downloadReport('/reports/pdf', names[kind], params);
     } catch (e: any) {
       const response = e?.response?.data;
       if (response instanceof Blob) {
@@ -2180,296 +2260,483 @@ export function Reports() {
 
   const lvPeriod = leadValueReport?.by_period || [];
   const lvProducts = leadValueReport?.by_product || [];
+  const activeMeta = REPORT_MENU.find((r) => r.id === activeReport);
+
+  if (!activeReport) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Reports"
+          subtitle="Choose a report to open its table, charts and downloads."
+        />
+        <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4 items-stretch">
+          {REPORT_MENU.map((report) => (
+            <button
+              key={report.id}
+              type="button"
+              className="card text-left p-0 overflow-hidden h-full flex flex-col hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-brand-500"
+              onClick={() => setActiveReport(report.id)}
+            >
+              <div className={`${report.accent} text-white px-5 py-3 font-semibold tracking-wide min-h-[52px] flex items-center`}>
+                {report.title}
+              </div>
+              <div className="p-5 flex flex-col flex-1 gap-3">
+                <p className="text-sm text-graphite-600 leading-relaxed flex-1 min-h-[64px]">{report.description}</p>
+                <span className="text-sm font-semibold text-brand-700 mt-auto">Open report →</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Reports"
-        subtitle="Each report has its own date filter — changing one does not affect the others."
+        title={activeMeta?.title || 'Report'}
+        subtitle={activeMeta?.description || ''}
+        actions={
+          <button type="button" className="btn-secondary" onClick={() => setActiveReport(null)}>
+            Close
+          </button>
+        }
       />
 
-      <div className="card overflow-hidden">
-        <div className="bg-[#3F6212] text-white px-5 py-3 font-semibold tracking-wide">LEAD VALUE REPORT</div>
-        <div className="p-5 space-y-4">
-          {filterBar(
-            lvFilter, setLvFilter, lvBusy, () => loadLeadValue(lvFilter),
-            () => dl('/reports/lead-value/export', 'lead-value-report.xlsx', toParams(lvFilter), setLvErr),
-            !leadValueReport,
-            () => downloadPdf('lead_value', lvFilter, setLvErr),
-          )}
-          {lvErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{lvErr}</div>}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {[
-              { label: 'Total Lead Value', value: inr(leadValueReport?.total_lead_value) },
-              { label: 'Total Leads', value: leadValueReport?.total_leads ?? '—' },
-              { label: 'Total Cars', value: leadValueReport?.total_cars != null ? Number(leadValueReport.total_cars).toLocaleString('en-IN') : '—' },
-              { label: 'Average Lead Value', value: inr(leadValueReport?.average_lead_value) },
-            ].map((k) => (
-              <div key={k.label} className="bg-graphite-50 border border-graphite-200 rounded-lg p-3 text-center">
-                <div className="text-base font-bold text-graphite-900 tabular-nums">{k.value}</div>
-                <div className="text-[10px] uppercase tracking-wide text-graphite-500 mt-1">{k.label}</div>
+      {activeReport === 'lead_value' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#3F6212] text-white px-5 py-3 font-semibold tracking-wide">LEAD VALUE REPORT</div>
+          <div className="p-5 space-y-4">
+            {filterBar(
+              lvFilter, setLvFilter, lvBusy, () => loadLeadValue(lvFilter),
+              () => dl('/reports/lead-value/export', 'lead-value-report.xlsx', toParams(lvFilter), setLvErr),
+              !leadValueReport,
+              () => downloadPdf('lead_value', lvFilter, setLvErr),
+            )}
+            {lvErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{lvErr}</div>}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { label: 'Total Lead Value', value: inr(leadValueReport?.total_lead_value) },
+                { label: 'Total Leads', value: leadValueReport?.total_leads ?? '—' },
+                { label: 'Total Cars', value: leadValueReport?.total_cars != null ? Number(leadValueReport.total_cars).toLocaleString('en-IN') : '—' },
+                { label: 'Average Lead Value', value: inr(leadValueReport?.average_lead_value) },
+              ].map((k) => (
+                <div key={k.label} className="bg-graphite-50 border border-graphite-200 rounded-lg p-3 text-center">
+                  <div className="text-base font-bold text-graphite-900 tabular-nums">{k.value}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-graphite-500 mt-1">{k.label}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid lg:grid-cols-2 gap-4">
+              <div>
+                <h3 className="text-sm font-semibold text-graphite-700 mb-2">Lead Value by Product</h3>
+                {lvProducts.every((r: any) => !r.lead_value) ? <EmptyState title="No lead value in this range" /> : (
+                  <div className="h-72">
+                    <ResponsiveContainer>
+                      <BarChart data={lvProducts} margin={{ top: 8, right: 8, left: 0, bottom: 56 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="product" interval={0} angle={-25} textAnchor="end" height={60} tick={{ fontSize: 9 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                        <Tooltip formatter={(v: any) => inr(v)} />
+                        <Bar dataKey="lead_value" name="Lead Value" fill="#3F6212" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
-          <div className="grid lg:grid-cols-2 gap-4">
-            <div>
-              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Lead Value by Product</h3>
-              {lvProducts.every((r: any) => !r.lead_value) ? <EmptyState title="No lead value in this range" /> : (
-                <div className="h-72">
-                  <ResponsiveContainer>
-                    <BarChart data={lvProducts} margin={{ top: 8, right: 8, left: 0, bottom: 56 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="product" interval={0} angle={-25} textAnchor="end" height={60} tick={{ fontSize: 9 }} />
-                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
-                      <Tooltip formatter={(v: any) => inr(v)} />
-                      <Bar dataKey="lead_value" name="Lead Value" fill="#3F6212" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
+              <div>
+                <h3 className="text-sm font-semibold text-graphite-700 mb-2">
+                  {lvFilter.mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
+                </h3>
+                {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
+                  <div className="h-72">
+                    <ResponsiveContainer>
+                      <BarChart data={lvPeriod} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} tick={{ fontSize: 9 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                        <Tooltip formatter={(v: any) => inr(v)} />
+                        <Bar dataKey="lead_value" name="Lead Value" fill="#65A30D" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
             </div>
-            <div>
-              <h3 className="text-sm font-semibold text-graphite-700 mb-2">
-                {lvFilter.mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
-              </h3>
-              {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
-                <div className="h-72">
-                  <ResponsiveContainer>
-                    <BarChart data={lvPeriod} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} tick={{ fontSize: 9 }} />
-                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
-                      <Tooltip formatter={(v: any) => inr(v)} />
-                      <Bar dataKey="lead_value" name="Lead Value" fill="#65A30D" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
+            {lvPeriod.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] text-sm text-center">
+                  <thead><tr className="bg-graphite-100">
+                    <th className="th text-center">Period</th>
+                    <th className="th text-center">Leads</th>
+                    <th className="th text-center">Lead Value</th>
+                  </tr></thead>
+                  <tbody>
+                    {lvPeriod.map((r: any) => (
+                      <tr key={r.period} className="hover:bg-graphite-50">
+                        <td className="td text-center">{r.label}</td>
+                        <td className="td text-center">{r.leads}</td>
+                        <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-          {lvPeriod.length > 0 && (
+        </div>
+      )}
+
+      {activeReport === 'quotation' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#b45309] text-white px-5 py-3 font-semibold tracking-wide">QUOTATION REPORT</div>
+          <div className="p-5 space-y-4">
+            {filterBar(
+              quoteFilter, setQuoteFilter, quoteBusy, () => loadQuotations(quoteFilter),
+              () => dl('/reports/quotations/export', 'quotation-report.xlsx', toParams(quoteFilter), setQuoteErr),
+              !quotationReport,
+              () => downloadPdf('quotation', quoteFilter, setQuoteErr),
+            )}
+            {quoteErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{quoteErr}</div>}
+            {quotationReport && (
+              <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+                <span><b>Effective From:</b> {quotationReport.effective_from || 'All time'}</span>
+                <span><b>Effective To:</b> {quotationReport.effective_to || 'All time'}</span>
+                <span><b>Quotations:</b> {quotationReport.totals?.count ?? 0}</span>
+              </div>
+            )}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[480px] text-sm text-center">
-                <thead><tr className="bg-graphite-100">
-                  <th className="th text-center">Period</th>
-                  <th className="th text-center">Leads</th>
-                  <th className="th text-center">Lead Value</th>
-                </tr></thead>
+              <table className="w-full min-w-[980px] text-sm text-center">
+                <thead>
+                  <tr className="bg-amber-300 text-graphite-900">
+                    <th className="th !bg-transparent !text-center underline">S.No</th>
+                    <th className="th !bg-transparent !text-center">Date</th>
+                    <th className="th !bg-transparent !text-center">Enquiry No</th>
+                    <th className="th !bg-transparent !text-center">Customer Name</th>
+                    <th className="th !bg-transparent !text-center">State</th>
+                    <th className="th !bg-transparent !text-center">Parking Type</th>
+                    <th className="th !bg-transparent !text-center">No. of Units/Cars</th>
+                    <th className="th !bg-transparent !text-center">Order Value (Excl GST)</th>
+                    <th className="th !bg-transparent !text-center">GST</th>
+                    <th className="th !bg-transparent !text-center">Grand Total</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {lvPeriod.map((r: any) => (
-                    <tr key={r.period} className="hover:bg-graphite-50">
-                      <td className="td text-center">{r.label}</td>
-                      <td className="td text-center">{r.leads}</td>
-                      <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                  {(quotationReport?.rows || []).map((r: any, i: number) => (
+                    <tr key={`${r.enquiry_number}-${i}`} className={i % 2 ? 'bg-amber-50/50' : 'bg-white'}>
+                      <td className="td text-center">{i + 1}</td>
+                      <td className="td text-center whitespace-nowrap">{r.date || '—'}</td>
+                      <td className="td text-center font-medium">{r.enquiry_number || '—'}</td>
+                      <td className="td text-center">{r.customer_name || '—'}</td>
+                      <td className="td text-center">{r.state || '—'}</td>
+                      <td className="td text-center">{r.parking_type || '—'}</td>
+                      <td className="td text-center">{r.units ?? '—'}</td>
+                      <td className="td text-center tabular-nums font-medium">{inr(r.order_value_excl_gst)}</td>
+                      <td className="td text-center tabular-nums">{inr(r.gst)}</td>
+                      <td className="td text-center tabular-nums font-semibold">{inr(r.grand_total)}</td>
+                    </tr>
+                  ))}
+                  {quotationReport?.totals && (quotationReport.rows || []).length > 0 && (
+                    <tr className="bg-graphite-100 font-bold">
+                      <td className="td text-center" colSpan={6}>TOTAL</td>
+                      <td className="td text-center" />
+                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.order_value_excl_gst)}</td>
+                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.gst)}</td>
+                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.grand_total)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {quotationReport && !(quotationReport.rows || []).length && (
+                <EmptyState title="No quotations in this range" hint="Mark leads as Quotation sent with a value, or add quotation rows." />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeReport === 'source' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">LEAD SOURCE REPORT</div>
+          <div className="p-5 space-y-4">
+            {filterBar(
+              sourceFilter, setSourceFilter, sourceBusy, () => loadSource(sourceFilter),
+              () => {
+                const p = toParams(sourceFilter);
+                const name = sourceFilter.mode === 'month'
+                  ? `leads-by-source-${sourceFilter.month}.xlsx`
+                  : sourceFilter.mode === 'week'
+                    ? `leads-by-source-week-${sourceFilter.week}.xlsx`
+                    : `leads-by-source-${sourceFilter.fromDate || 'all'}_to_${sourceFilter.toDate || 'all'}.xlsx`;
+                return dl('/reports/source-details/export', name, p, setSourceErr);
+              },
+              !details,
+              () => downloadPdf('source', sourceFilter, setSourceErr),
+            )}
+            {sourceErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sourceErr}</div>}
+            {details && (
+              <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+                <span><b>Effective From:</b> {details.effective_from || 'All time'}</span>
+                <span><b>Effective To:</b> {details.effective_to || 'All time'}</span>
+              </div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[960px] text-sm text-center">
+                <thead>
+                  <tr className="bg-[#1e3a5f] text-white">
+                    <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
+                    <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                    <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                    <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                    <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                    <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                    <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(details?.rows || []).map((r: any, i: number) => (
+                    <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
+                      <td className="td font-medium text-center">{r.source}</td>
+                      <td className="td font-bold text-center">{r.total}</td>
+                      <td className="td text-center">{r.in_followup}</td>
+                      <td className="td text-center">{r.meeting}</td>
+                      <td className="td text-center">{r.site_visit}</td>
+                      <td className="td text-center">{r.quote_sent}</td>
+                      <td className="td text-center">{r.not_interested}</td>
+                    </tr>
+                  ))}
+                  {details?.totals && (
+                    <tr className="bg-graphite-100 font-bold">
+                      <td className="td text-center">TOTAL</td>
+                      <td className="td text-center">{details.totals.total}</td>
+                      <td className="td text-center">{details.totals.in_followup}</td>
+                      <td className="td text-center">{details.totals.meeting}</td>
+                      <td className="td text-center">{details.totals.site_visit}</td>
+                      <td className="td text-center">{details.totals.quote_sent}</td>
+                      <td className="td text-center">{details.totals.not_interested}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {!details && !sourceBusy && <EmptyState title="Apply a date range to load the report" />}
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Leads by Source</h3>
+              {!(details?.rows || []).some((r: any) => r.total > 0) ? <EmptyState title="No source data to chart" /> : (
+                <div className="h-80">
+                  <ResponsiveContainer>
+                    <BarChart data={(details?.rows || []).filter((r: any) => r.total > 0)} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="source" interval={0} angle={-20} textAnchor="end" height={56} tick={{ fontSize: 10 }} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                      <Tooltip /><Legend />
+                      <Bar dataKey="total" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="quote_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeReport === 'product' && (
+        <div className="space-y-4">
+          <div className="card overflow-hidden">
+            <div className="bg-[#0f766e] text-white px-5 py-3 font-semibold tracking-wide">PRODUCT WISE REPORT</div>
+            <div className="p-5 space-y-4">
+              {filterBar(
+                productFilter, setProductFilter, productBusy, () => loadProduct(productFilter),
+                () => dl('/reports/product-details/export', 'product-wise-details.xlsx', toParams(productFilter), setProductErr),
+                !productDetails,
+                () => downloadPdf('product', productFilter, setProductErr),
+              )}
+              {productErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{productErr}</div>}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px] text-sm text-center">
+                  <thead><tr className="bg-[#0f766e] text-white">
+                    {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {(productDetails?.rows || []).map((row: any, i: number) => (
+                      <tr key={row.product} className={i % 2 ? 'bg-teal-50/70' : 'bg-white'}>
+                        <td className="td font-medium text-center">{row.product}</td>
+                        <td className="td font-bold text-center">{row.total}</td>
+                        <td className="td text-center">{row.in_followup}</td>
+                        <td className="td text-center">{row.meeting}</td>
+                        <td className="td text-center">{row.site_visit}</td>
+                        <td className="td text-center">{row.quote_sent}</td>
+                        <td className="td text-center">{row.not_interested}</td>
+                      </tr>
+                    ))}
+                    {productDetails?.totals && (
+                      <tr className="bg-graphite-100 font-bold">
+                        <td className="td text-center">TOTAL</td>
+                        <td className="td text-center">{productDetails.totals.total}</td>
+                        <td className="td text-center">{productDetails.totals.in_followup}</td>
+                        <td className="td text-center">{productDetails.totals.meeting}</td>
+                        <td className="td text-center">{productDetails.totals.site_visit}</td>
+                        <td className="td text-center">{productDetails.totals.quote_sent}</td>
+                        <td className="td text-center">{productDetails.totals.not_interested}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <BarCard
+            title="Product-wise leads"
+            data={prod}
+            x="product"
+            y="leads"
+            onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx', toParams(productFilter), setProductErr)}
+          />
+        </div>
+      )}
+
+      {activeReport === 'employee' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#334155] text-white px-5 py-3 font-semibold tracking-wide flex items-center justify-between gap-3">
+            <span>EMPLOYEE WORKLOAD REPORT</span>
+            <button
+              type="button"
+              className="btn-secondary !px-3 !py-1 text-xs"
+              disabled={empBusy}
+              onClick={() => void loadEmployees()}
+            >
+              {empBusy ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          <div className="p-5">
+            {empErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4">{empErr}</div>}
+            {empBusy && emp.length === 0 ? <Spinner /> : emp.length === 0 ? <EmptyState title="No data" /> : (
+              <table className="w-full text-center">
+                <thead className="bg-graphite-50">
+                  <tr><th className="th text-center">Employee</th><th className="th text-center">Assigned leads</th></tr>
+                </thead>
+                <tbody>
+                  {emp.map((e: any) => (
+                    <tr key={e.employee} className="hover:bg-graphite-50">
+                      <td className="td font-medium text-center">{e.employee}</td>
+                      <td className="td font-bold text-center">{e.assigned}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="bg-[#b45309] text-white px-5 py-3 font-semibold tracking-wide">QUOTATION REPORT</div>
-        <div className="p-5 space-y-4">
-          {filterBar(
-            quoteFilter, setQuoteFilter, quoteBusy, () => loadQuotations(quoteFilter),
-            () => dl('/reports/quotations/export', 'quotation-report.xlsx', toParams(quoteFilter), setQuoteErr),
-            !quotationReport,
-            () => downloadPdf('quotation', quoteFilter, setQuoteErr),
-          )}
-          {quoteErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{quoteErr}</div>}
-          {quotationReport && (
-            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
-              <span><b>Effective From:</b> {quotationReport.effective_from || 'All time'}</span>
-              <span><b>Effective To:</b> {quotationReport.effective_to || 'All time'}</span>
-              <span><b>Quotations:</b> {quotationReport.totals?.count ?? 0}</span>
-            </div>
-          )}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-sm text-center">
-              <thead>
-                <tr className="bg-amber-300 text-graphite-900">
-                  <th className="th !bg-transparent !text-center underline">S.No</th>
-                  <th className="th !bg-transparent !text-center">Date</th>
-                  <th className="th !bg-transparent !text-center">Enquiry No</th>
-                  <th className="th !bg-transparent !text-center">Customer Name</th>
-                  <th className="th !bg-transparent !text-center">State</th>
-                  <th className="th !bg-transparent !text-center">Parking Type</th>
-                  <th className="th !bg-transparent !text-center">No. of Units/Cars</th>
-                  <th className="th !bg-transparent !text-center">Order Value (Excl GST)</th>
-                  <th className="th !bg-transparent !text-center">GST</th>
-                  <th className="th !bg-transparent !text-center">Grand Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(quotationReport?.rows || []).map((r: any, i: number) => (
-                  <tr key={`${r.enquiry_number}-${i}`} className={i % 2 ? 'bg-amber-50/50' : 'bg-white'}>
-                    <td className="td text-center">{i + 1}</td>
-                    <td className="td text-center whitespace-nowrap">{r.date || '—'}</td>
-                    <td className="td text-center font-medium">{r.enquiry_number || '—'}</td>
-                    <td className="td text-center">{r.customer_name || '—'}</td>
-                    <td className="td text-center">{r.state || '—'}</td>
-                    <td className="td text-center">{r.parking_type || '—'}</td>
-                    <td className="td text-center">{r.units ?? '—'}</td>
-                    <td className="td text-center tabular-nums font-medium">{inr(r.order_value_excl_gst)}</td>
-                    <td className="td text-center tabular-nums">{inr(r.gst)}</td>
-                    <td className="td text-center tabular-nums font-semibold">{inr(r.grand_total)}</td>
-                  </tr>
-                ))}
-                {quotationReport?.totals && (quotationReport.rows || []).length > 0 && (
-                  <tr className="bg-graphite-100 font-bold">
-                    <td className="td text-center" colSpan={6}>TOTAL</td>
-                    <td className="td text-center" />
-                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.order_value_excl_gst)}</td>
-                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.gst)}</td>
-                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.grand_total)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            {quotationReport && !(quotationReport.rows || []).length && (
-              <EmptyState title="No quotations in this range" hint="Mark leads as Quotation sent with a value, or add quotation rows." />
             )}
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="card overflow-hidden">
-        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">DETAILS REPORT — LEADS BY SOURCE</div>
-        <div className="p-5 space-y-4">
-          {filterBar(
-            sourceFilter, setSourceFilter, sourceBusy, () => loadSource(sourceFilter),
-            () => {
-              const p = toParams(sourceFilter);
-              const name = sourceFilter.mode === 'month'
-                ? `leads-by-source-${sourceFilter.month}.xlsx`
-                : sourceFilter.mode === 'week'
-                  ? `leads-by-source-week-${sourceFilter.week}.xlsx`
-                  : `leads-by-source-${sourceFilter.fromDate || 'all'}_to_${sourceFilter.toDate || 'all'}.xlsx`;
-              return dl('/reports/source-details/export', name, p, setSourceErr);
-            },
-            !details,
-            () => downloadPdf('source', sourceFilter, setSourceErr),
-          )}
-          {sourceErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sourceErr}</div>}
-          {details && (
-            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
-              <span><b>Effective From:</b> {details.effective_from || 'All time'}</span>
-              <span><b>Effective To:</b> {details.effective_to || 'All time'}</span>
+      {activeReport === 'monthly' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#4338ca] text-white px-5 py-3 font-semibold tracking-wide">MONTHLY LEAD VOLUME</div>
+          <div className="p-5 space-y-4">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-indigo-50/80 border border-indigo-200 rounded-xl p-4">
+              <div>
+                <label className="text-xs font-medium text-graphite-600">From Month</label>
+                <input
+                  type="month"
+                  className="input mt-1"
+                  value={monthlyFilter.fromMonth}
+                  onChange={(e) => setMonthlyFilter((cur) => ({ ...cur, fromMonth: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">To Month</label>
+                <input
+                  type="month"
+                  className="input mt-1"
+                  value={monthlyFilter.toMonth}
+                  onChange={(e) => setMonthlyFilter((cur) => ({ ...cur, toMonth: e.target.value }))}
+                />
+              </div>
+              <div className="flex flex-wrap items-end gap-2 lg:col-span-2">
+                <button type="button" className="btn-primary" disabled={monthlyBusy} onClick={() => void loadMonthly(monthlyFilter)}>
+                  {monthlyBusy ? 'Loading…' : 'Apply'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={monthlyBusy || monthlyRows.length === 0}
+                  onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx', monthlyParams(), setMonthlyErr)}
+                >
+                  Download Excel
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={pdfBusy || monthlyBusy || monthlyRows.length === 0}
+                  onClick={() => void downloadPdf('monthly', monthlyFilter, setMonthlyErr)}
+                >
+                  {pdfBusy ? 'Creating PDF…' : 'Download PDF'}
+                </button>
+              </div>
             </div>
-          )}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-sm text-center">
-              <thead>
-                <tr className="bg-[#1e3a5f] text-white">
-                  <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
-                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
-                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
-                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
-                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
-                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(details?.rows || []).map((r: any, i: number) => (
-                  <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                    <td className="td font-medium text-center">{r.source}</td>
-                    <td className="td font-bold text-center">{r.total}</td>
-                    <td className="td text-center">{r.in_followup}</td>
-                    <td className="td text-center">{r.meeting}</td>
-                    <td className="td text-center">{r.site_visit}</td>
-                    <td className="td text-center">{r.quote_sent}</td>
-                    <td className="td text-center">{r.not_interested}</td>
-                  </tr>
-                ))}
-                {details?.totals && (
-                  <tr className="bg-graphite-100 font-bold">
-                    <td className="td text-center">TOTAL</td>
-                    <td className="td text-center">{details.totals.total}</td>
-                    <td className="td text-center">{details.totals.in_followup}</td>
-                    <td className="td text-center">{details.totals.meeting}</td>
-                    <td className="td text-center">{details.totals.site_visit}</td>
-                    <td className="td text-center">{details.totals.quote_sent}</td>
-                    <td className="td text-center">{details.totals.not_interested}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            {!details && !sourceBusy && <EmptyState title="Apply a date range to load the report" />}
+            {monthlyErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{monthlyErr}</div>}
+            {monthlyBusy && monthlyRows.length === 0 ? <Spinner /> : monthlyRows.length === 0 ? (
+              <EmptyState title="No months in this range" hint="Pick From / To month and Apply." />
+            ) : (
+              <>
+                <div className="h-80">
+                  <ResponsiveContainer>
+                    <BarChart data={monthlyRows}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                      <Tooltip /><Legend />
+                      <Bar dataKey="leads" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="quotation_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[960px] text-sm text-center">
+                    <thead>
+                      <tr className="bg-[#4338ca] text-white">
+                        {['Month', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested', 'Sources', 'Products'].map((h) => (
+                          <th key={h} className="th !text-white !bg-transparent !text-center">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyRows.map((row: any, i: number) => (
+                        <tr key={row.month_key || row.month} className={i % 2 ? 'bg-indigo-50/60' : 'bg-white'}>
+                          <td className="td font-medium text-center">{row.month}</td>
+                          <td className="td font-bold text-center">{row.leads}</td>
+                          <td className="td text-center">{row.in_followup}</td>
+                          <td className="td text-center">{row.meeting}</td>
+                          <td className="td text-center">{row.site_visit}</td>
+                          <td className="td text-center">{row.quotation_sent}</td>
+                          <td className="td text-center">{row.not_interested}</td>
+                          <td className="td text-center">{row.sources}</td>
+                          <td className="td text-center">{row.products}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="card overflow-hidden">
-        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">DETAILS REPORT — PRODUCT WISE</div>
-        <div className="p-5 space-y-4">
-          {filterBar(
-            productFilter, setProductFilter, productBusy, () => loadProduct(productFilter),
-            () => dl('/reports/product-details/export', 'product-wise-details.xlsx', toParams(productFilter), setProductErr),
-            !productDetails,
-            () => downloadPdf('product', productFilter, setProductErr),
-          )}
-          {productErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{productErr}</div>}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm text-center">
-              <thead><tr className="bg-[#1e3a5f] text-white">
-                {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
-              </tr></thead>
-              <tbody>
-                {(productDetails?.rows || []).map((row: any, i: number) => (
-                  <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                    <td className="td font-medium text-center">{row.product}</td>
-                    <td className="td font-bold text-center">{row.total}</td>
-                    <td className="td text-center">{row.in_followup}</td>
-                    <td className="td text-center">{row.meeting}</td>
-                    <td className="td text-center">{row.site_visit}</td>
-                    <td className="td text-center">{row.quote_sent}</td>
-                    <td className="td text-center">{row.not_interested}</td>
-                  </tr>
-                ))}
-                {productDetails?.totals && (
-                  <tr className="bg-graphite-100 font-bold">
-                    <td className="td text-center">TOTAL</td>
-                    <td className="td text-center">{productDetails.totals.total}</td>
-                    <td className="td text-center">{productDetails.totals.in_followup}</td>
-                    <td className="td text-center">{productDetails.totals.meeting}</td>
-                    <td className="td text-center">{productDetails.totals.site_visit}</td>
-                    <td className="td text-center">{productDetails.totals.quote_sent}</td>
-                    <td className="td text-center">{productDetails.totals.not_interested}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="flex justify-end">
+        <button type="button" className="btn-secondary" onClick={() => setActiveReport(null)}>
+          Close — back to all reports
+        </button>
       </div>
-
-      <div className="grid lg:grid-cols-2 gap-4">
-        <BarCard
-          title="Product-wise leads"
-          data={prod}
-          x="product"
-          y="leads"
-          onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx', toParams(productFilter), setProductErr)}
-        />
-        <Card title="Monthly lead volume" action={
-          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx', {}, setProductErr)}>
-            Download monthly Excel
-          </button>
-        }>
-          <p className="text-sm text-graphite-600">Download every month with a valid enquiry date, including source, product, and progress details.</p>
-        </Card>
-      </div>
-
-      <Card title="Employee workload">
-        {emp.length === 0 ? <EmptyState title="No data" /> : (
-          <table className="w-full text-center"><thead className="bg-graphite-50"><tr><th className="th text-center">Employee</th><th className="th text-center">Assigned leads</th></tr></thead>
-            <tbody>{emp.map((e: any) => <tr key={e.employee} className="hover:bg-graphite-50"><td className="td font-medium text-center">{e.employee}</td><td className="td font-bold text-center">{e.assigned}</td></tr>)}</tbody></table>
-        )}
-      </Card>
     </div>
   );
 }
@@ -2502,6 +2769,24 @@ export function EmployeesPage() {
     } finally { setLoadingEmployeeLeads(false); }
   };
   const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const empLeadStatus = (lead: any) => {
+    const s = leadStatusName(lead.status_id);
+    return s === 'New Lead' && lead.primary_employee_id ? 'Assigned' : s;
+  };
+  const empNeedsContact = employeeLeads.filter((l) => !l.first_contact_at).length;
+  const empOverdue = employeeLeads.filter((l) => l.sla_state === 'OVERDUE').length;
+  const empContactDone = employeeLeads.filter((l) => !!l.first_contact_at).length;
+  const empWorkActionCounts = workActionOptions.map((label) => ({
+    label,
+    value: employeeLeads.filter((l) => empLeadStatus(l) === label).length,
+  }));
+  const empReviewCounts = reviewOptions.map((label) => ({
+    label,
+    value: employeeLeads.filter((l) => (l.customer_review || '') === label).length,
+  }));
+  const empUnreviewed = employeeLeads.filter((l) => !(l.customer_review || '').trim()).length;
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(''); setOk('');
@@ -2628,33 +2913,74 @@ export function EmployeesPage() {
           <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => setSelectedEmployee(null)}>Close</button>
         }>
           {loadingEmployeeLeads ? <Spinner /> : employeeLeads.length === 0 ? <EmptyState title="No leads assigned" /> : (
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[1280px]">
-                <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
-                  <th className="th text-right">Lead Value</th>
-                  <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Quotation value</th><th className="th">Completion</th>
-                </tr></thead>
-                <tbody>{employeeLeads.map((lead) => (
-                  <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
-                    <td className="td font-semibold"><Link className="text-brand-700" to={`/leads/${lead.id}`}>{lead.enquiry_number}</Link></td>
-                    <td className="td">{lead.customer_name || '—'}</td>
-                    <td className="td">
-                      <div>{lead.contact_number || '—'}</div>
-                      <div className="text-xs mt-0.5 break-all">{lead.email ? <a className="text-brand-700 hover:underline" href={`mailto:${lead.email}`}>{lead.email}</a> : <span className="text-graphite-400">No email</span>}</div>
-                    </td>
-                    <td className="td text-center">{lead.quantity_raw || '—'}</td>
-                    <td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
-                    <td className="td text-right tabular-nums font-semibold">{inr(lead.lead_value)}</td>
-                    <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
-                    <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
-                    <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>
-                    <td className="td">{lead.quotation_value != null ? inr(lead.quotation_value) : '—'}</td>
-                    <td className="td">{lead.sla_state === 'COMPLETED' ? 'Completed' : 'Pending'}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+                {[
+                  { label: 'Total assigned', value: employeeLeads.length },
+                  { label: 'Needs first contact', value: empNeedsContact },
+                  { label: 'SLA overdue', value: empOverdue },
+                  { label: 'Contact done', value: empContactDone },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
+                    <div className="text-xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                    <div className="text-[11px] text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mb-4">
+                <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                  {empWorkActionCounts.map((s) => (
+                    <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
+                      <div className="text-xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                      <div className="text-[11px] text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mb-4">
+                <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                  {empReviewCounts.map((s) => (
+                    <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
+                      <div className="text-xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
+                      <div className="text-[11px] text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+                    </div>
+                  ))}
+                  <div className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
+                    <div className="text-xl font-bold text-graphite-900 tabular-nums">{empUnreviewed}</div>
+                    <div className="text-[11px] text-graphite-500 uppercase tracking-wide mt-1">Unreviewed</div>
+                  </div>
+                </div>
+              </div>
+              <div className="overflow-x-auto -mx-5 px-5">
+                <table className="w-full min-w-[1280px]">
+                  <thead className="bg-graphite-50"><tr>
+                    <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
+                    <th className="th text-right">Lead Value</th>
+                    <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Quotation value</th><th className="th">Completion</th>
+                  </tr></thead>
+                  <tbody>{employeeLeads.map((lead) => (
+                    <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
+                      <td className="td font-semibold"><Link className="text-brand-700" to={`/leads/${lead.id}`}>{lead.enquiry_number}</Link></td>
+                      <td className="td">{lead.customer_name || '—'}</td>
+                      <td className="td">
+                        <div>{lead.contact_number || '—'}</div>
+                        <div className="text-xs mt-0.5 break-all">{lead.email ? <a className="text-brand-700 hover:underline" href={`mailto:${lead.email}`}>{lead.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                      </td>
+                      <td className="td text-center">{lead.quantity_raw || '—'}</td>
+                      <td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
+                      <td className="td text-right tabular-nums font-semibold">{inr(lead.lead_value)}</td>
+                      <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
+                      <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
+                      <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>
+                      <td className="td">{lead.quotation_value != null ? inr(lead.quotation_value) : '—'}</td>
+                      <td className="td">{lead.sla_state === 'COMPLETED' ? 'Completed' : 'Pending'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </>
           )}
         </Card>
       )}

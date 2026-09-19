@@ -99,23 +99,26 @@ PRODUCT_ALIASES = {
     "stack": "Two Post Stack Parking",
     "stack parking": "Two Post Stack Parking",
     "stack parking ": "Two Post Stack Parking",
-    # Four Post / Pit Stack
-    "four post parking / pit stack parking": "Four Post Parking / Pit Stack Parking",
-    "four post parking": "Four Post Parking / Pit Stack Parking",
-    "four post": "Four Post Parking / Pit Stack Parking",
-    "pit stack parking": "Four Post Parking / Pit Stack Parking",
-    "pit / fixed stack parking": "Four Post Parking / Pit Stack Parking",
-    "pit stack": "Four Post Parking / Pit Stack Parking",
-    "pit stack parking system": "Four Post Parking / Pit Stack Parking",
-    "three level stack parking": "Four Post Parking / Pit Stack Parking",
-    # Puzzle / Pit Puzzle
-    "puzzle parking / pit puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
-    "puzzle parking system": "Puzzle Parking / Pit Puzzle Parking",
-    "puzzle_parking_system": "Puzzle Parking / Pit Puzzle Parking",
-    "puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
-    "puzzle": "Puzzle Parking / Pit Puzzle Parking",
-    "pit puzzle parking": "Puzzle Parking / Pit Puzzle Parking",
-    "pit puzzle": "Puzzle Parking / Pit Puzzle Parking",
+    # Four Post (separate from Pit Stack)
+    "four post stack parking": "Four Post Stack Parking",
+    "four post parking": "Four Post Stack Parking",
+    "four post": "Four Post Stack Parking",
+    "four post parking / pit stack parking": "Four Post Stack Parking",
+    # Pit Stack (separate)
+    "pit stack parking": "Pit Stack Parking",
+    "pit / fixed stack parking": "Pit Stack Parking",
+    "pit stack": "Pit Stack Parking",
+    "pit stack parking system": "Pit Stack Parking",
+    "three level stack parking": "Pit Stack Parking",
+    # Puzzle (separate from Pit Puzzle)
+    "puzzle parking": "Puzzle Parking",
+    "puzzle parking system": "Puzzle Parking",
+    "puzzle_parking_system": "Puzzle Parking",
+    "puzzle": "Puzzle Parking",
+    "puzzle parking / pit puzzle parking": "Puzzle Parking",
+    # Pit Puzzle (separate)
+    "pit puzzle parking": "Pit Puzzle Parking",
+    "pit puzzle": "Pit Puzzle Parking",
     # Tower
     "tower parking": "Tower Parking",
     "tower parking system": "Tower Parking",
