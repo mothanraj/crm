@@ -386,7 +386,7 @@ def calculate_lead_value(body: LeadValueCalcIn, db: Session = Depends(get_db), u
     if cars is None and body.quantity_raw is not None:
         cars = parse_quantity(body.quantity_raw)
     price = prod.price_per_car if prod else None
-    result = calc_lead_value(cars, price)
+    result = calc_lead_value(cars, price, product_name=prod.name if prod else None)
     return {
         "product_id": str(prod.id) if prod else None,
         "product": prod.name if prod else None,

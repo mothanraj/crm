@@ -40,7 +40,19 @@ def run():
                 existing.price_per_car = price
                 existing.is_active = True
         db.flush()
-        # Hide any products outside the official 7
+        # Remap legacy combined product names → new split products; move leads across
+        from app.services.pricing import PRODUCT_RENAMES, apply_pricing_to_lead
+        for old_name, new_name in PRODUCT_RENAMES.items():
+            old_p = db.query(Product).filter_by(name=old_name).first()
+            new_p = db.query(Product).filter_by(name=new_name).first()
+            if not old_p or not new_p or old_p.id == new_p.id:
+                continue
+            for lead in db.query(Lead).filter(Lead.product_id == old_p.id).all():
+                lead.product_id = new_p.id
+                apply_pricing_to_lead(lead, product=new_p)
+            old_p.is_active = False
+        db.flush()
+        # Hide any products outside the official catalog
         for p in db.query(Product).all():
             if p.name not in PRODUCT_PRICES:
                 p.is_active = False

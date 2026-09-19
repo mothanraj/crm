@@ -116,6 +116,8 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
         return build_lead_value_pdf(payload)
     if report_type == "quotation":
         return build_quotation_pdf(payload)
+    if report_type == "monthly":
+        return build_monthly_pdf(payload)
     if report_type not in ("source", "product"):
         raise ValueError("Invalid report type")
     title, label = ("Product-wise Report", "Product") if report_type == "product" else ("Lead Source Report", "Lead Source")
@@ -252,6 +254,88 @@ def build_lead_value_pdf(payload: dict) -> bytes:
 
 
 AMBER = colors.HexColor("#b45309")
+INDIGO = colors.HexColor("#4338ca")
+
+
+def build_monthly_pdf(payload: dict) -> bytes:
+    title = "Monthly Lead Volume"
+    buffer = BytesIO()
+    width, height = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=(width, height), leftMargin=28, rightMargin=28,
+        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=8, leading=10, alignment=1)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=13,
+        textColor=INDIGO, spaceAfter=8, keepWithNext=True, alignment=1,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
+    meta = ParagraphStyle(
+        "meta", fontName="Helvetica", fontSize=9, leading=12, alignment=1,
+        textColor=colors.HexColor("#334155"),
+    )
+
+    story = []
+    story.append(Paragraph(title, heading))
+    rng = (
+        f"{payload.get('from_month') or 'All'} → {payload.get('to_month') or 'All'}"
+        f"  ·  Months: {len(payload.get('rows') or [])}"
+    )
+    story.append(Paragraph(escape(rng), meta))
+    story.append(Spacer(1, 10))
+
+    headers = [
+        "Month", "Total Leads", "In Followup", "Meeting", "Site Visit",
+        "Quotation sent", "Not Interested", "Lead Sources", "Products",
+    ]
+    rows = [[Paragraph(h, header) for h in headers]]
+    totals = {
+        "leads": 0, "in_followup": 0, "meeting": 0, "site_visit": 0,
+        "quotation_sent": 0, "not_interested": 0,
+    }
+    for row in payload.get("rows") or []:
+        for key in totals:
+            totals[key] += int(row.get(key) or 0)
+        rows.append([
+            Paragraph(escape(str(row.get("month") or "—")), cell),
+            Paragraph(str(row.get("leads") or 0), cell),
+            Paragraph(str(row.get("in_followup") or 0), cell),
+            Paragraph(str(row.get("meeting") or 0), cell),
+            Paragraph(str(row.get("site_visit") or 0), cell),
+            Paragraph(str(row.get("quotation_sent") or 0), cell),
+            Paragraph(str(row.get("not_interested") or 0), cell),
+            Paragraph(escape(str(row.get("sources") or "—")), cell),
+            Paragraph(escape(str(row.get("products") or "—")), cell),
+        ])
+    if len(rows) == 1:
+        rows.append([Paragraph("No months found", cell), *[Paragraph("—", cell) for _ in range(8)]])
+    rows.append([
+        Paragraph("TOTAL", header),
+        Paragraph(str(totals["leads"]), cell),
+        Paragraph(str(totals["in_followup"]), cell),
+        Paragraph(str(totals["meeting"]), cell),
+        Paragraph(str(totals["site_visit"]), cell),
+        Paragraph(str(totals["quotation_sent"]), cell),
+        Paragraph(str(totals["not_interested"]), cell),
+        Paragraph("", cell),
+        Paragraph("", cell),
+    ])
+
+    usable = width - 56
+    weights = [0.08, 0.08, 0.09, 0.08, 0.08, 0.10, 0.10, 0.20, 0.19]
+    col_w = [usable * w for w in weights]
+    table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
+    table.setStyle(_centered_table_style(INDIGO))
+    story.append(table)
+
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
 
 
 def build_quotation_pdf(payload: dict) -> bytes:

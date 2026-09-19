@@ -648,7 +648,8 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
 
 
 def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
-    rows_by_product: dict[str, dict] = {}
+    # Always list every canonical product (incl. zero-lead ones like Pit Stack Parking).
+    rows_by_product: dict[str, dict] = {name: {"total": 0} for name in CANONICAL_PRODUCTS}
     query = (db.query(Product.name, LeadStatus.name, func.count(Lead.id))
              .select_from(Lead)
              .outerjoin(Product, Lead.product_id == Product.id)
@@ -656,11 +657,12 @@ def _product_details_payload(db: Session, start: date | None, end: date | None, 
              .filter(_date_filter(start, end, u))
              .group_by(Product.name, LeadStatus.name).all())
     for product, status, count in query:
-        row = rows_by_product.setdefault(product or "Unmapped", {"total": 0})
-        row[status] = int(count)
+        name = product or "Unmapped"
+        row = rows_by_product.setdefault(name, {"total": 0})
+        if status:
+            row[status] = int(count)
         row["total"] += int(count)
-    ordered = [p for p in CANONICAL_PRODUCTS if p in rows_by_product]
-    ordered += sorted(p for p in rows_by_product if p not in ordered)
+    ordered = list(CANONICAL_PRODUCTS) + sorted(p for p in rows_by_product if p not in CANONICAL_PRODUCTS)
     rows = []
     totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
     for product in ordered:
@@ -750,27 +752,41 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation)$"),
+    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation|monthly)$"),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
+    from_month: str | None = None, to_month: str | None = None,
 ):
     _require_reports(u)
     from app.services.report_pdf import build_report_pdf
 
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
-    if report_type == "lead_value":
-        payload = _lead_value_for_range(db, start, end, resolved, u)
-        content = build_report_pdf(payload, "lead_value")
-        filename = "lead-value-report.pdf"
-    elif report_type == "quotation":
-        payload = _quotation_report_payload(db, start, end, resolved)
-        content = build_report_pdf(payload, "quotation")
-        filename = "quotation-report.pdf"
+    if report_type == "monthly":
+        start, end = _resolve_month_span(from_month, to_month)
+        rows = _monthly_rows(db, u, start, end)
+        content = build_report_pdf(
+            {
+                "rows": rows,
+                "from_month": from_month,
+                "to_month": to_month,
+            },
+            "monthly",
+        )
+        filename = "monthly-lead-volume.pdf"
     else:
-        payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
-        content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
-        filename = f"{report_type}-report.pdf"
+        start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+        if report_type == "lead_value":
+            payload = _lead_value_for_range(db, start, end, resolved, u)
+            content = build_report_pdf(payload, "lead_value")
+            filename = "lead-value-report.pdf"
+        elif report_type == "quotation":
+            payload = _quotation_report_payload(db, start, end, resolved)
+            content = build_report_pdf(payload, "quotation")
+            filename = "quotation-report.pdf"
+        else:
+            payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
+            content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
+            filename = f"{report_type}-report.pdf"
     return StreamingResponse(BytesIO(content), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -781,17 +797,25 @@ def _product_wise_rows(db: Session, start: date | None = None, end: date | None 
         filters.append(Lead.enquiry_date >= start)
     if end:
         filters.append(Lead.enquiry_date <= end)
-    rows = [{"product": p or "Unmapped", "leads": c} for p, c in
-            db.query(Product.name, func.count(Lead.id)).outerjoin(
-                Lead, and_(Lead.product_id == Product.id, *filters))
-            .group_by(Product.name)
-            .order_by(func.count(Lead.id).desc()).all()]
+    counts = dict(
+        db.query(Product.name, func.count(Lead.id))
+        .outerjoin(Lead, and_(Lead.product_id == Product.id, *filters))
+        .group_by(Product.name)
+        .all()
+    )
+    # Always include every canonical product (zeros for unused ones like Pit Stack).
+    rows = [{"product": name, "leads": int(counts.get(name, 0) or 0)} for name in CANONICAL_PRODUCTS]
     unmapped = db.query(func.count(Lead.id)).filter(
         Lead.product_id.is_(None), *filters).scalar() or 0
+    extras = [
+        {"product": name, "leads": int(c or 0)}
+        for name, c in counts.items()
+        if name and name not in CANONICAL_PRODUCTS and int(c or 0) > 0
+    ]
     if unmapped:
-        rows.append({"product": "Unmapped", "leads": unmapped})
-        rows.sort(key=lambda r: r["leads"], reverse=True)
-    return rows
+        extras.append({"product": "Unmapped", "leads": int(unmapped)})
+    extras.sort(key=lambda r: r["leads"], reverse=True)
+    return rows + extras
 
 
 def _source_wise_rows(db: Session):
@@ -889,12 +913,47 @@ def employee_wise(db: Session = Depends(get_db), u: User = Depends(current_user)
     return [{"employee": n, "assigned": c} for n, c in rows]
 
 
-def _monthly_rows(db: Session, u: User | None = None):
+def _parse_year_month(value: str | None, field: str) -> tuple[int, int] | None:
+    if not value:
+        return None
+    try:
+        y, m = map(int, value.split("-")[:2])
+        if m < 1 or m > 12:
+            raise ValueError
+        return y, m
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid {field}. Use YYYY-MM") from exc
+
+
+def _resolve_month_span(from_month: str | None, to_month: str | None) -> tuple[date | None, date | None]:
+    """Optional inclusive month range (YYYY-MM → YYYY-MM)."""
+    start_ym = _parse_year_month(from_month, "from_month")
+    end_ym = _parse_year_month(to_month, "to_month")
+    if not start_ym and not end_ym:
+        return None, None
+    if start_ym and not end_ym:
+        end_ym = start_ym
+    if end_ym and not start_ym:
+        start_ym = end_ym
+    assert start_ym and end_ym
+    if start_ym > end_ym:
+        raise HTTPException(400, "from_month must be on or before to_month")
+    start = date(start_ym[0], start_ym[1], 1)
+    end = date(end_ym[0], end_ym[1], monthrange(end_ym[0], end_ym[1])[1])
+    return start, end
+
+
+def _monthly_rows(db: Session, u: User | None = None, start: date | None = None, end: date | None = None):
+    filters = [Lead.is_active.is_(True), Lead.enquiry_date.isnot(None), *_emp_clauses(u)]
+    if start:
+        filters.append(Lead.enquiry_date >= start)
+    if end:
+        filters.append(Lead.enquiry_date <= end)
     rows = (db.query(Lead, LeadStatus.name, LeadSource.name, Product.name)
             .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
             .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
             .outerjoin(Product, Lead.product_id == Product.id)
-            .filter(Lead.is_active.is_(True), Lead.enquiry_date.isnot(None), *_emp_clauses(u))
+            .filter(*filters)
             .order_by(Lead.enquiry_date)
             .all())
     grouped = {}
@@ -928,15 +987,23 @@ def _monthly_rows(db: Session, u: User | None = None):
 
 
 @router.get("/reports/monthly")
-def monthly(db: Session = Depends(get_db), u: User = Depends(current_user)):
+def monthly(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    from_month: str | None = None, to_month: str | None = None,
+):
     _require_reports(u)
-    return _monthly_rows(db, u)
+    start, end = _resolve_month_span(from_month, to_month)
+    return _monthly_rows(db, u, start, end)
 
 
 @router.get("/reports/monthly/export")
-def monthly_export(db: Session = Depends(get_db), u: User = Depends(current_user)):
+def monthly_export(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    from_month: str | None = None, to_month: str | None = None,
+):
     _require_reports(u)
-    rows = _monthly_rows(db, u)
+    start, end = _resolve_month_span(from_month, to_month)
+    rows = _monthly_rows(db, u, start, end)
     return _xlsx_download(
         "monthly-lead-volume.xlsx",
         ["Month", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested", "Lead Sources", "Products"],

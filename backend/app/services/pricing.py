@@ -1,7 +1,10 @@
 """Canonical product pricing and Lead Value calculation.
 
 Lead Value = number_of_cars × price_per_car  (excl. GST)
-GST (18%) is stored separately as gst_amount for reference.
+  — except Two Post / Four Post / Pit Stack, where Lead Value is half:
+    Lead Value = number_of_cars × price_per_car × 0.5
+
+GST (18%) is stored separately as gst_amount (on the lead value).
 All money amounts are stored and returned as whole rupees (no paise / decimals).
 """
 from __future__ import annotations
@@ -13,11 +16,13 @@ GST_RATE = Decimal("0.18")
 GST_PERCENT = Decimal("18")
 RUPEE = Decimal("1")
 
-# Exact product names → base price per car (INR, excl. GST)
+# Exact product names → actual parking price per car (INR, excl. GST)
 PRODUCT_PRICES: dict[str, int] = {
     "Two Post Stack Parking": 150_000,
-    "Four Post Parking / Pit Stack Parking": 250_000,
-    "Puzzle Parking / Pit Puzzle Parking": 350_000,
+    "Four Post Stack Parking": 250_000,
+    "Pit Stack Parking": 250_000,
+    "Puzzle Parking": 350_000,
+    "Pit Puzzle Parking": 350_000,
     "Tower Parking": 450_000,
     "Shuttle Parking": 500_000,
     "Car Elevator": 2_000_000,
@@ -26,12 +31,21 @@ PRODUCT_PRICES: dict[str, int] = {
 
 CANONICAL_PRODUCTS = list(PRODUCT_PRICES.keys())
 
-# Old seed names → new canonical names (for migration / alias remap)
+# These use half of (price × cars) for Lead Value; Price/Car still shows full parking value.
+HALF_LEAD_VALUE_PRODUCTS = frozenset({
+    "Two Post Stack Parking",
+    "Four Post Stack Parking",
+    "Pit Stack Parking",
+})
+
+# Old seed / combined names → new canonical names (migration / alias remap)
 PRODUCT_RENAMES: dict[str, str] = {
-    "Puzzle Parking System": "Puzzle Parking / Pit Puzzle Parking",
+    "Four Post Parking / Pit Stack Parking": "Four Post Stack Parking",
+    "Puzzle Parking / Pit Puzzle Parking": "Puzzle Parking",
+    "Puzzle Parking System": "Puzzle Parking",
     "Tower Parking System": "Tower Parking",
     "Shuttle / Robotic Parking": "Shuttle Parking",
-    "Pit / Fixed Stack Parking": "Four Post Parking / Pit Stack Parking",
+    "Pit / Fixed Stack Parking": "Pit Stack Parking",
     "MLCP / ASRS / Custom": "ASRS Parking",
 }
 
@@ -50,10 +64,19 @@ def _as_int(v: Decimal | None) -> int | None:
 def price_for_product(name: str | None) -> Decimal | None:
     if not name:
         return None
-    raw = PRODUCT_PRICES.get(name)
+    # Accept legacy combined names during transition
+    resolved = PRODUCT_RENAMES.get(name, name)
+    raw = PRODUCT_PRICES.get(resolved)
     if raw is None:
         return None
     return Decimal(raw)
+
+
+def uses_half_lead_value(product_name: str | None) -> bool:
+    if not product_name:
+        return False
+    resolved = PRODUCT_RENAMES.get(product_name, product_name)
+    return resolved in HALF_LEAD_VALUE_PRODUCTS
 
 
 def calc_lead_value(
@@ -61,6 +84,7 @@ def calc_lead_value(
     price_per_car: Any,
     *,
     gst_rate: Decimal = GST_RATE,
+    product_name: str | None = None,
 ) -> dict[str, Any]:
     """Authoritative Lead Value math (excl. GST). Returns None amounts when inputs invalid."""
     try:
@@ -79,6 +103,7 @@ def calc_lead_value(
         "base_value": None,
         "gst_amount": None,
         "lead_value": None,
+        "half_rate": uses_half_lead_value(product_name),
     }
     if cars is None or price is None:
         return out
@@ -89,14 +114,15 @@ def calc_lead_value(
 
     cars_i = int(cars) if cars == cars.to_integral_value() else int(_rupee(cars))
     price_i = _as_int(price)
-    base = _rupee(Decimal(cars_i) * Decimal(price_i))
-    gst = _rupee(base * gst_rate)
+    full = _rupee(Decimal(cars_i) * Decimal(price_i))
+    lead = _rupee(full / 2) if uses_half_lead_value(product_name) else full
+    gst = _rupee(lead * gst_rate)
     out.update({
         "number_of_cars": cars_i,
         "price_per_car": price_i,
-        "base_value": int(base),
+        "base_value": int(full),
         "gst_amount": int(gst),
-        "lead_value": int(base),  # excl. GST
+        "lead_value": int(lead),
     })
     return out
 
@@ -114,7 +140,7 @@ def apply_pricing_to_lead(lead, product_name: str | None = None, product=None) -
         price = price_for_product(name)
 
     cars = lead.quantity_num
-    result = calc_lead_value(cars, price)
+    result = calc_lead_value(cars, price, product_name=name)
     lead.price_per_car = result["price_per_car"]
     lead.gst_amount = result["gst_amount"]
     lead.lead_value = result["lead_value"]
