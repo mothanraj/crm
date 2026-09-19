@@ -54,12 +54,8 @@ export function AppShell() {
     <div className="flex min-h-screen">
       {/* sidebar — graphite gradient, signal active pill */}
       <aside className="w-60 shrink-0 hidden md:flex flex-col text-white bg-gradient-to-b from-graphite-500 via-graphite-700 to-graphite-800">
-        <div className="px-5 py-5 flex items-center gap-2.5">
-          <img src="/estar-logo.jpg" alt="E-Star" className="w-9 h-9 rounded-lg object-contain bg-white" />
-          <div>
-            <div className="text-white font-bold leading-tight">E-Star CRM</div>
-            <div className="text-[11px] text-graphite-200">Lead Management</div>
-          </div>
+        <div className="px-5 py-5 flex items-center justify-center">
+          <img src="/estar-logo.jpg" alt="E-Star" className="h-14 w-auto max-w-[160px] rounded-lg object-contain bg-white p-1.5 shadow-sm" />
         </div>
         <nav className="px-3 space-y-1 flex-1">
           {NAV.filter((n) => n.roles.includes(role)).map((n) => (
@@ -92,7 +88,7 @@ export function AppShell() {
       <div className="flex-1 min-w-0 flex flex-col">
         {/* mobile nav */}
         <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm sticky top-0 z-20 items-center">
-          <img src="/estar-logo.jpg" alt="E-Star" className="w-7 h-7 rounded object-contain bg-white shrink-0" />
+          <img src="/estar-logo.jpg" alt="E-Star" className="h-10 w-auto max-w-[120px] rounded object-contain bg-white p-1 shrink-0" />
           {NAV.filter((n) => n.roles.includes(role)).map((n) => (
             <NavLink
               key={n.to}
@@ -108,7 +104,7 @@ export function AppShell() {
         {/* topbar */}
         <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
           <div className="flex items-center gap-3">
-            <img src="/estar-logo.jpg" alt="E-Star" className="hidden md:block w-8 h-8 rounded object-contain" />
+            <img src="/estar-logo.jpg" alt="E-Star" className="hidden md:block h-11 w-auto max-w-[140px] rounded object-contain" />
             <div className="text-sm text-graphite-500">
               {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
             </div>

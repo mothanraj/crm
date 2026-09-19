@@ -106,9 +106,8 @@ export function Login() {
     <div className="min-h-screen grid md:grid-cols-2">
       <div className="hidden md:flex flex-col justify-between text-white p-12 relative overflow-hidden bg-gradient-to-br from-graphite-700 via-graphite-800 to-graphite-950">
         <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-brand-400/20 blur-3xl pointer-events-none" />
-        <div className="flex items-center gap-2.5 relative">
-          <img src="/estar-logo.jpg" alt="E-Star" className="w-10 h-10 rounded-xl object-contain bg-white" />
-          <div className="font-bold text-lg">E-Star CRM</div>
+        <div className="flex items-center relative">
+          <img src="/estar-logo.jpg" alt="E-Star" className="h-16 w-auto max-w-[200px] rounded-xl object-contain bg-white p-2 shadow-sm" />
         </div>
         <div className="relative">
           <h1 className="text-4xl font-bold leading-tight">Every lead,<br />followed up.</h1>
@@ -126,9 +125,8 @@ export function Login() {
       </div>
       <div className="flex items-center justify-center p-8 bg-graphite-100">
         <form onSubmit={submit} className="card p-8 w-full max-w-sm space-y-4">
-          <div className="flex items-center gap-3 md:hidden">
-            <img src="/estar-logo.jpg" alt="E-Star" className="w-10 h-10 rounded-xl object-contain" />
-            <div className="font-bold text-graphite-900">E-Star CRM</div>
+          <div className="flex items-center justify-center md:hidden">
+            <img src="/estar-logo.jpg" alt="E-Star" className="h-14 w-auto max-w-[180px] rounded-xl object-contain" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-graphite-900">Welcome back</h2>
@@ -919,7 +917,7 @@ export function Leads() {
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="relative isolate w-full overflow-x-auto">
-            <table className="w-full table-fixed min-w-[2200px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
+            <table className="w-full table-fixed min-w-[2100px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
@@ -929,16 +927,15 @@ export function Leads() {
                 {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[100px] text-center">Email</th>}
                 <th className="th whitespace-nowrap align-top w-[90px] text-center">Cars</th>
                 <th className="th whitespace-nowrap align-top w-[180px]">Product</th>
-                <th className="th whitespace-nowrap align-top w-[120px] text-right">Price / Car</th>
-                <th className="th whitespace-nowrap align-top w-[130px] text-right">Lead Value</th>
-                <th className="th whitespace-nowrap align-top w-[210px]">Work action</th>
-                <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
-                <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
+                <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
+                <th className="th whitespace-nowrap align-top w-[210px]">Progress</th>
                 <th className="th whitespace-nowrap align-top w-[140px]">Source</th>
-                <th className="th whitespace-nowrap align-top w-[170px] text-center">Status</th>
+                <th className="th whitespace-nowrap align-top w-[170px] text-center">Current status</th>
                 <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
                 {role !== 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[170px]">Employee</th>}
+                <th className="th whitespace-nowrap align-top w-[130px] text-right">Lead Value</th>
+                <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
@@ -977,8 +974,27 @@ export function Leads() {
                     )}
                     <td className="td align-top text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
                     <td className="td align-top">{prodName(l, nameOf)}</td>
-                    <td className="td align-top text-right whitespace-nowrap tabular-nums">{inr(l.price_per_car)}</td>
-                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
+                    <td className="td align-top">
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
+                          <option value="">Select category…</option>
+                          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
+                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
+                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
+                    </td>
+                    <td className="td align-top">
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
+                          value={draftFor(l).remarks}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
+                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
+                    </td>
                     <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
@@ -997,34 +1013,6 @@ export function Leads() {
                       )}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} /></label>}</div>)}
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
-                    </td>
-                    <td className="td align-top text-right whitespace-nowrap">
-                      {l.quotation_value != null && l.quotation_value !== '' ? (
-                        <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
-                          {inr(l.quotation_value).replace(/^₹/, '')}
-                        </span>
-                      ) : <span className="text-graphite-400">—</span>}
-                    </td>
-                    <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
-                          value={draftFor(l).remarks}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
-                    </td>
-                    <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
-                          <option value="">Select category…</option>
-                          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                        </select>
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
-                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
-                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
                     <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
                     <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
@@ -1045,6 +1033,14 @@ export function Leads() {
                       )}
                     </td>
                     {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
+                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
+                    <td className="td align-top text-right whitespace-nowrap">
+                      {l.quotation_value != null && l.quotation_value !== '' ? (
+                        <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
+                          {inr(l.quotation_value).replace(/^₹/, '')}
+                        </span>
+                      ) : <span className="text-graphite-400">—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
