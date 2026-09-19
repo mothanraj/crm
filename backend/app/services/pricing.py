@@ -1,6 +1,7 @@
 """Canonical product pricing and Lead Value calculation.
 
-Lead Value = number_of_cars × price_per_car × 1.18  (GST 18% inclusive)
+Lead Value = number_of_cars × price_per_car  (excl. GST)
+GST (18%) is stored separately as gst_amount for reference.
 All money amounts are stored and returned as whole rupees (no paise / decimals).
 """
 from __future__ import annotations
@@ -61,7 +62,7 @@ def calc_lead_value(
     *,
     gst_rate: Decimal = GST_RATE,
 ) -> dict[str, Any]:
-    """Authoritative Lead Value math. Returns None amounts when inputs invalid."""
+    """Authoritative Lead Value math (excl. GST). Returns None amounts when inputs invalid."""
     try:
         cars = Decimal(str(number_of_cars)) if number_of_cars is not None and str(number_of_cars).strip() != "" else None
     except Exception:
@@ -90,13 +91,12 @@ def calc_lead_value(
     price_i = _as_int(price)
     base = _rupee(Decimal(cars_i) * Decimal(price_i))
     gst = _rupee(base * gst_rate)
-    total = _rupee(base + gst)  # == cars × price × 1.18, rounded
     out.update({
         "number_of_cars": cars_i,
         "price_per_car": price_i,
         "base_value": int(base),
         "gst_amount": int(gst),
-        "lead_value": int(total),
+        "lead_value": int(base),  # excl. GST
     })
     return out
 

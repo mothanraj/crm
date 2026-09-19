@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.security import decode_token
@@ -29,16 +29,20 @@ def _auth(token: str) -> bool:
 
 
 @router.get("/leads")
-async def stream_leads(token: str = Query("")):
+async def stream_leads(request: Request, token: str = Query("")):
     if not _auth(token):
-        from fastapi import HTTPException
         raise HTTPException(401, "Invalid token")
 
     async def gen():
         last = live.state()["seq"]
         yield f"event: sync\ndata: {json.dumps({'seq': last})}\n\n"
-        for _ in range(3600):  # ~1h, client reconnects after
-            await asyncio.sleep(1)
+        # Keep-alive every 15s; exit early if client disconnects. Cap ~30 min.
+        for _ in range(120):
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(15)
+            if await request.is_disconnected():
+                break
             cur = live.state()
             if cur["seq"] != last:
                 last = cur["seq"]
@@ -46,5 +50,12 @@ async def stream_leads(token: str = Query("")):
             else:
                 yield ": ping\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

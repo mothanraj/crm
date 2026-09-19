@@ -1,21 +1,69 @@
-// Live lead updates: SSE (/api/stream/leads) with polling fallback.
-// Backend bumps a seq on every insert (Sheets push, Excel confirm/promote).
-// Event carries ids only; callers refetch their list (no PII in stream).
-export function subscribeLeadUpdates(onUpdate: () => void): () => void {
-  const base = (import.meta.env.VITE_API_URL ?? '/api').replace(/\/$/, '');
+// Shared live lead updates: one SSE connection for the whole app (+ light poll fallback).
+// Backend bumps a seq on inserts; callers refetch their lists (no PII in stream).
+
+type Listener = () => void;
+
+const listeners = new Set<Listener>();
+let es: EventSource | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let started = false;
+
+function baseUrl(): string {
+  return (import.meta.env.VITE_API_URL ?? '/api').replace(/\/$/, '');
+}
+
+function notify() {
+  listeners.forEach((fn) => {
+    try { fn(); } catch { /* ignore listener errors */ }
+  });
+}
+
+function closeEs() {
+  try { es?.close(); } catch { /* noop */ }
+  es = null;
+}
+
+function connect() {
+  if (!started || listeners.size === 0) return;
   const token = localStorage.getItem('token') || '';
-  let es: EventSource | null = null;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let stopped = false;
+  if (!token) return;
+  closeEs();
   try {
-    es = new EventSource(`${base}/stream/leads?token=${encodeURIComponent(token)}`);
-    es.addEventListener('leads', () => { if (!stopped) onUpdate(); });
-    es.onerror = () => { /* fallback poll keeps us fresh; browser auto-reconnects */ };
-  } catch { es = null; }
-  timer = setInterval(() => { if (!stopped) onUpdate(); }, 30000);
+    es = new EventSource(`${baseUrl()}/stream/leads?token=${encodeURIComponent(token)}`);
+    es.addEventListener('leads', () => notify());
+    es.onerror = () => {
+      // Stop browser auto-reconnect storm; we schedule a single retry.
+      closeEs();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 5000);
+    };
+  } catch {
+    es = null;
+  }
+}
+
+function ensureStarted() {
+  if (started) return;
+  started = true;
+  connect();
+  // Fallback poll every 60s only (SSE is primary)
+  pollTimer = setInterval(() => notify(), 60000);
+}
+
+function maybeStop() {
+  if (listeners.size > 0) return;
+  started = false;
+  closeEs();
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
+export function subscribeLeadUpdates(onUpdate: Listener): () => void {
+  listeners.add(onUpdate);
+  ensureStarted();
   return () => {
-    stopped = true;
-    try { es?.close(); } catch { /* noop */ }
-    if (timer) clearInterval(timer);
+    listeners.delete(onUpdate);
+    maybeStop();
   };
 }

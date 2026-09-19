@@ -114,6 +114,8 @@ def _page_header_fn(logo, logo_iw, logo_ih, title: str, generated: str, width, h
 def build_report_pdf(payload: dict, report_type: str) -> bytes:
     if report_type == "lead_value":
         return build_lead_value_pdf(payload)
+    if report_type == "quotation":
+        return build_quotation_pdf(payload)
     if report_type not in ("source", "product"):
         raise ValueError("Invalid report type")
     title, label = ("Product-wise Report", "Product") if report_type == "product" else ("Lead Source Report", "Lead Source")
@@ -244,6 +246,85 @@ def build_lead_value_pdf(payload: dict) -> bytes:
     per_table = Table(per_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
     per_table.setStyle(_centered_table_style(GREEN))
     story.append(per_table)
+
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
+
+
+AMBER = colors.HexColor("#b45309")
+
+
+def build_quotation_pdf(payload: dict) -> bytes:
+    title = "Quotation Report"
+    buffer = BytesIO()
+    width, height = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=(width, height), leftMargin=28, rightMargin=28,
+        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=8, leading=10, alignment=1)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=13,
+        textColor=AMBER, spaceAfter=8, keepWithNext=True, alignment=1,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
+    meta = ParagraphStyle(
+        "meta", fontName="Helvetica", fontSize=9, leading=12, alignment=1,
+        textColor=colors.HexColor("#334155"),
+    )
+
+    story = []
+    story.append(Paragraph(title, heading))
+    rng = (
+        f"{payload.get('effective_from') or 'All'} → {payload.get('effective_to') or 'All'}"
+        f"  ·  Mode: {payload.get('mode') or 'custom'}"
+        f"  ·  Rows: {payload.get('totals', {}).get('count', len(payload.get('rows') or []))}"
+    )
+    story.append(Paragraph(escape(rng), meta))
+    story.append(Spacer(1, 10))
+
+    headers = [
+        "S.No", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
+        "Units/Cars", "Order Value (Excl GST)", "GST", "Grand Total",
+    ]
+    rows = [[Paragraph(h, header) for h in headers]]
+    for i, row in enumerate(payload.get("rows") or [], start=1):
+        rows.append([
+            Paragraph(str(i), cell),
+            Paragraph(escape(str(row.get("date") or "—")), cell),
+            Paragraph(escape(str(row.get("enquiry_number") or "—")), cell),
+            Paragraph(escape(str(row.get("customer_name") or "—")), cell),
+            Paragraph(escape(str(row.get("state") or "—")), cell),
+            Paragraph(escape(str(row.get("parking_type") or "—")), cell),
+            Paragraph("—" if row.get("units") is None else str(row.get("units")), cell),
+            Paragraph(_inr(row.get("order_value_excl_gst")), cell),
+            Paragraph(_inr(row.get("gst")), cell),
+            Paragraph(_inr(row.get("grand_total")), cell),
+        ])
+    if len(rows) == 1:
+        rows.append([Paragraph("No quotations found", cell), *[Paragraph("—", cell) for _ in range(9)]])
+    totals = payload.get("totals") or {}
+    rows.append([
+        Paragraph("", cell), Paragraph("", cell), Paragraph("", cell),
+        Paragraph("", cell), Paragraph("", cell),
+        Paragraph("TOTAL", header),
+        Paragraph("", cell),
+        Paragraph(_inr(totals.get("order_value_excl_gst")), cell),
+        Paragraph(_inr(totals.get("gst")), cell),
+        Paragraph(_inr(totals.get("grand_total")), cell),
+    ])
+
+    usable = width - 56
+    weights = [0.05, 0.09, 0.10, 0.14, 0.09, 0.14, 0.08, 0.12, 0.09, 0.10]
+    col_w = [usable * w for w in weights]
+    table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
+    table.setStyle(_centered_table_style(AMBER))
+    story.append(table)
 
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()

@@ -37,6 +37,15 @@ function inr(n: any) {
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
 }
 
+/** Opens Gmail compose with To: prefilled to the customer email. */
+function openCustomerGmail(email: string, enquiry?: string) {
+  const to = (email || '').trim();
+  if (!to) return;
+  const params = new URLSearchParams({ view: 'cm', fs: '1', to });
+  if (enquiry) params.set('su', `Regarding your enquiry ${enquiry}`);
+  window.open(`https://mail.google.com/mail/?${params.toString()}`, '_blank', 'noopener,noreferrer');
+}
+
 function previewLeadValue(pricePerCar: any, cars: any) {
   const p = Math.round(Number(pricePerCar));
   const c = Math.round(Number(cars));
@@ -917,6 +926,7 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
                 <th className="th whitespace-nowrap align-top w-[120px]">City</th>
                 <th className="th whitespace-nowrap align-top w-[170px]">Contact / Email</th>
+                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[100px] text-center">Email</th>}
                 <th className="th whitespace-nowrap align-top w-[90px] text-center">Cars</th>
                 <th className="th whitespace-nowrap align-top w-[180px]">Product</th>
                 <th className="th whitespace-nowrap align-top w-[120px] text-right">Price / Car</th>
@@ -952,6 +962,19 @@ export function Leads() {
                           : <span className="text-graphite-400">No email</span>}
                       </div>
                     </td>
+                    {role === 'EMPLOYEE' && (
+                      <td className="td align-top text-center">
+                        <button
+                          type="button"
+                          className="btn-secondary !px-2 !py-1 text-xs"
+                          disabled={!l.email}
+                          title={l.email ? `Email ${l.email} via Gmail` : 'No customer email on this lead'}
+                          onClick={() => openCustomerGmail(l.email, l.enquiry_number)}
+                        >
+                          ✉️ Email
+                        </button>
+                      </td>
+                    )}
                     <td className="td align-top text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
                     <td className="td align-top">{prodName(l, nameOf)}</td>
                     <td className="td align-top text-right whitespace-nowrap tabular-nums">{inr(l.price_per_car)}</td>
@@ -1354,7 +1377,7 @@ export function LeadDetail({ id }: { id: string }) {
             <input className="input mt-1 bg-graphite-50 font-semibold" readOnly value={inr(preview.lead_value ?? l.lead_value)} />
           </div>
         </div>
-        <p className="text-xs text-graphite-500 mt-3">Lead Value = Cars × Price/Car × 1.18 (GST 18%). Calculated and stored by the server — not editable.</p>
+        <p className="text-xs text-graphite-500 mt-3">Lead Value = Cars × Price/Car (excl. GST). GST 18% is shown separately. Calculated and stored by the server — not editable.</p>
         {canEditPricing && (
           <button type="button" className="btn-primary mt-3" disabled={pricingBusy} onClick={savePricing}>
             {pricingBusy ? 'Saving…' : 'Save product & cars'}
@@ -1934,183 +1957,225 @@ function BarCard({ title, data, x, y, onDownload }: {
   );
 }
 
+type ReportFilter = {
+  mode: 'custom' | 'week' | 'month';
+  month: string;
+  week: string;
+  fromDate: string;
+  toDate: string;
+};
+
 export function Reports() {
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
   const defaultWeek = today.toISOString().slice(0, 10);
-  const [prod, setProd] = useState<any[]>([]);
-  const [emp, setEmp] = useState<any[]>([]);
-  const [mode, setMode] = useState<'custom' | 'week' | 'month'>('custom');
-  const [month, setMonth] = useState(defaultMonth);
-  const [week, setWeek] = useState(defaultWeek);
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const emptyFilter = (): ReportFilter => ({
+    mode: 'custom', month: defaultMonth, week: defaultWeek, fromDate: '', toDate: '',
+  });
+
+  const [lvFilter, setLvFilter] = useState<ReportFilter>(emptyFilter);
+  const [quoteFilter, setQuoteFilter] = useState<ReportFilter>(emptyFilter);
+  const [sourceFilter, setSourceFilter] = useState<ReportFilter>(emptyFilter);
+  const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
+
+  const [leadValueReport, setLeadValueReport] = useState<any>(null);
+  const [quotationReport, setQuotationReport] = useState<any>(null);
   const [details, setDetails] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>(null);
-  const [leadValueReport, setLeadValueReport] = useState<any>(null);
+  const [prod, setProd] = useState<any[]>([]);
+  const [emp, setEmp] = useState<any[]>([]);
+
+  const [lvBusy, setLvBusy] = useState(false);
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [productBusy, setProductBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+
+  const [lvErr, setLvErr] = useState('');
+  const [quoteErr, setQuoteErr] = useState('');
+  const [sourceErr, setSourceErr] = useState('');
+  const [productErr, setProductErr] = useState('');
+
+  const apiErr = (e: any, fallback: string) => {
+    const d = e?.response?.data?.detail;
+    if (typeof d === 'string' && d.trim()) return d;
+    if (Array.isArray(d) && d.length) {
+      return d.map((x: any) => x?.msg || JSON.stringify(x)).join('; ');
+    }
+    if (e?.response?.status === 401) return 'Session expired — please log in again';
+    if (e?.response?.status === 403) return 'Reports require admin or manager role';
+    if (e?.message === 'Network Error') return 'Cannot reach the server. Is the backend running?';
+    return fallback;
+  };
+
+  const toParams = (f: ReportFilter): Record<string, string> => {
+    if (f.mode === 'month') return { mode: 'month', month: f.month || defaultMonth };
+    if (f.mode === 'week') return { mode: 'week', week: f.week || defaultWeek };
+    const p: Record<string, string> = { mode: 'custom' };
+    if (f.fromDate) p.from_date = f.fromDate;
+    if (f.toDate) p.to_date = f.toDate;
+    return p;
+  };
+
+  const validate = (f: ReportFilter): string | null => {
+    if (f.mode === 'custom' && f.fromDate && f.toDate && f.fromDate > f.toDate) {
+      return 'From date must be on or before To date.';
+    }
+    if (f.mode === 'month' && !/^\d{4}-\d{2}$/.test(f.month || '')) {
+      return 'Select a valid month.';
+    }
+    return null;
+  };
+
+  const loadLeadValue = async (f: ReportFilter = lvFilter) => {
+    const v = validate(f);
+    if (v) { setLvErr(v); return; }
+    setLvBusy(true); setLvErr('');
+    try {
+      const { data } = await api.get('/reports/lead-value', { params: toParams(f) });
+      setLeadValueReport(data);
+    } catch (e: any) {
+      setLvErr(apiErr(e, 'Lead value report failed'));
+    } finally { setLvBusy(false); }
+  };
+
+  const loadQuotations = async (f: ReportFilter = quoteFilter) => {
+    const v = validate(f);
+    if (v) { setQuoteErr(v); return; }
+    setQuoteBusy(true); setQuoteErr('');
+    try {
+      const { data } = await api.get('/reports/quotations', { params: toParams(f) });
+      setQuotationReport(data);
+    } catch (e: any) {
+      setQuoteErr(apiErr(e, 'Quotation report failed'));
+    } finally { setQuoteBusy(false); }
+  };
+
+  const loadSource = async (f: ReportFilter = sourceFilter) => {
+    const v = validate(f);
+    if (v) { setSourceErr(v); return; }
+    setSourceBusy(true); setSourceErr('');
+    try {
+      const { data } = await api.get('/reports/source-details', { params: toParams(f) });
+      setDetails(data);
+    } catch (e: any) {
+      setSourceErr(apiErr(e, 'Source report failed'));
+    } finally { setSourceBusy(false); }
+  };
+
+  const loadProduct = async (f: ReportFilter = productFilter) => {
+    const v = validate(f);
+    if (v) { setProductErr(v); return; }
+    setProductBusy(true); setProductErr('');
+    try {
+      const params = toParams(f);
+      const [detailsRes, barRes] = await Promise.all([
+        api.get('/reports/product-details', { params }),
+        api.get('/reports/product-wise', { params }),
+      ]);
+      setProductDetails(detailsRes.data);
+      setProd(Array.isArray(barRes.data) ? barRes.data : []);
+    } catch (e: any) {
+      setProductErr(apiErr(e, 'Product report failed'));
+    } finally { setProductBusy(false); }
+  };
 
   useEffect(() => {
-    api.get('/reports/product-wise').then((r) => setProd(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     api.get('/reports/employee-wise').then((r) => setEmp(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    void loadLeadValue();
+    void loadQuotations();
+    void loadSource();
+    void loadProduct();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filterParams = (): Record<string, string> => {
-    if (mode === 'month') return { mode: 'month', month };
-    if (mode === 'week') return { mode: 'week', week };
-    return { mode: 'custom', from_date: fromDate, to_date: toDate };
-  };
-
-  const fetchWithRetry = async (path: string, params: Record<string, string>) => {
-    try {
-      return await api.get(path, { params });
-    } catch (e: any) {
-      if (e?.response?.status === 503) {
-        await new Promise((r) => setTimeout(r, 800));
-        return await api.get(path, { params });
-      }
-      throw e;
-    }
-  };
-
-  const loadDetails = async () => {
-    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
-      setErr('From date must be on or before To date.');
-      return;
-    }
-    setBusy(true); setErr('');
-    try {
-      const params = filterParams();
-      const settled = await Promise.allSettled([
-        fetchWithRetry('/reports/source-details', params),
-        fetchWithRetry('/reports/product-wise', params),
-        fetchWithRetry('/reports/product-details', params),
-        fetchWithRetry('/reports/lead-value', params),
-      ]);
-      const fails: string[] = [];
-      if (settled[0].status === 'fulfilled') setDetails(settled[0].value.data);
-      else fails.push(settled[0].reason?.response?.data?.detail || 'Source report failed');
-      if (settled[1].status === 'fulfilled') setProd(settled[1].value.data);
-      else fails.push(settled[1].reason?.response?.data?.detail || 'Product report failed');
-      if (settled[2].status === 'fulfilled') setProductDetails(settled[2].value.data);
-      else fails.push(settled[2].reason?.response?.data?.detail || 'Product details failed');
-      if (settled[3].status === 'fulfilled') setLeadValueReport(settled[3].value.data);
-      else fails.push(settled[3].reason?.response?.data?.detail || 'Lead value report failed');
-      if (fails.length) setErr(fails[0]);
-    } catch (e: any) {
-      setErr(e?.response?.data?.detail || 'Failed to load details report');
-    } finally { setBusy(false); }
-  };
-
-  const dl = async (path: string, filename: string, params?: Record<string, string>) => {
+  const dl = async (path: string, filename: string, params: Record<string, string>, setErr: (s: string) => void) => {
     try {
       await downloadReport(path, filename, params);
     } catch (e: any) {
-      setErr(e?.message || 'Download failed');
+      setErr(apiErr(e, 'Download failed'));
     }
   };
 
-  useEffect(() => { loadDetails(); }, []);
-
-  const downloadDetails = async () => {
-    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
-      setErr('From date must be on or before To date.');
-      return;
-    }
-    const p = filterParams();
-    const name = mode === 'month'
-      ? `leads-by-source-${month}.xlsx`
-      : mode === 'week'
-        ? `leads-by-source-week-${week}.xlsx`
-        : `leads-by-source-${fromDate || 'all'}_to_${toDate || 'all'}.xlsx`;
-    try {
-      await downloadReport('/reports/source-details/export', name, p);
-    } catch (e: any) {
-      setErr(e?.message || 'Download failed');
-    }
-  };
-
-  const downloadProductDetails = () => {
-    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
-      setErr('From date must be on or before To date.');
-      return;
-    }
-    return dl('/reports/product-details/export', 'product-wise-details.xlsx', filterParams());
-  };
-
-  const downloadPdf = async (kind: 'source' | 'product' | 'lead_value' = 'source') => {
-    if (mode === 'custom' && fromDate && toDate && fromDate > toDate) {
-      setErr('From date must be on or before To date.');
-      return;
-    }
-    setPdfBusy(true);
-    setErr('');
+  const downloadPdf = async (kind: 'source' | 'product' | 'lead_value' | 'quotation', f: ReportFilter, setErr: (s: string) => void) => {
+    const v = validate(f);
+    if (v) { setErr(v); return; }
+    setPdfBusy(true); setErr('');
     const names = {
       source: 'lead-source-report.pdf',
       product: 'product-wise-report.pdf',
       lead_value: 'lead-value-report.pdf',
+      quotation: 'quotation-report.pdf',
     };
     try {
-      await downloadReport('/reports/pdf', names[kind], { ...filterParams(), report_type: kind });
+      await downloadReport('/reports/pdf', names[kind], { ...toParams(f), report_type: kind });
     } catch (e: any) {
       const response = e?.response?.data;
-      let message = e?.message || 'PDF download failed';
       if (response instanceof Blob) {
-        try { message = JSON.parse(await response.text()).detail || message; } catch { /* retain error */ }
+        try {
+          const parsed = JSON.parse(await response.text());
+          setErr(typeof parsed?.detail === 'string' ? parsed.detail : 'PDF download failed');
+        } catch {
+          setErr(apiErr(e, 'PDF download failed'));
+        }
+      } else {
+        setErr(apiErr(e, 'PDF download failed'));
       }
-      setErr(message);
     } finally { setPdfBusy(false); }
   };
 
-  const reportFilters = (kind: 'source' | 'product' | 'lead_value' = 'source') => (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
-            <div>
-              <label className="text-xs font-medium text-graphite-600">Report Mode</label>
-              <select className="input mt-1" value={mode} onChange={(e) => setMode(e.target.value as 'custom' | 'week' | 'month')}>
-                <option value="custom">From date → To date</option>
-                <option value="week">Weekly</option>
-                <option value="month">Monthly</option>
-              </select>
-            </div>
-            {mode === 'month' ? (
-              <div>
-                <label className="text-xs font-medium text-graphite-600">Select Month</label>
-                <input type="month" className="input mt-1" value={month} onChange={(e) => setMonth(e.target.value)} />
-              </div>
-            ) : mode === 'week' ? (
-              <div>
-                <label className="text-xs font-medium text-graphite-600">Any day in the week</label>
-                <input type="date" className="input mt-1" value={week} onChange={(e) => setWeek(e.target.value)} />
-              </div>
-            ) : (
-              <>
-                <div>
-                  <label className="text-xs font-medium text-graphite-600">From Date</label>
-                  <input type="date" className="input mt-1" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-graphite-600">To Date</label>
-                  <input type="date" className="input mt-1" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-                </div>
-              </>
-            )}
-            <div className="flex flex-wrap items-end gap-2">
-              <button type="button" className="btn-primary" disabled={busy} onClick={loadDetails}>{busy ? 'Loading…' : 'Apply'}</button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={kind === 'product' ? !productDetails : kind === 'lead_value' ? !leadValueReport : !details}
-                onClick={() => {
-                  if (kind === 'product') return downloadProductDetails();
-                  if (kind === 'lead_value') return dl('/reports/lead-value/export', 'lead-value-report.xlsx', filterParams());
-                  return downloadDetails();
-                }}
-              >Download Excel</button>
-              <button type="button" className="btn-secondary" disabled={pdfBusy || busy} onClick={() => downloadPdf(kind)}>{pdfBusy ? 'Creating PDF…' : 'Download PDF'}</button>
-            </div>
+  const filterBar = (
+    f: ReportFilter,
+    setF: (next: ReportFilter) => void,
+    busy: boolean,
+    onApply: () => void,
+    onExcel: () => void,
+    excelDisabled: boolean,
+    onPdf?: () => void,
+  ) => (
+    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
+      <div>
+        <label className="text-xs font-medium text-graphite-600">Report Mode</label>
+        <select
+          className="input mt-1"
+          value={f.mode}
+          onChange={(e) => setF({ ...f, mode: e.target.value as ReportFilter['mode'] })}
+        >
+          <option value="custom">From date → To date</option>
+          <option value="week">Weekly</option>
+          <option value="month">Monthly</option>
+        </select>
+      </div>
+      {f.mode === 'month' ? (
+        <div>
+          <label className="text-xs font-medium text-graphite-600">Select Month</label>
+          <input type="month" className="input mt-1" value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />
+        </div>
+      ) : f.mode === 'week' ? (
+        <div>
+          <label className="text-xs font-medium text-graphite-600">Any day in the week</label>
+          <input type="date" className="input mt-1" value={f.week} onChange={(e) => setF({ ...f, week: e.target.value })} />
+        </div>
+      ) : (
+        <>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">From Date</label>
+            <input type="date" className="input mt-1" value={f.fromDate} onChange={(e) => setF({ ...f, fromDate: e.target.value })} />
           </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">To Date</label>
+            <input type="date" className="input mt-1" value={f.toDate} onChange={(e) => setF({ ...f, toDate: e.target.value })} />
+          </div>
+        </>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <button type="button" className="btn-primary" disabled={busy} onClick={onApply}>{busy ? 'Loading…' : 'Apply'}</button>
+        <button type="button" className="btn-secondary" disabled={excelDisabled || busy} onClick={onExcel}>Download Excel</button>
+        {onPdf && (
+          <button type="button" className="btn-secondary" disabled={pdfBusy || busy} onClick={onPdf}>{pdfBusy ? 'Creating PDF…' : 'Download PDF'}</button>
+        )}
+      </div>
+    </div>
   );
 
   const lvPeriod = leadValueReport?.by_period || [];
@@ -2120,16 +2185,19 @@ export function Reports() {
     <div className="space-y-5">
       <PageHeader
         title="Reports"
-        subtitle="Lead source & product details, lead value by date range / week / month, and downloads."
+        subtitle="Each report has its own date filter — changing one does not affect the others."
       />
 
       <div className="card overflow-hidden">
-        <div className="bg-[#3F6212] text-white px-5 py-3 font-semibold tracking-wide">
-          LEAD VALUE REPORT
-        </div>
+        <div className="bg-[#3F6212] text-white px-5 py-3 font-semibold tracking-wide">LEAD VALUE REPORT</div>
         <div className="p-5 space-y-4">
-          {reportFilters('lead_value')}
-          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
+          {filterBar(
+            lvFilter, setLvFilter, lvBusy, () => loadLeadValue(lvFilter),
+            () => dl('/reports/lead-value/export', 'lead-value-report.xlsx', toParams(lvFilter), setLvErr),
+            !leadValueReport,
+            () => downloadPdf('lead_value', lvFilter, setLvErr),
+          )}
+          {lvErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{lvErr}</div>}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {[
               { label: 'Total Lead Value', value: inr(leadValueReport?.total_lead_value) },
@@ -2162,7 +2230,7 @@ export function Reports() {
             </div>
             <div>
               <h3 className="text-sm font-semibold text-graphite-700 mb-2">
-                {mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
+                {lvFilter.mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
               </h3>
               {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
                 <div className="h-72">
@@ -2203,14 +2271,95 @@ export function Reports() {
       </div>
 
       <div className="card overflow-hidden">
-        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">
-          DETAILS REPORT — LEADS BY SOURCE
-        </div>
+        <div className="bg-[#b45309] text-white px-5 py-3 font-semibold tracking-wide">QUOTATION REPORT</div>
         <div className="p-5 space-y-4">
-          {reportFilters('source')}
+          {filterBar(
+            quoteFilter, setQuoteFilter, quoteBusy, () => loadQuotations(quoteFilter),
+            () => dl('/reports/quotations/export', 'quotation-report.xlsx', toParams(quoteFilter), setQuoteErr),
+            !quotationReport,
+            () => downloadPdf('quotation', quoteFilter, setQuoteErr),
+          )}
+          {quoteErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{quoteErr}</div>}
+          {quotationReport && (
+            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+              <span><b>Effective From:</b> {quotationReport.effective_from || 'All time'}</span>
+              <span><b>Effective To:</b> {quotationReport.effective_to || 'All time'}</span>
+              <span><b>Quotations:</b> {quotationReport.totals?.count ?? 0}</span>
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-sm text-center">
+              <thead>
+                <tr className="bg-amber-300 text-graphite-900">
+                  <th className="th !bg-transparent !text-center underline">S.No</th>
+                  <th className="th !bg-transparent !text-center">Date</th>
+                  <th className="th !bg-transparent !text-center">Enquiry No</th>
+                  <th className="th !bg-transparent !text-center">Customer Name</th>
+                  <th className="th !bg-transparent !text-center">State</th>
+                  <th className="th !bg-transparent !text-center">Parking Type</th>
+                  <th className="th !bg-transparent !text-center">No. of Units/Cars</th>
+                  <th className="th !bg-transparent !text-center">Order Value (Excl GST)</th>
+                  <th className="th !bg-transparent !text-center">GST</th>
+                  <th className="th !bg-transparent !text-center">Grand Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(quotationReport?.rows || []).map((r: any, i: number) => (
+                  <tr key={`${r.enquiry_number}-${i}`} className={i % 2 ? 'bg-amber-50/50' : 'bg-white'}>
+                    <td className="td text-center">{i + 1}</td>
+                    <td className="td text-center whitespace-nowrap">{r.date || '—'}</td>
+                    <td className="td text-center font-medium">{r.enquiry_number || '—'}</td>
+                    <td className="td text-center">{r.customer_name || '—'}</td>
+                    <td className="td text-center">{r.state || '—'}</td>
+                    <td className="td text-center">{r.parking_type || '—'}</td>
+                    <td className="td text-center">{r.units ?? '—'}</td>
+                    <td className="td text-center tabular-nums font-medium">{inr(r.order_value_excl_gst)}</td>
+                    <td className="td text-center tabular-nums">{inr(r.gst)}</td>
+                    <td className="td text-center tabular-nums font-semibold">{inr(r.grand_total)}</td>
+                  </tr>
+                ))}
+                {quotationReport?.totals && (quotationReport.rows || []).length > 0 && (
+                  <tr className="bg-graphite-100 font-bold">
+                    <td className="td text-center" colSpan={6}>TOTAL</td>
+                    <td className="td text-center" />
+                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.order_value_excl_gst)}</td>
+                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.gst)}</td>
+                    <td className="td text-center tabular-nums">{inr(quotationReport.totals.grand_total)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            {quotationReport && !(quotationReport.rows || []).length && (
+              <EmptyState title="No quotations in this range" hint="Mark leads as Quotation sent with a value, or add quotation rows." />
+            )}
+          </div>
+        </div>
+      </div>
 
-          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
-
+      <div className="card overflow-hidden">
+        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">DETAILS REPORT — LEADS BY SOURCE</div>
+        <div className="p-5 space-y-4">
+          {filterBar(
+            sourceFilter, setSourceFilter, sourceBusy, () => loadSource(sourceFilter),
+            () => {
+              const p = toParams(sourceFilter);
+              const name = sourceFilter.mode === 'month'
+                ? `leads-by-source-${sourceFilter.month}.xlsx`
+                : sourceFilter.mode === 'week'
+                  ? `leads-by-source-week-${sourceFilter.week}.xlsx`
+                  : `leads-by-source-${sourceFilter.fromDate || 'all'}_to_${sourceFilter.toDate || 'all'}.xlsx`;
+              return dl('/reports/source-details/export', name, p, setSourceErr);
+            },
+            !details,
+            () => downloadPdf('source', sourceFilter, setSourceErr),
+          )}
+          {sourceErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{sourceErr}</div>}
+          {details && (
+            <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+              <span><b>Effective From:</b> {details.effective_from || 'All time'}</span>
+              <span><b>Effective To:</b> {details.effective_to || 'All time'}</span>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[960px] text-sm text-center">
               <thead>
@@ -2249,31 +2398,52 @@ export function Reports() {
                 )}
               </tbody>
             </table>
-            {!details && !busy && <EmptyState title="Apply a date range to load the report" />}
+            {!details && !sourceBusy && <EmptyState title="Apply a date range to load the report" />}
           </div>
         </div>
       </div>
 
       <div className="card overflow-hidden">
-        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide flex items-center justify-between">
-          <span>DETAILS REPORT — PRODUCT WISE</span>
-        </div>
+        <div className="bg-[#1e3a5f] text-white px-5 py-3 font-semibold tracking-wide">DETAILS REPORT — PRODUCT WISE</div>
         <div className="p-5 space-y-4">
-          {reportFilters('product')}
-          {err && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</div>}
+          {filterBar(
+            productFilter, setProductFilter, productBusy, () => loadProduct(productFilter),
+            () => dl('/reports/product-details/export', 'product-wise-details.xlsx', toParams(productFilter), setProductErr),
+            !productDetails,
+            () => downloadPdf('product', productFilter, setProductErr),
+          )}
+          {productErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{productErr}</div>}
           <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm text-center">
-            <thead><tr className="bg-[#1e3a5f] text-white">
-              {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
-            </tr></thead>
-            <tbody>
-              {(productDetails?.rows || []).map((row: any, i: number) => <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
-                <td className="td font-medium text-center">{row.product}</td><td className="td font-bold text-center">{row.total}</td><td className="td text-center">{row.in_followup}</td><td className="td text-center">{row.meeting}</td><td className="td text-center">{row.site_visit}</td><td className="td text-center">{row.quote_sent}</td><td className="td text-center">{row.not_interested}</td>
-              </tr>)}
-              {productDetails?.totals && <tr className="bg-graphite-100 font-bold"><td className="td text-center">TOTAL</td><td className="td text-center">{productDetails.totals.total}</td><td className="td text-center">{productDetails.totals.in_followup}</td><td className="td text-center">{productDetails.totals.meeting}</td><td className="td text-center">{productDetails.totals.site_visit}</td><td className="td text-center">{productDetails.totals.quote_sent}</td><td className="td text-center">{productDetails.totals.not_interested}</td></tr>}
-            </tbody>
-          </table>
-        </div>
+            <table className="w-full min-w-[900px] text-sm text-center">
+              <thead><tr className="bg-[#1e3a5f] text-white">
+                {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+              </tr></thead>
+              <tbody>
+                {(productDetails?.rows || []).map((row: any, i: number) => (
+                  <tr key={row.product} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
+                    <td className="td font-medium text-center">{row.product}</td>
+                    <td className="td font-bold text-center">{row.total}</td>
+                    <td className="td text-center">{row.in_followup}</td>
+                    <td className="td text-center">{row.meeting}</td>
+                    <td className="td text-center">{row.site_visit}</td>
+                    <td className="td text-center">{row.quote_sent}</td>
+                    <td className="td text-center">{row.not_interested}</td>
+                  </tr>
+                ))}
+                {productDetails?.totals && (
+                  <tr className="bg-graphite-100 font-bold">
+                    <td className="td text-center">TOTAL</td>
+                    <td className="td text-center">{productDetails.totals.total}</td>
+                    <td className="td text-center">{productDetails.totals.in_followup}</td>
+                    <td className="td text-center">{productDetails.totals.meeting}</td>
+                    <td className="td text-center">{productDetails.totals.site_visit}</td>
+                    <td className="td text-center">{productDetails.totals.quote_sent}</td>
+                    <td className="td text-center">{productDetails.totals.not_interested}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -2283,14 +2453,14 @@ export function Reports() {
           data={prod}
           x="product"
           y="leads"
-          onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx', filterParams())}
+          onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx', toParams(productFilter), setProductErr)}
         />
         <Card title="Monthly lead volume" action={
-          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx')}>
+          <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => dl('/reports/monthly/export', 'monthly-lead-volume.xlsx', {}, setProductErr)}>
             Download monthly Excel
           </button>
         }>
-            <p className="text-sm text-graphite-600">Download every month with a valid enquiry date, including source, product, and progress details.</p>
+          <p className="text-sm text-graphite-600">Download every month with a valid enquiry date, including source, product, and progress details.</p>
         </Card>
       </div>
 

@@ -6,15 +6,15 @@ from app.models import Lead, Product, User
 from app.services.pricing import PRODUCT_PRICES, calc_lead_value, apply_pricing_to_lead
 
 EXPECTED = {
-    ("Two Post Stack Parking", 10): 1_770_000,
-    ("Four Post Parking / Pit Stack Parking", 10): 2_950_000,
-    ("Puzzle Parking / Pit Puzzle Parking", 10): 4_130_000,
-    ("Tower Parking", 10): 5_310_000,
-    ("Shuttle Parking", 10): 5_900_000,
-    ("Car Elevator", 10): 23_600_000,
-    ("ASRS Parking", 10): 5_900_000,
-    ("Two Post Stack Parking", 1): 177_000,
-    ("Two Post Stack Parking", 100): 17_700_000,
+    ("Two Post Stack Parking", 10): 1_500_000,
+    ("Four Post Parking / Pit Stack Parking", 10): 2_500_000,
+    ("Puzzle Parking / Pit Puzzle Parking", 10): 3_500_000,
+    ("Tower Parking", 10): 4_500_000,
+    ("Shuttle Parking", 10): 5_000_000,
+    ("Car Elevator", 10): 20_000_000,
+    ("ASRS Parking", 10): 5_000_000,
+    ("Two Post Stack Parking", 1): 150_000,
+    ("Two Post Stack Parking", 100): 15_000_000,
 }
 
 
@@ -106,7 +106,7 @@ def main():
             "number_of_cars": 10,
         })
         assert calc.status_code == 200
-        assert calc.json()["lead_value"] == 1770000
+        assert calc.json()["lead_value"] == 1500000
 
         print("ALL PRICING TESTS PASSED")
     finally:

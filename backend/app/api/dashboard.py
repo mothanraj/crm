@@ -405,6 +405,154 @@ def reports_lead_value_export(
         title="Lead Value Report",
     )
 
+
+def _as_rupee_int(v) -> int:
+    try:
+        return int(round(float(v or 0)))
+    except Exception:
+        return 0
+
+
+def _quotation_report_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
+    """Quotation report (no Quotation Ref / Revision). Prefer quotations table; fall back to quoted leads."""
+    from app.services.pricing import GST_RATE
+
+    rows: list[dict] = []
+    q = (
+        db.query(Quotation, Lead, Product)
+        .join(Lead, Quotation.lead_id == Lead.id)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .filter(Lead.is_active.is_(True))
+    )
+    if start:
+        q = q.filter(func.coalesce(Quotation.quotation_date, Lead.enquiry_date) >= start)
+    if end:
+        q = q.filter(func.coalesce(Quotation.quotation_date, Lead.enquiry_date) <= end)
+    quote_rows = q.order_by(func.coalesce(Quotation.quotation_date, Lead.enquiry_date).desc()).all()
+
+    seen_leads: set = set()
+    for quote, lead, product in quote_rows:
+        seen_leads.add(lead.id)
+        excl = quote.amount_excl
+        gst = quote.gst
+        grand = quote.grand_total
+        if excl is None and grand is not None:
+            excl = float(grand) / float(1 + GST_RATE)
+            gst = float(grand) - float(excl)
+        elif excl is not None and gst is None:
+            gst = float(excl) * float(GST_RATE)
+            if grand is None:
+                grand = float(excl) + float(gst)
+        units = quote.units if quote.units is not None else lead.quantity_num
+        dt = quote.quotation_date or lead.enquiry_date
+        rows.append({
+            "date": dt.isoformat() if dt else None,
+            "enquiry_number": lead.enquiry_number or "",
+            "customer_name": lead.customer_name or "",
+            "state": lead.city or "",
+            "parking_type": (product.name if product else None) or lead.product_raw or "",
+            "units": float(units) if units is not None else None,
+            "order_value_excl_gst": _as_rupee_int(excl),
+            "gst": _as_rupee_int(gst),
+            "grand_total": _as_rupee_int(grand if grand is not None else (
+                (float(excl or 0) + float(gst or 0)) if excl is not None else 0
+            )),
+        })
+
+    lead_q = (
+        db.query(Lead, Product, LeadStatus)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(
+            Lead.is_active.is_(True),
+            Lead.quotation_value.isnot(None),
+            LeadStatus.name == STATUS_QUOTE,
+        )
+    )
+    if start:
+        lead_q = lead_q.filter(Lead.enquiry_date >= start)
+    if end:
+        lead_q = lead_q.filter(Lead.enquiry_date <= end)
+    for lead, product, _st in lead_q.order_by(Lead.enquiry_date.desc()).all():
+        if lead.id in seen_leads:
+            continue
+        excl = float(lead.quotation_value or 0)
+        gst = excl * float(GST_RATE)
+        rows.append({
+            "date": lead.enquiry_date.isoformat() if lead.enquiry_date else None,
+            "enquiry_number": lead.enquiry_number or "",
+            "customer_name": lead.customer_name or "",
+            "state": lead.city or "",
+            "parking_type": (product.name if product else None) or lead.product_raw or "",
+            "units": float(lead.quantity_num) if lead.quantity_num is not None else None,
+            "order_value_excl_gst": _as_rupee_int(excl),
+            "gst": _as_rupee_int(gst),
+            "grand_total": _as_rupee_int(excl + gst),
+        })
+
+    totals = {
+        "order_value_excl_gst": sum(r["order_value_excl_gst"] for r in rows),
+        "gst": sum(r["gst"] for r in rows),
+        "grand_total": sum(r["grand_total"] for r in rows),
+        "count": len(rows),
+    }
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "rows": rows,
+        "totals": totals,
+    }
+
+
+@router.get("/reports/quotations")
+def reports_quotations(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    return _quotation_report_payload(db, start, end, resolved)
+
+
+@router.get("/reports/quotations/export")
+def reports_quotations_export(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    payload = _quotation_report_payload(db, start, end, resolved)
+    headers = [
+        "S.No", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
+        "No. of Units/Cars", "Order Value (Excl GST)", "GST", "Grand Total",
+    ]
+    body = []
+    for i, r in enumerate(payload["rows"], start=1):
+        body.append([
+            i, r["date"] or "", r["enquiry_number"], r["customer_name"], r["state"],
+            r["parking_type"], r["units"] if r["units"] is not None else "",
+            r["order_value_excl_gst"], r["gst"], r["grand_total"],
+        ])
+    t = payload["totals"]
+    body.append([
+        "", "", "", "", "", "TOTAL", "",
+        t["order_value_excl_gst"], t["gst"], t["grand_total"],
+    ])
+    label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
+    return _xlsx_download(f"quotation-report-{label}.xlsx", headers, body, title="Quotation Report")
+
+
 def _by_source_matrix(db: Session, start: date | None = None, end: date | None = None, u: User | None = None) -> dict:
     # Single query from Lead: blank sources fold into "Others" via coalesce,
     # so each lead is counted exactly once.
@@ -472,14 +620,12 @@ def _ordered_sources(matrix: dict) -> list[str]:
 
 def _source_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
     matrix = _by_source_matrix(db, start, end)
-    money = _quote_sums_by_source(db, start, end)
     rows = []
     totals = {
         "total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "not_interested": 0,
     }
     for src in _ordered_sources(matrix):
         m = matrix[src]
-        money_row = money.get(src, {"project_value": 0.0, "sales_amount": 0.0})
         row = {
             "source": src,
             "total": int(m.get("total", 0)),
@@ -604,7 +750,7 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product|lead_value)$"),
+    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation)$"),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
@@ -617,6 +763,10 @@ def report_pdf(
         payload = _lead_value_for_range(db, start, end, resolved, u)
         content = build_report_pdf(payload, "lead_value")
         filename = "lead-value-report.pdf"
+    elif report_type == "quotation":
+        payload = _quotation_report_payload(db, start, end, resolved)
+        content = build_report_pdf(payload, "quotation")
+        filename = "quotation-report.pdf"
     else:
         payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
         content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
