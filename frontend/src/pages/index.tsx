@@ -1985,7 +1985,7 @@ export function Reports() {
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with follow-up, meeting, site visit and quotation counts, plus chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Product funnel table plus product-wise lead bar chart.', accent: 'bg-[#0f766e]' },
-    { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product and period with charts.', accent: 'bg-[#3F6212]' },
+    { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product, source and period with charts.', accent: 'bg-[#3F6212]' },
     { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
     { id: 'employee', title: 'Employee Workload Report', description: 'Assigned lead count per employee.', accent: 'bg-[#334155]' },
     { id: 'monthly', title: 'Monthly Lead Volume', description: 'Pick a month range, view the chart and table, then download Excel or PDF.', accent: 'bg-[#4338ca]' },
@@ -2256,6 +2256,7 @@ export function Reports() {
 
   const lvPeriod = leadValueReport?.by_period || [];
   const lvProducts = leadValueReport?.by_product || [];
+  const lvSources = leadValueReport?.by_source || [];
   const activeMeta = REPORT_MENU.find((r) => r.id === activeReport);
 
   if (!activeReport) {
@@ -2341,23 +2342,57 @@ export function Reports() {
                 )}
               </div>
               <div>
-                <h3 className="text-sm font-semibold text-graphite-700 mb-2">
-                  {lvFilter.mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
-                </h3>
-                {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
+                <h3 className="text-sm font-semibold text-graphite-700 mb-2">Lead Value by Source</h3>
+                {lvSources.every((r: any) => !r.lead_value) ? <EmptyState title="No source lead value in this range" /> : (
                   <div className="h-72">
                     <ResponsiveContainer>
-                      <BarChart data={lvPeriod} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
+                      <BarChart data={lvSources} margin={{ top: 8, right: 8, left: 0, bottom: 56 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} tick={{ fontSize: 9 }} />
+                        <XAxis dataKey="source" interval={0} angle={-25} textAnchor="end" height={60} tick={{ fontSize: 9 }} />
                         <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
                         <Tooltip formatter={(v: any) => inr(v)} />
-                        <Bar dataKey="lead_value" name="Lead Value" fill="#65A30D" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="lead_value" name="Lead Value" fill="#0e7490" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
                 )}
               </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] text-sm text-center">
+                <thead><tr className="bg-graphite-100">
+                  <th className="th text-center">Source</th>
+                  <th className="th text-center">Leads</th>
+                  <th className="th text-center">Lead Value</th>
+                </tr></thead>
+                <tbody>
+                  {lvSources.map((r: any) => (
+                    <tr key={r.source} className="hover:bg-graphite-50">
+                      <td className="td text-center">{r.source}</td>
+                      <td className="td text-center">{r.leads}</td>
+                      <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">
+                {lvFilter.mode === 'week' ? 'Lead Value by Day' : 'Lead Value by Week'}
+              </h3>
+              {lvPeriod.length === 0 ? <EmptyState title="No dated leads in this range" /> : (
+                <div className="h-72">
+                  <ResponsiveContainer>
+                    <BarChart data={lvPeriod} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="label" interval={0} angle={-20} textAnchor="end" height={50} tick={{ fontSize: 9 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                      <Tooltip formatter={(v: any) => inr(v)} />
+                      <Bar dataKey="lead_value" name="Lead Value" fill="#65A30D" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
             {lvPeriod.length > 0 && (
               <div className="overflow-x-auto">

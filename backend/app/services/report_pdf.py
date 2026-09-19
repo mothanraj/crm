@@ -208,24 +208,57 @@ def build_lead_value_pdf(payload: dict) -> bytes:
 
     # By product
     story.append(Paragraph("Lead Value by Product", subhead))
-    prod_rows = [[Paragraph(h, header) for h in ("Product", "Leads", "Lead Value")]]
+    prod_rows = [[Paragraph(h, header) for h in ("Product", "Sources", "Leads", "Lead Value")]]
     for row in payload.get("by_product") or []:
         prod_rows.append([
             Paragraph(escape(str(row.get("product") or "—")), cell),
+            Paragraph(escape(str(row.get("sources") or "—")), cell),
             Paragraph(str(row.get("leads") or 0), cell),
             Paragraph(_inr(row.get("lead_value")), cell),
         ])
     if len(prod_rows) == 1:
-        prod_rows.append([Paragraph("No data", cell), Paragraph("0", cell), Paragraph(_inr(0), cell)])
+        prod_rows.append([
+            Paragraph("No data", cell), Paragraph("—", cell),
+            Paragraph("0", cell), Paragraph(_inr(0), cell),
+        ])
     prod_rows.append([
         Paragraph("TOTAL", header),
+        Paragraph("", cell),
         Paragraph(str(payload.get("total_leads") or 0), cell),
         Paragraph(_inr(payload.get("total_lead_value")), cell),
     ])
-    pw = (width - 72) / 3
-    prod_table = Table(prod_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
+    usable = width - 72
+    prod_table = Table(
+        prod_rows,
+        colWidths=[usable * 0.32, usable * 0.36, usable * 0.14, usable * 0.18],
+        repeatRows=1,
+        hAlign="CENTER",
+    )
     prod_table.setStyle(_centered_table_style(GREEN))
     story.append(prod_table)
+
+    # By source
+    story.append(Paragraph("Lead Value by Source", subhead))
+    src_rows = [[Paragraph(h, header) for h in ("Source", "Leads", "Lead Value")]]
+    for row in payload.get("by_source") or []:
+        src_rows.append([
+            Paragraph(escape(str(row.get("source") or "—")), cell),
+            Paragraph(str(row.get("leads") or 0), cell),
+            Paragraph(_inr(row.get("lead_value")), cell),
+        ])
+    if len(src_rows) == 1:
+        src_rows.append([Paragraph("No data", cell), Paragraph("0", cell), Paragraph(_inr(0), cell)])
+    source_total_leads = sum(int(r.get("leads") or 0) for r in (payload.get("by_source") or []))
+    source_total_value = sum(float(r.get("lead_value") or 0) for r in (payload.get("by_source") or []))
+    src_rows.append([
+        Paragraph("TOTAL", header),
+        Paragraph(str(source_total_leads), cell),
+        Paragraph(_inr(source_total_value), cell),
+    ])
+    pw = usable / 3
+    src_table = Table(src_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
+    src_table.setStyle(_centered_table_style(GREEN))
+    story.append(src_table)
 
     # By period
     story.append(Paragraph("Lead Value by Period", subhead))

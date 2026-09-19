@@ -310,11 +310,55 @@ def _lead_value_for_range(db: Session, start: date | None, end: date | None, mod
         .group_by(Product.name)
         .all()
     )
-    by_name = {name: {"product": name, "lead_value": _as_rupee(val), "leads": int(cnt or 0)} for name, val, cnt in rows}
+    by_name = {
+        name: {"product": name, "lead_value": _as_rupee(val), "leads": int(cnt or 0), "sources": "—"}
+        for name, val, cnt in rows
+    }
+
+    # Distinct sources that contributed lead value for each product
+    product_source_rows = (
+        db.query(Product.name, LeadSource.name)
+        .select_from(Lead)
+        .join(Product, Lead.product_id == Product.id)
+        .join(LeadSource, Lead.source_id == LeadSource.id)
+        .filter(filters)
+        .distinct()
+        .all()
+    )
+    sources_by_product: dict[str, set[str]] = {}
+    for product_name, source_name in product_source_rows:
+        if not product_name or not source_name:
+            continue
+        sources_by_product.setdefault(product_name, set()).add(source_name)
+    for product_name, sources in sources_by_product.items():
+        if product_name in by_name:
+            by_name[product_name]["sources"] = ", ".join(sorted(sources)) or "—"
+
     by_product = [
-        by_name.get(name) or {"product": name, "lead_value": 0, "leads": 0}
+        by_name.get(name) or {"product": name, "lead_value": 0, "leads": 0, "sources": "—"}
         for name in CANONICAL_PRODUCTS
     ]
+
+    source_rows = (
+        db.query(LeadSource.name, func.coalesce(func.sum(Lead.lead_value), 0), func.count(Lead.id))
+        .select_from(Lead)
+        .join(LeadSource, Lead.source_id == LeadSource.id)
+        .filter(filters)
+        .group_by(LeadSource.name)
+        .all()
+    )
+    by_source_name = {
+        name: {"source": name, "lead_value": _as_rupee(val), "leads": int(cnt or 0)}
+        for name, val, cnt in source_rows
+    }
+    by_source = [
+        by_source_name.get(name) or {"source": name, "lead_value": 0, "leads": 0}
+        for name in CANONICAL_SOURCES
+    ]
+    # Include any non-canonical sources that still have leads
+    for name, row in sorted(by_source_name.items()):
+        if name not in CANONICAL_SOURCES:
+            by_source.append(row)
 
     # Period series: daily for week mode, weekly buckets otherwise
     period_rows = (
@@ -358,6 +402,7 @@ def _lead_value_for_range(db: Session, start: date | None, end: date | None, mod
         "total_cars": total_cars,
         "average_lead_value": avg_value,
         "by_product": by_product,
+        "by_source": by_source,
         "by_period": by_period,
     }
 
@@ -390,14 +435,23 @@ def reports_lead_value_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _lead_value_for_range(db, start, end, resolved, u)
-    headers = ["Product", "Leads", "Lead Value"]
-    body = [[r["product"], r["leads"], r["lead_value"]] for r in payload["by_product"]]
-    body.append(["TOTAL", payload["total_leads"], payload["total_lead_value"]])
-    # Append period sheet as extra rows with a blank separator
-    body.append(["", "", ""])
-    body.append(["Period", "Leads", "Lead Value"])
+    headers = ["Product", "Sources", "Leads", "Lead Value"]
+    body = [[r["product"], r.get("sources") or "—", r["leads"], r["lead_value"]] for r in payload["by_product"]]
+    body.append(["TOTAL", "", payload["total_leads"], payload["total_lead_value"]])
+    body.append(["", "", "", ""])
+    body.append(["Source", "", "Leads", "Lead Value"])
+    for r in payload.get("by_source") or []:
+        body.append([r["source"], "", r["leads"], r["lead_value"]])
+    body.append([
+        "TOTAL",
+        "",
+        sum(int(r["leads"]) for r in (payload.get("by_source") or [])),
+        sum(int(r["lead_value"]) for r in (payload.get("by_source") or [])),
+    ])
+    body.append(["", "", "", ""])
+    body.append(["Period", "", "Leads", "Lead Value"])
     for r in payload["by_period"]:
-        body.append([r.get("label") or r.get("period"), r["leads"], r["lead_value"]])
+        body.append([r.get("label") or r.get("period"), "", r["leads"], r["lead_value"]])
     return _xlsx_download(
         f"lead-value-{start or 'all'}-to-{end or 'all'}.xlsx",
         headers,
