@@ -112,7 +112,7 @@ export function Login() {
       localStorage.setItem('user_name', data.user.name || data.user.email || data.user.role);
       location.href = '/dashboard';
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Cannot reach the server. Is the backend running on port 8000?');
+      setError(e?.response?.data?.detail || 'Cannot reach the server. Port 8000 is busy or the backend is stuck — run scripts\\stop-backend.ps1 then scripts\\start-backend.ps1');
     } finally { setBusy(false); }
   };
   return (
@@ -120,7 +120,7 @@ export function Login() {
       <div className="hidden md:flex flex-col justify-between text-white p-12 relative overflow-hidden bg-gradient-to-br from-graphite-700 via-graphite-800 to-graphite-950">
         <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-brand-400/20 blur-3xl pointer-events-none" />
         <div className="flex items-center relative">
-          <img src="/estar-logo.jpg" alt="E-Star" className="h-16 w-auto max-w-[200px] rounded-xl object-contain bg-white p-2 shadow-sm" />
+          <img src="/estar-logo.png" alt="E-Star" className="h-20 w-auto max-w-[260px] rounded-xl object-contain bg-white p-2 shadow-sm" />
         </div>
         <div className="relative">
           <h1 className="text-4xl font-bold leading-tight">Every lead,<br />followed up.</h1>
@@ -139,7 +139,7 @@ export function Login() {
       <div className="flex items-center justify-center p-8 bg-graphite-100">
         <form onSubmit={submit} className="card p-8 w-full max-w-sm space-y-4">
           <div className="flex items-center justify-center md:hidden">
-            <img src="/estar-logo.jpg" alt="E-Star" className="h-14 w-auto max-w-[180px] rounded-xl object-contain" />
+            <img src="/estar-logo.png" alt="E-Star" className="h-16 w-auto max-w-[220px] rounded-xl object-contain" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-graphite-900">Welcome back</h2>
