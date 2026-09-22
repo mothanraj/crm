@@ -29,7 +29,11 @@ STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
 STATUS_ASSIGNED = "Assigned"
 STATUS_MEETING = "Meeting"
-CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
+CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"]
+CUSTOMER_REVIEW_ALIASES = {
+    "C (plan stage)": "C (Planning Stage)",
+    "Planning Stage": "C (Planning Stage)",
+}
 DASHBOARD_MAPPED = {
     STATUS_FOLLOWUP, STATUS_PROSPECT, STATUS_RNR, STATUS_PIPELINE,
     "Not Interested", "Not Interested/Spam", STATUS_CONVERTED, STATUS_NEW,
@@ -89,6 +93,11 @@ def _resolve_range(
         return start, end, "week"
     start = _parse_date(from_date, "from_date")
     end = _parse_date(to_date, "to_date")
+    today = date.today()
+    if end and end > today:
+        end = today
+    if start and start > today:
+        start = today
     if start and end and start > end:
         raise HTTPException(400, "from_date must be on or before to_date")
     return start, end, "custom"
@@ -884,8 +893,13 @@ def _customer_review_rows(db: Session):
         .group_by(Lead.customer_review)
         .all()
     )
+    # Fold legacy labels into "C (Planning Stage)"
+    for old, new in CUSTOMER_REVIEW_ALIASES.items():
+        if old in rows:
+            rows[new] = int(rows.get(new, 0) or 0) + int(rows.pop(old) or 0)
+    allowed = set(CUSTOMER_REVIEW_ORDER)
     out = [{"customer_review": label, "leads": int(rows.get(label, 0) or 0)} for label in CUSTOMER_REVIEW_ORDER]
-    other = sum(int(c or 0) for label, c in rows.items() if label and label not in CUSTOMER_REVIEW_ORDER)
+    other = sum(int(c or 0) for label, c in rows.items() if label and label not in allowed)
     blank = int(rows.get("", 0) or 0)
     if other:
         out.append({"customer_review": "Other", "leads": other})

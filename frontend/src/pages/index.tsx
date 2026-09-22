@@ -731,7 +731,7 @@ export function EmployeeDashboard() {
 /* ================= LEADS ================= */
 export function Leads() {
   const role = localStorage.getItem('role') || '';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [masters, setMasters] = useState<any>(null);
@@ -1085,7 +1085,7 @@ export function EmployeeLeads() {
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
   const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const statusOf = (l: any) => {
     const s = nameOf('statuses', l.status_id);
@@ -1100,7 +1100,11 @@ export function EmployeeLeads() {
   }));
   const reviewCounts = reviewOptions.map((label) => ({
     label,
-    value: items.filter((l) => (l.customer_review || '') === label).length,
+    value: items.filter((l) => {
+      const v = (l.customer_review || '').trim();
+      if (label === 'C (Planning Stage)') return v === 'C (Planning Stage)' || v === 'C (plan stage)' || v === 'Planning Stage';
+      return v === label;
+    }).length,
   }));
   const unreviewed = items.filter((l) => !(l.customer_review || '').trim()).length;
   return (
@@ -2208,7 +2212,9 @@ export function Reports() {
     onExcel: () => void,
     excelDisabled: boolean,
     onPdf?: () => void,
-  ) => (
+  ) => {
+    const today = new Date().toISOString().slice(0, 10);
+    return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
       <div>
         <label className="text-xs font-medium text-graphite-600">Report Mode</label>
@@ -2225,22 +2231,31 @@ export function Reports() {
       {f.mode === 'month' ? (
         <div>
           <label className="text-xs font-medium text-graphite-600">Select Month</label>
-          <input type="month" className="input mt-1" value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />
+          <input type="month" className="input mt-1" max={today.slice(0, 7)} value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />
         </div>
       ) : f.mode === 'week' ? (
         <div>
           <label className="text-xs font-medium text-graphite-600">Any day in the week</label>
-          <input type="date" className="input mt-1" value={f.week} onChange={(e) => setF({ ...f, week: e.target.value })} />
+          <input type="date" className="input mt-1" max={today} value={f.week} onChange={(e) => setF({ ...f, week: e.target.value > today ? today : e.target.value })} />
         </div>
       ) : (
         <>
           <div>
             <label className="text-xs font-medium text-graphite-600">From Date</label>
-            <input type="date" className="input mt-1" value={f.fromDate} onChange={(e) => setF({ ...f, fromDate: e.target.value })} />
+            <input type="date" className="input mt-1" max={today} value={f.fromDate} onChange={(e) => setF({ ...f, fromDate: e.target.value > today ? today : e.target.value })} />
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">To Date</label>
-            <input type="date" className="input mt-1" value={f.toDate} onChange={(e) => setF({ ...f, toDate: e.target.value })} />
+            <input
+              type="date"
+              className="input mt-1"
+              max={today}
+              value={f.toDate}
+              onChange={(e) => {
+                const next = e.target.value > today ? today : e.target.value;
+                setF({ ...f, toDate: next });
+              }}
+            />
           </div>
         </>
       )}
@@ -2252,7 +2267,8 @@ export function Reports() {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   const lvPeriod = leadValueReport?.by_period || [];
   const lvProducts = leadValueReport?.by_product || [];
@@ -2800,7 +2816,7 @@ export function EmployeesPage() {
     } finally { setLoadingEmployeeLeads(false); }
   };
   const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
   const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const empLeadStatus = (lead: any) => {
     const s = leadStatusName(lead.status_id);
@@ -2815,7 +2831,11 @@ export function EmployeesPage() {
   }));
   const empReviewCounts = reviewOptions.map((label) => ({
     label,
-    value: employeeLeads.filter((l) => (l.customer_review || '') === label).length,
+    value: employeeLeads.filter((l) => {
+      const v = (l.customer_review || '').trim();
+      if (label === 'C (Planning Stage)') return v === 'C (Planning Stage)' || v === 'C (plan stage)' || v === 'Planning Stage';
+      return v === label;
+    }).length,
   }));
   const empUnreviewed = employeeLeads.filter((l) => !(l.customer_review || '').trim()).length;
   const create = async (e: React.FormEvent) => {

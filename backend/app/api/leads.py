@@ -61,7 +61,11 @@ def _serialize(
             {
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
-                "category": a.customer_review or "",
+                "category": (
+                    "C (Planning Stage)"
+                    if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+                    else (a.customer_review or "")
+                ),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             }
@@ -94,7 +98,11 @@ def _serialize(
         "first_contact_result": l.first_contact_result or "",
         "first_contact_notes": l.first_contact_notes or "",
         "employee_remarks": l.employee_remarks or "",
-        "customer_review": l.customer_review or "",
+        "customer_review": (
+            "C (Planning Stage)"
+            if (l.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+            else (l.customer_review or "")
+        ),
         "quotation_value": _money_str(l.quotation_value),
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
@@ -222,7 +230,11 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
             hist_by_lead.setdefault(a.lead_id, []).append({
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
-                "category": a.customer_review or "",
+                "category": (
+                    "C (Planning Stage)"
+                    if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+                    else (a.customer_review or "")
+                ),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             })
@@ -458,7 +470,9 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     if not status:
         raise HTTPException(400, "Invalid work progress status")
     customer_review = (body.customer_review or "").strip()
-    if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"}:
+    if customer_review in {"C (plan stage)", "Planning Stage"}:
+        customer_review = "C (Planning Stage)"
+    if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"}:
         raise HTTPException(400, "Invalid customer review")
     if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
         raise HTTPException(400, "Invalid SLA state")
