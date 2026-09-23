@@ -88,6 +88,8 @@ class StatusChange(BaseModel):
 class AssignIn(BaseModel):
     employee_id: UUID
     role: str = "PRIMARY"
+    # Admin leads page: pick any employee. Detail-page reassignment stays request-gated.
+    manual: bool = False
 
 
 class ReassignRequestIn(BaseModel):
@@ -129,3 +131,17 @@ class QuoteIn(BaseModel):
     grand_total: Optional[float] = None
     status: str = "Draft"
     notes: str = ""
+
+
+class QuoteFormIn(BaseModel):
+    """Editable EEPL quotation form (unit cost × units → total + GST + grand)."""
+    unit_cost: float = Field(ge=0)
+    units: float = Field(gt=0)
+    to_name: str = ""
+    to_address: str = ""
+    subject: str = ""
+    product_description: str = "Design, Manufacture, Supply and Erection of Parking System"
+    payment_terms: str = ""
+    delivery_period: str = ""
+    post_warranty: str = ""
+    quotation_date: Optional[date] = None

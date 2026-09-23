@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Notification, Product, Quotation, SiteVisit, User
+from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, Notification, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 from app.services.pricing import PRODUCT_PRICES
 
@@ -815,7 +815,7 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation|monthly)$"),
+    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation|monthly|detailed)$"),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
@@ -836,6 +836,11 @@ def report_pdf(
             "monthly",
         )
         filename = "monthly-lead-volume.pdf"
+    elif report_type == "detailed":
+        start, end = _resolve_month_span(from_month, to_month)
+        payload = _detailed_leads_payload(db, start, end, from_month, to_month)
+        content = build_report_pdf(payload, "detailed")
+        filename = "detailed-lead-report.pdf"
     else:
         start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
         if report_type == "lead_value":
@@ -1078,6 +1083,303 @@ def monthly_export(
         [[r["month"], r["leads"], r["in_followup"], r["meeting"], r["site_visit"], r["quotation_sent"], r["not_interested"], r["sources"], r["products"]] for r in rows],
         title="Monthly Volume",
     )
+
+
+def _money_cell(n) -> str | None:
+    if n is None or n == "":
+        return None
+    try:
+        return str(int(round(float(n))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _numbered_lines(values: list[str]) -> str:
+    cleaned = [str(v).strip() for v in values if v is not None and str(v).strip()]
+    if not cleaned:
+        return "—"
+    if len(cleaned) == 1:
+        return cleaned[0]
+    return "\n".join(f"{i}. {v}" for i, v in enumerate(cleaned, 1))
+
+
+def _detailed_leads_payload(
+    db: Session,
+    start: date | None,
+    end: date | None,
+    from_month: str | None = None,
+    to_month: str | None = None,
+) -> dict:
+    """Row-level lead details (same fields as the Leads page) for a month span."""
+    filters = [Lead.is_active.is_(True)]
+    if start:
+        filters.append(Lead.enquiry_date >= start)
+    if end:
+        filters.append(Lead.enquiry_date <= end)
+    q = (
+        db.query(
+            Lead,
+            LeadStatus.name,
+            LeadSource.name,
+            Product.name,
+            User.name,
+        )
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .outerjoin(User, Lead.primary_employee_id == User.id)
+        .filter(*filters)
+        .order_by(Lead.enquiry_date.desc(), Lead.enquiry_number)
+    )
+    leads = q.all()
+    lead_ids = [lead.id for lead, *_ in leads]
+    history_by_lead: dict = defaultdict(list)
+    if lead_ids:
+        activities = (
+            db.query(LeadActivity)
+            .filter(
+                LeadActivity.lead_id.in_(lead_ids),
+                LeadActivity.activity_type == "Work Progress",
+            )
+            .order_by(LeadActivity.activity_at.asc())
+            .all()
+        )
+        for a in activities:
+            history_by_lead[a.lead_id].append({
+                "remarks": (a.notes or "").strip(),
+                "category": (a.customer_review or "").strip(),
+                "progress": (a.outcome or "").strip(),
+                "quotation_value": _money_cell(a.quotation_value),
+                "at": a.activity_at.isoformat() if a.activity_at else None,
+            })
+
+    rows = []
+    for lead, status_name, source_name, product_name, employee_name in leads:
+        status = status_name or "—"
+        if status == STATUS_NEW and lead.primary_employee_id:
+            status = STATUS_ASSIGNED
+        history = history_by_lead.get(lead.id) or []
+        if history:
+            categories = [h["category"] for h in history]
+            remarks = [h["remarks"] for h in history]
+            progress = [h["progress"] for h in history]
+            # Prefer latest quotation from history when present
+            quote_vals = [h["quotation_value"] for h in history if h.get("quotation_value")]
+            quotation_value = quote_vals[-1] if quote_vals else _money_cell(lead.quotation_value)
+        else:
+            categories = [lead.customer_review or ""]
+            remarks = [(lead.employee_remarks or "").strip()]
+            progress = [status if status != "—" else ""]
+            quotation_value = _money_cell(lead.quotation_value)
+        rows.append({
+            "enquiry_number": lead.enquiry_number or "—",
+            "enquiry_date": lead.enquiry_date.isoformat() if lead.enquiry_date else "—",
+            "customer_name": lead.customer_name or "—",
+            "company_name": lead.company_name or "—",
+            "city": lead.city or "—",
+            "contact_number": lead.contact_number or "—",
+            "email": lead.email or "—",
+            "cars": lead.quantity_raw or ("—" if lead.quantity_num is None else str(int(lead.quantity_num))),
+            "product": product_name or lead.product_raw or "—",
+            "source": source_name or "—",
+            "status": status,
+            "category": _numbered_lines(categories),
+            "remarks": _numbered_lines(remarks),
+            "progress": _numbered_lines(progress),
+            "work_history": history,
+            "employee": employee_name or "Unassigned",
+            "lead_value": _money_cell(lead.lead_value),
+            "quotation_value": quotation_value,
+        })
+    return {
+        "from_month": from_month,
+        "to_month": to_month,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
+@router.get("/reports/detailed-leads")
+def detailed_leads(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    from_month: str | None = None, to_month: str | None = None,
+):
+    _require_reports(u)
+    start, end = _resolve_month_span(from_month, to_month)
+    return _detailed_leads_payload(db, start, end, from_month, to_month)
+
+
+@router.get("/reports/detailed-leads/export")
+def detailed_leads_export(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    from_month: str | None = None, to_month: str | None = None,
+):
+    _require_reports(u)
+    start, end = _resolve_month_span(from_month, to_month)
+    payload = _detailed_leads_payload(db, start, end, from_month, to_month)
+    headers = [
+        "Enquiry No", "Enquiry Date", "Customer", "Company", "City", "Contact", "Email",
+        "Cars", "Product", "Source", "Current Status", "Progress", "Category", "Employee",
+        "Lead Value", "Quotation Value", "Remarks",
+    ]
+    body = [[
+        r["enquiry_number"], r["enquiry_date"], r["customer_name"], r["company_name"], r["city"],
+        r["contact_number"], r["email"], r["cars"], r["product"], r["source"], r["status"],
+        r["progress"], r["category"], r["employee"], r["lead_value"] or "—", r["quotation_value"] or "—",
+        r["remarks"],
+    ] for r in payload["rows"]]
+    return _xlsx_download("detailed-lead-report.xlsx", headers, body, title="Detailed Lead Report")
+
+
+COMPARISON_CATEGORIES = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
+COMPARISON_ACTIONS = [
+    "New Lead", "Assigned", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
+]
+_SLICE_STATUSES = (
+    "New Lead", "Assigned", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
+)
+
+
+def _shift_months(d: date, months: int) -> date:
+    month = d.month - months
+    year = d.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    last = monthrange(year, month)[1]
+    return date(year, month, min(d.day, last))
+
+
+def _comparison_windows(year: int | None, months: int | None) -> tuple[date, date, date, date, str, str]:
+    today = date.today()
+    if months:
+        months = max(1, min(int(months), 24))
+        current_end = today
+        anchor = _shift_months(today, months - 1)
+        current_start = date(anchor.year, anchor.month, 1)
+        previous_end = current_start - timedelta(days=1)
+        prev_anchor = _shift_months(previous_end, months - 1)
+        previous_start = date(prev_anchor.year, prev_anchor.month, 1)
+        return current_start, current_end, previous_start, previous_end, f"Last {months} months", f"Previous {months} months"
+    chosen = year or today.year
+    current_start, current_end = date(chosen, 1, 1), date(chosen, 12, 31)
+    if chosen == today.year:
+        current_end = today
+    previous_start, previous_end = date(chosen - 1, 1, 1), date(chosen - 1, 12, 31)
+    return current_start, current_end, previous_start, previous_end, str(chosen), str(chosen - 1)
+
+
+def _lead_status_label(status_name: str | None, employee_id) -> str:
+    status = status_name or ""
+    if status == STATUS_NEW and employee_id:
+        return STATUS_ASSIGNED
+    if status in STATUS_NOT_INT:
+        return "Not Interested"
+    return status or "—"
+
+
+def _status_bucket() -> dict:
+    return {"total": 0, **{name: 0 for name in _SLICE_STATUSES}}
+
+
+def _comparison_slice(db: Session, start: date, end: date, category: str | None, work_action: str | None) -> dict:
+    rows = (
+        db.query(Lead, LeadStatus.name, LeadSource.name, Product.name)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .filter(Lead.is_active.is_(True), Lead.enquiry_date >= start, Lead.enquiry_date <= end)
+        .all()
+    )
+    by_category = {name: {"leads": 0, "lead_value": 0, "quotation_sent": 0, "quotation_value": 0} for name in COMPARISON_CATEGORIES}
+    by_action = {name: {"leads": 0, "lead_value": 0, "quotation_sent": 0, "quotation_value": 0} for name in COMPARISON_ACTIONS}
+    by_source = {name: _status_bucket() for name in CANONICAL_SOURCES}
+    by_product = {name: _status_bucket() for name in CANONICAL_PRODUCTS}
+    leads = lead_value = quotation_value = quotation_sent = 0
+    for lead, status_name, source_name, product_name in rows:
+        status = _lead_status_label(status_name, lead.primary_employee_id)
+        cat = (lead.customer_review or "").strip()
+        if category and cat != category:
+            continue
+        if work_action and status != work_action:
+            continue
+        value = int(round(float(lead.lead_value or 0)))
+        quote = int(round(float(lead.quotation_value or 0)))
+        sent = 1 if status == STATUS_QUOTE else 0
+        leads += 1
+        lead_value += value
+        quotation_value += quote
+        quotation_sent += sent
+        if cat in by_category:
+            by_category[cat]["leads"] += 1
+            by_category[cat]["lead_value"] += value
+            by_category[cat]["quotation_sent"] += sent
+            by_category[cat]["quotation_value"] += quote
+        if status in by_action:
+            by_action[status]["leads"] += 1
+            by_action[status]["lead_value"] += value
+            by_action[status]["quotation_sent"] += sent
+            by_action[status]["quotation_value"] += quote
+        source = canonical_source(source_name or "")
+        product = product_name or "Unmapped"
+        by_source.setdefault(source, _status_bucket())
+        by_product.setdefault(product, _status_bucket())
+        for bucket in (by_source[source], by_product[product]):
+            bucket["total"] += 1
+            if status in _SLICE_STATUSES:
+                bucket[status] += 1
+    source_order = list(CANONICAL_SOURCES) + sorted(name for name in by_source if name not in CANONICAL_SOURCES)
+    product_order = list(CANONICAL_PRODUCTS) + sorted(name for name in by_product if name not in CANONICAL_PRODUCTS)
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "leads": leads,
+        "lead_value": lead_value,
+        "quotation_sent": quotation_sent,
+        "quotation_value": quotation_value,
+        "by_category": [{"name": name, **stats} for name, stats in by_category.items()],
+        "by_action": [{"name": name, **stats} for name, stats in by_action.items()],
+        "by_source": [{"name": name, **by_source[name]} for name in source_order],
+        "by_product": [{"name": name, **by_product[name]} for name in product_order],
+    }
+
+
+@router.get("/dashboard/comparison")
+def dashboard_comparison(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    year: int | None = None,
+    months: int | None = Query(None, ge=1, le=24),
+    category: str | None = None,
+    work_action: str | None = None,
+):
+    if not u.role or u.role.name != "ADMIN":
+        raise HTTPException(403, "Comparison is available to admins")
+    if category and category not in COMPARISON_CATEGORIES:
+        raise HTTPException(400, "Unknown category")
+    if work_action and work_action not in COMPARISON_ACTIONS:
+        raise HTTPException(400, "Unknown work action")
+    cur_start, cur_end, prev_start, prev_end, cur_label, prev_label = _comparison_windows(year, months)
+    years = [
+        int(y) for (y,) in db.query(func.extract("year", Lead.enquiry_date))
+        .filter(Lead.enquiry_date.isnot(None))
+        .distinct()
+        .all()
+        if y is not None
+    ]
+    this_year = date.today().year
+    if this_year not in years:
+        years.append(this_year)
+    return {
+        "current_label": cur_label,
+        "previous_label": prev_label,
+        "years": sorted(set(years), reverse=True),
+        "categories": COMPARISON_CATEGORIES,
+        "work_actions": COMPARISON_ACTIONS,
+        "current": _comparison_slice(db, cur_start, cur_end, category, work_action),
+        "previous": _comparison_slice(db, prev_start, prev_end, category, work_action),
+    }
 
 
 @router.get("/masters")

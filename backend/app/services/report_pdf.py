@@ -118,6 +118,8 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
         return build_quotation_pdf(payload)
     if report_type == "monthly":
         return build_monthly_pdf(payload)
+    if report_type == "detailed":
+        return build_detailed_leads_pdf(payload)
     if report_type not in ("source", "product"):
         raise ValueError("Invalid report type")
     title, label = ("Product-wise Report", "Product") if report_type == "product" else ("Lead Source Report", "Lead Source")
@@ -288,6 +290,90 @@ def build_lead_value_pdf(payload: dict) -> bytes:
 
 AMBER = colors.HexColor("#b45309")
 INDIGO = colors.HexColor("#4338ca")
+SLATE = colors.HexColor("#0f172a")
+
+
+def build_detailed_leads_pdf(payload: dict) -> bytes:
+    title = "Detailed Lead Report"
+    buffer = BytesIO()
+    width, height = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=(width, height), leftMargin=14, rightMargin=14,
+        topMargin=122, bottomMargin=36, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=6, leading=7.5, alignment=1)
+    cell_left = ParagraphStyle("cell_left", fontName="Helvetica", fontSize=6, leading=7.5, alignment=0)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=13,
+        textColor=SLATE, spaceAfter=8, keepWithNext=True, alignment=1,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
+    meta = ParagraphStyle(
+        "meta", fontName="Helvetica", fontSize=9, leading=12, alignment=1,
+        textColor=colors.HexColor("#334155"),
+    )
+
+    def lines(text) -> str:
+        raw = str(text if text not in (None, "") else "—")
+        return "<br/>".join(escape(part) for part in raw.split("\n"))
+
+    story = []
+    story.append(Paragraph(title, heading))
+    rng = (
+        f"{payload.get('from_month') or payload.get('effective_from') or 'All'}"
+        f" → {payload.get('to_month') or payload.get('effective_to') or 'All'}"
+        f"  ·  Leads: {payload.get('count', len(payload.get('rows') or []))}"
+    )
+    story.append(Paragraph(escape(rng), meta))
+    story.append(Spacer(1, 8))
+
+    headers = [
+        "Enquiry", "Date", "Customer", "City", "Contact", "Cars", "Product", "Source",
+        "Status", "Progress", "Category", "Remarks", "Employee", "Lead Value", "Quotation",
+    ]
+    rows = [[Paragraph(h, header) for h in headers]]
+    for row in payload.get("rows") or []:
+        rows.append([
+            Paragraph(escape(str(row.get("enquiry_number") or "—")), cell),
+            Paragraph(escape(str(row.get("enquiry_date") or "—")), cell),
+            Paragraph(escape(str(row.get("customer_name") or "—")), cell_left),
+            Paragraph(escape(str(row.get("city") or "—")), cell),
+            Paragraph(escape(str(row.get("contact_number") or "—")), cell),
+            Paragraph(escape(str(row.get("cars") or "—")), cell),
+            Paragraph(escape(str(row.get("product") or "—")), cell_left),
+            Paragraph(escape(str(row.get("source") or "—")), cell),
+            Paragraph(escape(str(row.get("status") or "—")), cell),
+            Paragraph(lines(row.get("progress")), cell_left),
+            Paragraph(lines(row.get("category")), cell_left),
+            Paragraph(lines(row.get("remarks")), cell_left),
+            Paragraph(escape(str(row.get("employee") or "—")), cell),
+            Paragraph(_inr(row.get("lead_value")) if row.get("lead_value") not in (None, "—", "") else "—", cell),
+            Paragraph(_inr(row.get("quotation_value")) if row.get("quotation_value") not in (None, "—", "") else "—", cell),
+        ])
+    if len(rows) == 1:
+        rows.append([Paragraph("No leads found", cell), *[Paragraph("—", cell) for _ in range(14)]])
+
+    usable = width - 28
+    weights = [0.07, 0.06, 0.08, 0.05, 0.06, 0.04, 0.07, 0.06, 0.06, 0.08, 0.08, 0.10, 0.06, 0.06, 0.07]
+    col_w = [usable * w for w in weights]
+    table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
+    style = _centered_table_style(SLATE)
+    style.add("FONTSIZE", (0, 1), (-1, -1), 6)
+    style.add("TOPPADDING", (0, 0), (-1, -1), 4)
+    style.add("BOTTOMPADDING", (0, 0), (-1, -1), 4)
+    style.add("BACKGROUND", (0, -1), (-1, -1), colors.white)
+    style.add("FONTNAME", (0, -1), (-1, -1), "Helvetica")
+    style.add("VALIGN", (0, 0), (-1, -1), "TOP")
+    table.setStyle(style)
+    story.append(table)
+
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
 
 
 def build_monthly_pdf(payload: dict) -> bytes:

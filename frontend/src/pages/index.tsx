@@ -8,6 +8,8 @@ import { api } from '../services/api';
 import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
+export { Comparison } from './comparison';
+
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
 function leadRowColour(lead: any, status: string) {
@@ -37,26 +39,30 @@ function inr(n: any) {
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
 }
 
-/** Opens Gmail web compose in a new browser tab (not the desktop mail app). */
-function openCustomerGmail(email: string, enquiry?: string) {
+/** Estar webmail. Opens in a new tab; if the browser blocks that, uses this tab. */
+function customerWebmailUrl(email?: string, enquiry?: string) {
   const to = (email || '').trim();
-  if (!to) return;
-  const params = new URLSearchParams({
-    view: 'cm',
-    fs: '1',
-    tf: '1',
-    to,
-  });
-  if (enquiry) params.set('su', `Regarding your enquiry ${enquiry}`);
-  // /mail/u/0/ keeps this on Gmail web in the browser tab.
-  const url = `https://mail.google.com/mail/u/0/?${params.toString()}`;
-  const a = document.createElement('a');
-  a.href = url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const params = new URLSearchParams();
+  if (to) {
+    params.set('_task', 'mail');
+    params.set('_action', 'compose');
+    params.set('_to', to);
+    if (enquiry) params.set('_subject', `Regarding your enquiry ${enquiry}`);
+  }
+  const q = params.toString();
+  return q ? `https://webmail.estar.in/?${q}` : 'https://webmail.estar.in/';
+}
+
+function openEstarWebmail(event: { preventDefault: () => void; stopPropagation: () => void }, email?: string, enquiry?: string) {
+  event.preventDefault();
+  event.stopPropagation();
+  const url = customerWebmailUrl(email, enquiry);
+  const popup = window.open(url, '_blank');
+  if (popup) {
+    popup.opener = null;
+    return;
+  }
+  window.location.assign(url);
 }
 
 function previewLeadValue(pricePerCar: any, cars: any) {
@@ -728,6 +734,496 @@ export function EmployeeDashboard() {
   );
 }
 
+/* ================= QUOTATION FORM (employee) — Word-like letter ================= */
+function inrIndian(n: number) {
+  const v = Math.round(Math.abs(n || 0));
+  const s = String(v);
+  if (s.length <= 3) return (n < 0 ? '-' : '') + s;
+  const last3 = s.slice(-3);
+  let rest = s.slice(0, -3);
+  const parts: string[] = [];
+  while (rest.length) {
+    parts.unshift(rest.slice(-2));
+    rest = rest.slice(0, -2);
+  }
+  return `${n < 0 ? '-' : ''}${parts.join(',')},${last3}`;
+}
+
+function quoteDocField({
+  multiline,
+  className,
+  readOnly,
+  ...rest
+}: {
+  multiline?: boolean;
+  className?: string;
+  readOnly?: boolean;
+  [key: string]: any;
+}) {
+  const base = readOnly
+    ? 'bg-transparent border-0 border-b border-transparent px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug cursor-default'
+    : 'bg-transparent border-0 border-b border-dashed border-sky-400/80 outline-none focus:border-brand-600 focus:bg-amber-50/40 px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug';
+  if (multiline) {
+    return <textarea {...rest} readOnly={readOnly} className={`${base} resize-y min-h-[52px] ${className || ''}`} />;
+  }
+  return <input {...rest} readOnly={readOnly} className={`${base} ${className || ''}`} />;
+}
+
+function QuotationFormModal({
+  lead,
+  onClose,
+  onSaved,
+  startInEdit = true,
+}: {
+  lead: any;
+  onClose: () => void;
+  onSaved: (leadId: string, summary: any) => void;
+  startInEdit?: boolean;
+}) {
+  const defaultPayment =
+    '1. 60% Advance along with P.O\n2. 30% Advance for Structural Erection & Procurement\n3. 10% on successful Testing & Commissioning';
+  const defaultDelivery =
+    '2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition.';
+  const defaultWarranty =
+    '1. After the warranty period AMC is applicable.\n2. 3 - 4% of the Total cost per unit/year will be approximately charged for AMC.';
+  const [form, setForm] = useState({
+    to_name: '',
+    to_address: '',
+    subject: '',
+    product_description: 'Design, Manufacture, Supply and Erection of Parking System',
+    payment_terms: defaultPayment,
+    delivery_period: defaultDelivery,
+    post_warranty: defaultWarranty,
+    unit_cost: '',
+    units: '',
+    quotation_date: new Date().toISOString().slice(0, 10),
+    quotation_number: '',
+    revision: 'R0',
+  });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [ok, setOk] = useState('');
+  // After Save → preview (locked). Click Edit to change again (follow-up → next Rn).
+  const [editing, setEditing] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [savedOnce, setSavedOnce] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setErr(''); setOk('');
+    api.get(`/leads/${lead.id}/quotation-form`)
+      .then((r) => {
+        if (cancelled) return;
+        const d = r.data || {};
+        const alreadySaved = Boolean(d.id && d.quotation_number);
+        setForm({
+          to_name: d.to_name || '',
+          to_address: d.to_address || '',
+          subject: d.subject || '',
+          product_description: d.product_description || 'Design, Manufacture, Supply and Erection of Parking System',
+          payment_terms: d.payment_terms || defaultPayment,
+          delivery_period: d.delivery_period || defaultDelivery,
+          post_warranty: d.post_warranty || defaultWarranty,
+          unit_cost: d.unit_cost != null ? String(d.unit_cost) : '',
+          units: d.units != null ? String(d.units) : '',
+          quotation_date: (d.quotation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+          quotation_number: d.quotation_number || '',
+          revision: d.revision || 'R0',
+        });
+        const hasFilled = Boolean(
+          (d.amount_excl != null && Number(d.amount_excl) > 0)
+          || (d.unit_cost && Number(d.unit_cost) > 0),
+        );
+        setSavedOnce(alreadySaved && hasFilled);
+        // Table "Edit" opens ready to change; otherwise preview last saved
+        setEditing(Boolean(startInEdit) || !(alreadySaved && hasFilled));
+        setDirty(false);
+      })
+      .catch((e: any) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Could not load quotation form'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [lead.id, startInEdit]);
+
+  const unitCost = Number(form.unit_cost) || 0;
+  const units = Number(form.units) || 0;
+  const amountExcl = Math.round(unitCost * units);
+  const gst = Math.round(amountExcl * 0.18);
+  const grand = amountExcl + gst;
+  const dateDisp = (() => {
+    try {
+      const [y, m, d] = (form.quotation_date || '').split('-');
+      if (y && m && d) return `${d}-${m}-${y}`;
+    } catch { /* ignore */ }
+    return form.quotation_date;
+  })();
+
+  const set = (patch: Partial<typeof form>) => {
+    if (!editing) return;
+    setForm((cur) => ({ ...cur, ...patch }));
+    setDirty(true);
+  };
+
+  const payload = () => ({
+    to_name: form.to_name.trim(),
+    to_address: form.to_address.trim(),
+    subject: form.subject.trim(),
+    product_description: form.product_description.trim(),
+    payment_terms: form.payment_terms.trim(),
+    delivery_period: form.delivery_period.trim(),
+    post_warranty: form.post_warranty.trim(),
+    unit_cost: unitCost,
+    units,
+    quotation_date: form.quotation_date || undefined,
+  });
+
+  const applySaved = (data: any) => {
+    setForm((cur) => ({
+      ...cur,
+      quotation_number: data.quotation_number || cur.quotation_number,
+      revision: data.revision || cur.revision,
+      unit_cost: data.unit_cost != null ? String(data.unit_cost) : cur.unit_cost,
+      units: data.units != null ? String(data.units) : cur.units,
+      payment_terms: data.payment_terms || cur.payment_terms,
+      delivery_period: data.delivery_period || cur.delivery_period,
+      post_warranty: data.post_warranty || cur.post_warranty,
+    }));
+    onSaved(lead.id, {
+      quotation_number: data.quotation_number,
+      revision: data.revision,
+      grand_total: data.grand_total,
+      amount_excl: data.amount_excl,
+    });
+    setSavedOnce(true);
+    setDirty(false);
+    setEditing(false);
+  };
+
+  const save = async () => {
+    if (!form.to_name.trim()) { setErr('To name is required'); return false; }
+    if (!(unitCost >= 0) || !(units > 0)) { setErr('Enter unit cost and number of units'); return false; }
+    setBusy(true); setErr(''); setOk('');
+    try {
+      const { data } = await api.put(`/leads/${lead.id}/quotation-form`, payload());
+      applySaved(data);
+      setOk(
+        `Saved ${data.quotation_number} (${data.revision}). `
+        + 'First save stays R0. Edit again and save to make the next download R1, then R2.',
+      );
+      return true;
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Save failed');
+      return false;
+    } finally { setBusy(false); }
+  };
+
+  const downloadPdfOnly = async (numberHint?: string) => {
+    const res = await api.get(`/leads/${lead.id}/quotation-form/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${numberHint || form.quotation_number || 'quotation'}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const downloadPdf = async () => {
+    setBusy(true); setErr(''); setOk('');
+    try {
+      // If editing with changes, save first (bumps Rn for follow-up). Else download last saved as-is.
+      if (editing && dirty) {
+        const { data } = await api.put(`/leads/${lead.id}/quotation-form`, payload());
+        applySaved(data);
+        await downloadPdfOnly(data.quotation_number);
+        setOk(`Saved ${data.quotation_number} (${data.revision}) and downloaded PDF. Edit again and save for the next revision.`);
+      } else if (!form.quotation_number && !savedOnce) {
+        const { data } = await api.put(`/leads/${lead.id}/quotation-form`, payload());
+        applySaved(data);
+        await downloadPdfOnly(data.quotation_number);
+        setOk(`Saved ${data.quotation_number} (${data.revision}) and downloaded PDF.`);
+      } else {
+        await downloadPdfOnly();
+        setOk(`Downloaded ${form.quotation_number} (${form.revision}). Click Edit to revise for the next follow-up.`);
+      }
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'PDF download failed — save the form first');
+    } finally { setBusy(false); }
+  };
+
+  const startEdit = () => {
+    setEditing(true);
+    setDirty(false);
+    setOk('Editing — change the quote, then Save. The first saved download is R0. The next edit and save becomes R1.');
+    setErr('');
+  };
+
+  const Field = (props: any) => quoteDocField({ ...props, readOnly: !editing });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
+      <div
+        className="w-full max-w-4xl max-h-[94vh] flex flex-col rounded-xl overflow-hidden shadow-2xl bg-[#cfcfcf]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-[#2b579a] text-white shrink-0">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold tracking-wide">
+              Quotation — {editing ? 'Editing' : 'Preview'}
+            </div>
+            <div className="text-[11px] text-white/80 truncate">
+              {lead.enquiry_number} · REF {form.quotation_number || '…'} · {form.revision}
+              {dirty ? ' · unsaved changes' : ''}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {!editing ? (
+              <button type="button" className="bg-amber-400 hover:bg-amber-300 text-[#1e3a5f] text-xs font-semibold px-3 py-1.5 rounded" disabled={busy} onClick={startEdit}>
+                Edit
+              </button>
+            ) : null}
+            <button type="button" className="bg-white/15 hover:bg-white/25 text-white text-xs px-3 py-1.5 rounded" disabled={busy} onClick={() => void downloadPdf()}>
+              {busy ? 'Working…' : (editing && dirty ? 'Save & PDF' : 'Download PDF')}
+            </button>
+            {editing ? (
+              <button type="button" className="bg-white text-[#2b579a] text-xs font-semibold px-3 py-1.5 rounded" disabled={busy} onClick={() => void save()}>
+                {busy ? 'Saving…' : 'Save'}
+              </button>
+            ) : null}
+            <button type="button" className="bg-white/15 hover:bg-white/25 text-white text-xs px-3 py-1.5 rounded" onClick={onClose}>Close</button>
+          </div>
+        </div>
+
+        <div className="px-4 py-2 bg-[#1e4a7a] text-[11px] text-white/90 font-sans shrink-0">
+          {editing
+            ? 'Edit mode — first Save and PDF stays R0. Edit again, save, and the next PDF is R1.'
+            : 'Preview — Download PDF keeps this revision. Click Edit, change, and Save to move R0 to R1.'}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 sm:px-8 py-5">
+          {loading ? <div className="flex justify-center py-16"><Spinner /></div> : (
+            <div
+              className="mx-auto bg-white shadow-lg w-full max-w-[210mm] min-h-[297mm] px-[14mm] pt-[10mm] pb-[8mm] text-[15px] text-slate-800 relative"
+              style={{ fontFamily: '"Times New Roman", Times, Georgia, serif' }}
+            >
+              {err && <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 font-sans">{err}</div>}
+              {ok && <div className="mb-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 font-sans">{ok}</div>}
+
+              <div className="relative mb-5 pt-4">
+                <div className="flex justify-center">
+                  <div className="relative inline-block">
+                    <div className="absolute -top-4 left-0 right-0 flex text-[10px] text-slate-700 pointer-events-none">
+                      <span className="w-[38%] text-center tracking-wide">GURUKRIBA</span>
+                      <span className="flex-1 text-center">Sree Laal SidthBabaji</span>
+                    </div>
+                    <img src="/quote-letterhead-logo.jpg" alt="E STAR Engineers" className="h-14 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-baseline justify-between gap-4 mb-6">
+                <div className="flex items-baseline gap-2 min-w-0">
+                  <span className="font-bold shrink-0">REF:</span>
+                  <span className="font-semibold text-[#1e3a5f] tracking-wide">{form.quotation_number || 'Will assign on save'}</span>
+                </div>
+                <div className="flex items-baseline gap-2 shrink-0 ml-auto">
+                  <span className="font-bold">Date:</span>
+                  <Field
+                    type="date"
+                    value={form.quotation_date}
+                    onChange={(e: any) => set({ quotation_date: e.target.value })}
+                    className="!w-auto font-sans text-sm"
+                  />
+                  <span className="text-graphite-500 text-sm font-sans">({dateDisp})</span>
+                </div>
+              </div>
+
+              <div className="mb-1 font-bold">To</div>
+              <Field
+                value={form.to_name}
+                onChange={(e: any) => set({ to_name: e.target.value })}
+                placeholder="Company / Customer name"
+                className="font-bold mb-1"
+              />
+              <Field
+                multiline
+                value={form.to_address}
+                onChange={(e: any) => set({ to_address: e.target.value })}
+                placeholder="Address"
+                className="text-[14px] mb-5"
+              />
+
+              <p className="mb-4">Dear Sir,</p>
+
+              <div className="flex items-baseline gap-2 mb-4">
+                <span className="font-bold shrink-0">Sub: -</span>
+                <Field
+                  value={form.subject}
+                  onChange={(e: any) => set({ subject: e.target.value })}
+                  placeholder="Offer for Parking System"
+                />
+              </div>
+
+              <p className="mb-6 text-[13.5px] leading-relaxed text-slate-700">
+                E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike
+                Parking System, Design &amp; Manufacturing Company in Association with International Tycoons
+                from Japan, Germany &amp; Korea, also a Group Company of MECHCI since 1995.
+              </p>
+
+              <table className="w-full border-collapse text-[13px] mb-6" style={{ fontFamily: 'Helvetica, Arial, sans-serif' }}>
+                <thead>
+                  <tr className="bg-[#1e3a5f] text-white">
+                    <th className="border border-slate-400 px-2 py-2 w-14">S. No</th>
+                    <th className="border border-slate-400 px-2 py-2 text-left">Description</th>
+                    <th className="border border-slate-400 px-2 py-2 w-[22%]">Unit Cost (INR)</th>
+                    <th className="border border-slate-400 px-2 py-2 w-[14%]">No of Units</th>
+                    <th className="border border-slate-400 px-2 py-2 w-[18%]">Total Cost (INR)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td className="border border-slate-400 px-2 py-2 text-center align-middle">1</td>
+                    <td className="border border-slate-400 px-2 py-2 align-top">
+                      <Field
+                        multiline
+                        value={form.product_description}
+                        onChange={(e: any) => set({ product_description: e.target.value })}
+                        className="!border-b-slate-300 min-h-[44px] text-[13px]"
+                      />
+                    </td>
+                    <td className="border border-slate-400 px-2 py-2 text-center align-middle">
+                      <Field
+                        type="number"
+                        min={0}
+                        value={form.unit_cost}
+                        onChange={(e: any) => set({ unit_cost: e.target.value.replace(/[^\d]/g, '') })}
+                        className="text-center tabular-nums"
+                      />
+                    </td>
+                    <td className="border border-slate-400 px-2 py-2 text-center align-middle">
+                      <Field
+                        type="number"
+                        min={1}
+                        value={form.units}
+                        onChange={(e: any) => set({ units: e.target.value.replace(/[^\d.]/g, '') })}
+                        className="text-center tabular-nums"
+                      />
+                    </td>
+                    <td className="border border-slate-400 px-2 py-2 text-center align-middle tabular-nums font-medium">
+                      {inrIndian(amountExcl)}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="border border-slate-400 px-2 py-2" />
+                    <td className="border border-slate-400 px-2 py-2">GST 18%</td>
+                    <td className="border border-slate-400 px-2 py-2" colSpan={2} />
+                    <td className="border border-slate-400 px-2 py-2 text-center tabular-nums">{inrIndian(gst)}</td>
+                  </tr>
+                  <tr className="bg-slate-100 font-bold">
+                    <td className="border border-slate-400 px-2 py-2" />
+                    <td className="border border-slate-400 px-2 py-2">GRAND TOTAL (INR)</td>
+                    <td className="border border-slate-400 px-2 py-2" colSpan={2} />
+                    <td className="border border-slate-400 px-2 py-2 text-center tabular-nums">{inrIndian(grand)}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div className="space-y-5 text-[13.5px] leading-relaxed">
+                <div>
+                  <div className="font-bold mb-2">General Terms &amp; Conditions:</div>
+                  <ol className="list-decimal pl-5 space-y-1">
+                    <li>GST and Other Taxes as extra applicable.</li>
+                    <li>This offer is valid for 15 days only.</li>
+                    <li>One-year Warranty and Maintenance on the installed system.</li>
+                  </ol>
+                </div>
+                <div>
+                  <div className="font-bold mb-2">Customer Scope:</div>
+                  <ol className="list-decimal pl-5 space-y-1">
+                    <li>Approval from the Competent Authority. Site Clearance if required.</li>
+                    <li>Civil Foundations, Civil Works and Cladding are Additional</li>
+                    <li>3 Phase Power Supply. Stabilized Power &amp; dedicated Earth for installation and operation to be provided by the Client.</li>
+                    <li>The Client must provide an appropriate storage area at the site.</li>
+                  </ol>
+                </div>
+
+                <div className="border-t-2 border-dashed border-slate-300 pt-6 mt-8">
+                  <div className="text-[10px] uppercase tracking-widest text-slate-400 font-sans mb-4">Page 2</div>
+                  <div className="space-y-5">
+                    <div>
+                      <div className="font-bold mb-2">Payment Terms:</div>
+                      <Field
+                        multiline
+                        value={form.payment_terms}
+                        onChange={(e: any) => set({ payment_terms: e.target.value })}
+                        className="min-h-[72px] text-[13.5px] whitespace-pre-wrap"
+                      />
+                    </div>
+                    <div>
+                      <div className="font-bold mb-2">Delivery Period:</div>
+                      <Field
+                        multiline
+                        value={form.delivery_period}
+                        onChange={(e: any) => set({ delivery_period: e.target.value })}
+                        className="min-h-[52px] text-[13.5px] whitespace-pre-wrap"
+                      />
+                    </div>
+                    <div>
+                      <div className="font-bold mb-2">Post Warranty:</div>
+                      <Field
+                        multiline
+                        value={form.post_warranty}
+                        onChange={(e: any) => set({ post_warranty: e.target.value })}
+                        className="min-h-[52px] text-[13.5px] whitespace-pre-wrap"
+                      />
+                    </div>
+                    <div className="pt-4">
+                      <p className="mb-1">Regards,</p>
+                      <p className="mb-3">For, <b>ESTAR ENGINEERS PRIVATE LIMITED</b></p>
+                      <img
+                        src="/quote-signature.jpg"
+                        alt="Signature"
+                        className="h-16 w-auto object-contain mb-1"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                      <p className="font-bold">JAYARAMAN K</p>
+                      <p className="font-bold">Director</p>
+                    </div>
+                    <div className="pt-4">
+                      <div className="font-bold mb-2">BANKING DETAILS:</div>
+                      <p>Account Name: E STAR ENGINEERS PRIVATE LIMITED</p>
+                      <p>Account Number: 8428210000009812</p>
+                      <p>Bank Name: DBS Bank</p>
+                      <p>Branch Name: Chennai</p>
+                      <p>Any RTGS/NEFT to our IFSC code: DBSS0IN0428</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 pt-3 border-t border-slate-100">
+                <img
+                  src="/quote-footer-banner.jpg"
+                  alt="E STAR address"
+                  className="w-full object-contain"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+              </div>
+
+              <p className="mt-3 text-[11px] text-slate-400 font-sans">
+                {editing
+                  ? 'Dashed underlines = editable. Save, then Edit again for the next follow-up (R0 → R1 → R2…). Download PDF anytime.'
+                  : 'Preview mode. Click Edit to revise for a follow-up, or Download PDF for this revision.'}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================= LEADS ================= */
 export function Leads() {
   const role = localStorage.getItem('role') || '';
@@ -750,6 +1246,7 @@ export function Leads() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string; quotationValue?: string }>>>({});
+  const [quoteFormLead, setQuoteFormLead] = useState<any>(null);
   const size = 15;
   const [liveSeq, setLiveSeq] = useState(0);
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
@@ -888,7 +1385,7 @@ export function Leads() {
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="relative isolate w-full overflow-x-auto">
-            <table className="w-full table-fixed min-w-[2100px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
+            <table className="w-full table-fixed min-w-[2220px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
@@ -896,6 +1393,7 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[120px]">City</th>
                 <th className="th whitespace-nowrap align-top w-[170px]">Contact / Email</th>
                 {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[100px] text-center">Email</th>}
+                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[120px] text-center">Quotation form</th>}
                 <th className="th whitespace-nowrap align-top w-[90px] text-center">Cars</th>
                 <th className="th whitespace-nowrap align-top w-[180px]">Product</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
@@ -912,7 +1410,9 @@ export function Leads() {
                 {items.map((l) => (
                   <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}
                     onClickCapture={(event) => {
-                      if (role === 'EMPLOYEE' && isConvertedLocked(l) && (event.target as HTMLElement).closest('button, select, textarea')) {
+                      const target = event.target as HTMLElement;
+                      if (target.closest?.('[data-webmail]')) return;
+                      if (role === 'EMPLOYEE' && isConvertedLocked(l) && target.closest?.('button, select, textarea')) {
                         event.preventDefault(); event.stopPropagation();
                         setValidationMessage('Converted leads cannot be edited or reopened.');
                       }
@@ -926,21 +1426,68 @@ export function Leads() {
                       <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
                       <div className="text-xs mt-0.5 break-all">
                         {l.email
-                          ? <button type="button" className="text-brand-700 hover:underline text-left break-all" onClick={() => openCustomerGmail(l.email, l.enquiry_number)}>{l.email}</button>
+                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-all" onClick={(e) => openEstarWebmail(e, l.email, l.enquiry_number)}>{l.email}</button>
                           : <span className="text-graphite-400">No email</span>}
                       </div>
                     </td>
                     {role === 'EMPLOYEE' && (
-                      <td className="td align-top text-center">
+                      <td className="td align-top text-center relative z-30">
                         <button
                           type="button"
+                          data-webmail
                           className="btn-secondary !px-2 !py-1 text-xs"
-                          disabled={!l.email}
-                          title={l.email ? `Open Gmail web compose to ${l.email}` : 'No customer email on this lead'}
-                          onClick={() => openCustomerGmail(l.email, l.enquiry_number)}
+                          title={l.email ? `Open Estar webmail to ${l.email}` : 'Open Estar webmail'}
+                          onClick={(e) => openEstarWebmail(e, l.email, l.enquiry_number)}
                         >
                           ✉️ Email
                         </button>
+                      </td>
+                    )}
+                    {role === 'EMPLOYEE' && (
+                      <td className="td align-top text-center">
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            type="button"
+                            className="btn-primary !px-2 !py-1 text-xs"
+                            onClick={() => setQuoteFormLead(l)}
+                            title={l.quotation_form?.quotation_number ? `Edit ${l.quotation_form.quotation_number}` : 'Open quotation form'}
+                          >
+                            {l.quotation_form?.quotation_number ? 'Edit' : 'Open form'}
+                          </button>
+                          {l.quotation_form?.quotation_number && (
+                            <button
+                              type="button"
+                              className="btn-secondary !px-2 !py-1 text-[10px]"
+                              title={`Download ${l.quotation_form.quotation_number} PDF`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  const res = await api.get(`/leads/${l.id}/quotation-form/pdf`, { responseType: 'blob' });
+                                  const url = URL.createObjectURL(res.data);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${l.quotation_form.quotation_number}.pdf`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                  setTimeout(() => URL.revokeObjectURL(url), 2000);
+                                } catch {
+                                  setQuoteFormLead(l);
+                                }
+                              }}
+                            >
+                              PDF
+                            </button>
+                          )}
+                        </div>
+                        {l.quotation_form?.quotation_number ? (
+                          <div className="text-[10px] text-graphite-600 mt-1 font-mono break-all max-w-[9rem] mx-auto" title={l.quotation_form.quotation_number}>
+                            {l.quotation_form.quotation_number}
+                            {l.quotation_form.revision ? ` · ${l.quotation_form.revision}` : ''}
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-graphite-400 mt-1">REF on assign</div>
+                        )}
                       </td>
                     )}
                     <td className="td align-top text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
@@ -1026,6 +1573,25 @@ export function Leads() {
           </div>
         </div>
       </div>
+      {quoteFormLead && (
+        <QuotationFormModal
+          lead={quoteFormLead}
+          onClose={() => setQuoteFormLead(null)}
+          onSaved={(leadId, summary) => {
+            setItems((current) => current.map((item) => (
+              item.id === leadId
+                ? {
+                    ...item,
+                    quotation_form: summary,
+                    quotation_value: summary.amount_excl != null
+                      ? String(summary.amount_excl)
+                      : item.quotation_value,
+                  }
+                : item
+            )));
+          }}
+        />
+      )}
       {conversionToConfirm && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setConversionToConfirm(null)}>
           <div role="dialog" aria-modal="true" aria-labelledby="confirm-conversion-title" className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') setConversionToConfirm(null); }}>
@@ -1059,6 +1625,8 @@ export function EmployeeLeads() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [liveSeq, setLiveSeq] = useState(0);
+  useEffect(() => subscribeLeadUpdates(() => setLiveSeq((n) => n + 1)), []);
   useEffect(() => {
     api.get('/masters').then((r) => {
       setMasters(r.data);
@@ -1081,7 +1649,7 @@ export function EmployeeLeads() {
       .then((r) => { setItems(r.data.items || []); setTotal(r.data.total ?? 0); })
       .catch(() => setError('Failed to load assigned customers'))
       .finally(() => setLoading(false));
-  }, [empId]);
+  }, [empId, liveSeq]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
@@ -1253,7 +1821,6 @@ export function LeadDetail({ id }: { id: string }) {
   const canEditPricing = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id);
   const rr = l.reassignment_request;
   const canRequestReassign = role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
-  const canAdminReassign = role === 'ADMIN' && (l.pending_assignment || rr?.status === 'ACCEPTED');
   const addNote = async () => {
     if (!note.trim() || busy) return;
     setBusy(true); setErr('');
@@ -1285,8 +1852,11 @@ export function LeadDetail({ id }: { id: string }) {
     if (!assignEmp) return;
     setBusy(true); setErr(''); setOkMsg('');
     try {
-      await api.post(`/leads/${id}/assign`, { employee_id: assignEmp, role: 'PRIMARY' });
-      setOkMsg(rr?.status === 'ACCEPTED' ? 'Lead reassigned to the selected employee' : 'Lead assigned');
+      const employeeName = masters?.employees?.find((emp: any) => emp.id === assignEmp)?.name || 'This employee';
+      const customerName = l.customer_name || 'this customer';
+      await api.post(`/leads/${id}/assign`, { employee_id: assignEmp, role: 'PRIMARY', manual: true });
+      setL((current: any) => current ? { ...current, primary_employee_id: assignEmp, pending_assignment: false } : current);
+      setOkMsg(`${employeeName} is assigned to this customer ${customerName}.`);
       setAssignEmp('');
       reload();
     } catch (e: any) {
@@ -1397,28 +1967,36 @@ export function LeadDetail({ id }: { id: string }) {
         )}
       </Card>
 
-      {canAdminReassign && (
-        <Card title={l.pending_assignment ? 'Assign to employee' : 'Reassign to another employee'}>
+      {role === 'ADMIN' && (
+        <Card title="Assign to employee">
           {rr?.status === 'ACCEPTED' && (
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
               Reassignment accepted for <b>{rr.requested_by_name}</b>. Choose a new employee below — ownership stays unchanged until you assign.
               {rr.reason ? <span className="block text-xs mt-1 text-amber-700">Reason: {rr.reason}</span> : null}
             </p>
           )}
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex-1 min-w-[200px]">
-              <label className="text-xs font-medium text-graphite-600">Employee</label>
-              <select className="input mt-1" value={assignEmp} onChange={(e) => setAssignEmp(e.target.value)}>
-                <option value="">Select…</option>
-                {masters?.employees?.filter((e: any) => e.id !== l.primary_employee_id).map((e: any) => (
-                  <option key={e.id} value={e.id}>{e.name}</option>
-                ))}
-              </select>
-            </div>
-            <button className="btn-primary" disabled={!assignEmp || busy} onClick={doAssign}>
-              {l.pending_assignment ? 'Assign' : 'Reassign'}
-            </button>
+          <p className="text-xs text-graphite-500 mb-3">
+            Current employee: {l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : 'Not assigned'}
+          </p>
+          <div className="max-h-64 overflow-y-auto border border-graphite-100 rounded-lg">
+            {(masters?.employees || []).length === 0 ? (
+              <p className="text-sm text-graphite-500 p-3">No employees to assign.</p>
+            ) : (masters.employees as any[]).map((emp: any) => (
+              <label key={emp.id} className={`flex items-center gap-2 px-3 py-2 text-sm cursor-pointer border-b border-graphite-50 last:border-0 ${assignEmp === emp.id ? 'bg-brand-50' : 'hover:bg-graphite-50'}`}>
+                <input type="radio" name="assign-employee" checked={assignEmp === emp.id} onChange={() => setAssignEmp(emp.id)} />
+                <span>{emp.name}</span>
+                {emp.id === l.primary_employee_id && <span className="text-[10px] text-graphite-400">current</span>}
+              </label>
+            ))}
           </div>
+          <button type="button" className="btn-primary mt-4" disabled={!assignEmp || busy || assignEmp === l.primary_employee_id} onClick={doAssign}>
+            {busy ? 'Assigning…' : 'Assign to employee'}
+          </button>
+          {l.primary_employee_id && (
+            <p className="mt-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+              {nameOf('employees', l.primary_employee_id)} is assigned to this customer {l.customer_name || '—'}.
+            </p>
+          )}
         </Card>
       )}
 
@@ -1985,7 +2563,7 @@ export function Reports() {
     mode: 'custom', month: defaultMonth, week: defaultWeek, fromDate: '', toDate: '',
   });
 
-  type ReportId = 'source' | 'product' | 'lead_value' | 'quotation' | 'employee' | 'monthly';
+  type ReportId = 'source' | 'product' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with follow-up, meeting, site visit and quotation counts, plus chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Product funnel table plus product-wise lead bar chart.', accent: 'bg-[#0f766e]' },
@@ -1993,6 +2571,7 @@ export function Reports() {
     { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
     { id: 'employee', title: 'Employee Workload Report', description: 'Assigned lead count per employee.', accent: 'bg-[#334155]' },
     { id: 'monthly', title: 'Monthly Lead Volume', description: 'Pick a month range, view the chart and table, then download Excel or PDF.', accent: 'bg-[#4338ca]' },
+    { id: 'detailed', title: 'Detailed Lead Report', description: 'Full lead-page details for a custom month range — view table and download PDF.', accent: 'bg-[#0f172a]' },
   ];
 
   const [activeReport, setActiveReport] = useState<ReportId | null>(null);
@@ -2002,6 +2581,7 @@ export function Reports() {
   const [sourceFilter, setSourceFilter] = useState<ReportFilter>(emptyFilter);
   const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
   const [monthlyFilter, setMonthlyFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
+  const [detailedFilter, setDetailedFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
 
   const [leadValueReport, setLeadValueReport] = useState<any>(null);
   const [quotationReport, setQuotationReport] = useState<any>(null);
@@ -2010,6 +2590,7 @@ export function Reports() {
   const [prod, setProd] = useState<any[]>([]);
   const [emp, setEmp] = useState<any[]>([]);
   const [monthlyRows, setMonthlyRows] = useState<any[]>([]);
+  const [detailedReport, setDetailedReport] = useState<any>(null);
 
   const [lvBusy, setLvBusy] = useState(false);
   const [quoteBusy, setQuoteBusy] = useState(false);
@@ -2018,6 +2599,7 @@ export function Reports() {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [empBusy, setEmpBusy] = useState(false);
   const [monthlyBusy, setMonthlyBusy] = useState(false);
+  const [detailedBusy, setDetailedBusy] = useState(false);
 
   const [lvErr, setLvErr] = useState('');
   const [quoteErr, setQuoteErr] = useState('');
@@ -2025,6 +2607,7 @@ export function Reports() {
   const [productErr, setProductErr] = useState('');
   const [empErr, setEmpErr] = useState('');
   const [monthlyErr, setMonthlyErr] = useState('');
+  const [detailedErr, setDetailedErr] = useState('');
 
   const apiErr = (e: any, fallback: string) => {
     const d = e?.response?.data?.detail;
@@ -2141,6 +2724,20 @@ export function Reports() {
     } finally { setMonthlyBusy(false); }
   };
 
+  const loadDetailed = async (f = detailedFilter) => {
+    if (f.fromMonth && f.toMonth && f.fromMonth > f.toMonth) {
+      setDetailedErr('From month must be on or before To month.');
+      return;
+    }
+    setDetailedBusy(true); setDetailedErr('');
+    try {
+      const { data } = await api.get('/reports/detailed-leads', { params: monthlyParams(f) });
+      setDetailedReport(data);
+    } catch (e: any) {
+      setDetailedErr(apiErr(e, 'Detailed lead report failed'));
+    } finally { setDetailedBusy(false); }
+  };
+
   useEffect(() => {
     if (!activeReport) return;
     if (activeReport === 'lead_value') void loadLeadValue();
@@ -2149,6 +2746,7 @@ export function Reports() {
     if (activeReport === 'product') void loadProduct();
     if (activeReport === 'employee') void loadEmployees();
     if (activeReport === 'monthly') void loadMonthly();
+    if (activeReport === 'detailed') void loadDetailed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeReport]);
 
@@ -2161,7 +2759,7 @@ export function Reports() {
   };
 
   const downloadPdf = async (
-    kind: 'source' | 'product' | 'lead_value' | 'quotation' | 'monthly',
+    kind: 'source' | 'product' | 'lead_value' | 'quotation' | 'monthly' | 'detailed',
     f: ReportFilter | { fromMonth: string; toMonth: string },
     setErr: (s: string) => void,
   ) => {
@@ -2172,12 +2770,13 @@ export function Reports() {
       lead_value: 'lead-value-report.pdf',
       quotation: 'quotation-report.pdf',
       monthly: 'monthly-lead-volume.pdf',
+      detailed: 'detailed-lead-report.pdf',
     };
     try {
-      const params = kind === 'monthly'
+      const params = (kind === 'monthly' || kind === 'detailed')
         ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
         : { ...toParams(f as ReportFilter), report_type: kind };
-      if (kind !== 'monthly') {
+      if (kind !== 'monthly' && kind !== 'detailed') {
         const v = validate(f as ReportFilter);
         if (v) { setErr(v); setPdfBusy(false); return; }
       } else {
@@ -2774,6 +3373,134 @@ export function Reports() {
                   </table>
                 </div>
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeReport === 'detailed' && (
+        <div className="card overflow-hidden">
+          <div className="bg-[#0f172a] text-white px-5 py-3 font-semibold tracking-wide">DETAILED LEAD REPORT</div>
+          <div className="p-5 space-y-4">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <div>
+                <label className="text-xs font-medium text-graphite-600">From Month</label>
+                <input
+                  type="month"
+                  className="input mt-1"
+                  value={detailedFilter.fromMonth}
+                  onChange={(e) => setDetailedFilter((cur) => ({ ...cur, fromMonth: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-graphite-600">To Month</label>
+                <input
+                  type="month"
+                  className="input mt-1"
+                  value={detailedFilter.toMonth}
+                  onChange={(e) => setDetailedFilter((cur) => ({ ...cur, toMonth: e.target.value }))}
+                />
+              </div>
+              <div className="flex flex-wrap items-end gap-2 lg:col-span-2">
+                <button type="button" className="btn-primary" disabled={detailedBusy} onClick={() => void loadDetailed(detailedFilter)}>
+                  {detailedBusy ? 'Loading…' : 'Apply'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={detailedBusy || !(detailedReport?.rows || []).length}
+                  onClick={() => dl('/reports/detailed-leads/export', 'detailed-lead-report.xlsx', monthlyParams(detailedFilter), setDetailedErr)}
+                >
+                  Download Excel
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={pdfBusy || detailedBusy || !(detailedReport?.rows || []).length}
+                  onClick={() => void downloadPdf('detailed', detailedFilter, setDetailedErr)}
+                >
+                  {pdfBusy ? 'Creating PDF…' : 'Download PDF'}
+                </button>
+              </div>
+            </div>
+            {detailedErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{detailedErr}</div>}
+            {detailedReport && (
+              <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+                <span><b>From:</b> {detailedReport.from_month || detailedReport.effective_from || 'All'}</span>
+                <span><b>To:</b> {detailedReport.to_month || detailedReport.effective_to || 'All'}</span>
+                <span><b>Leads:</b> {detailedReport.count ?? (detailedReport.rows || []).length}</span>
+              </div>
+            )}
+            {detailedBusy && !detailedReport ? <Spinner /> : !(detailedReport?.rows || []).length ? (
+              <EmptyState title="No leads in this month range" hint="Pick From / To month and Apply." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="text-sm border-collapse table-auto">
+                  <thead>
+                    <tr className="bg-[#0f172a] text-white">
+                      {[
+                        { label: 'Enquiry', cls: '!text-center' },
+                        { label: 'Date', cls: '!text-center' },
+                        { label: 'Customer', cls: '!text-left' },
+                        { label: 'Company', cls: '!text-left' },
+                        { label: 'City', cls: '!text-center' },
+                        { label: 'Contact', cls: '!text-center' },
+                        { label: 'Cars', cls: '!text-center' },
+                        { label: 'Product', cls: '!text-left' },
+                        { label: 'Source', cls: '!text-center' },
+                        { label: 'Current status', cls: '!text-center' },
+                        { label: 'Progress', cls: '!text-left' },
+                        { label: 'Category', cls: '!text-left' },
+                        { label: 'Remarks', cls: '!text-left' },
+                        { label: 'Employee', cls: '!text-center' },
+                        { label: 'Lead Value', cls: '!text-right' },
+                        { label: 'Quotation', cls: '!text-right' },
+                      ].map((h) => (
+                        <th key={h.label} className={`th !text-white !bg-transparent !px-3 !py-2.5 whitespace-nowrap align-bottom ${h.cls}`}>{h.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(detailedReport.rows || []).map((row: any, i: number) => {
+                      const historyLines = (value: any) => {
+                        const text = String(value ?? '').trim();
+                        if (!text || text === '—') return [] as string[];
+                        return text.split('\n').map((line) => line.trim()).filter(Boolean);
+                      };
+                      const progressLines = historyLines(row.progress);
+                      const categoryLines = historyLines(row.category);
+                      const remarkLines = historyLines(row.remarks);
+                      const steps = Math.max(progressLines.length, categoryLines.length, remarkLines.length, 1);
+                      const step = (lines: string[], index: number) => (
+                        <div key={index} className="h-6 leading-6 whitespace-nowrap">
+                          {lines[index] || (index === 0 && !lines.length ? '—' : '\u00a0')}
+                        </div>
+                      );
+                      const cell = 'td !px-3 !py-2 align-top whitespace-nowrap';
+                      return (
+                        <tr key={`${row.enquiry_number}-${i}`} className={i % 2 ? 'bg-slate-50' : 'bg-white'}>
+                          <td className={`${cell} !text-center font-medium`}>{row.enquiry_number}</td>
+                          <td className={`${cell} !text-center`}>{row.enquiry_date}</td>
+                          <td className={`${cell} !text-left`}>{row.customer_name}</td>
+                          <td className={`${cell} !text-left`}>{row.company_name}</td>
+                          <td className={`${cell} !text-center`}>{row.city}</td>
+                          <td className={`${cell} !text-center`}>{row.contact_number}</td>
+                          <td className={`${cell} !text-center`}>{row.cars}</td>
+                          <td className={`${cell} !text-left`}>{row.product}</td>
+                          <td className={`${cell} !text-center`}>{row.source}</td>
+                          <td className={`${cell} !text-center`}>{row.status}</td>
+                          <td className={`${cell} !text-left`}>{Array.from({ length: steps }, (_, index) => step(progressLines, index))}</td>
+                          <td className={`${cell} !text-left`}>{Array.from({ length: steps }, (_, index) => step(categoryLines, index))}</td>
+                          <td className={`${cell} !text-left`}>{Array.from({ length: steps }, (_, index) => step(remarkLines, index))}</td>
+                          <td className={`${cell} !text-center capitalize`}>{row.employee}</td>
+                          <td className={`${cell} !text-right !tabular-nums font-semibold`}>{inr(row.lead_value)}</td>
+                          <td className={`${cell} !text-right !tabular-nums`}>{inr(row.quotation_value)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>

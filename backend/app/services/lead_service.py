@@ -11,6 +11,18 @@ from app.models import (
 )
 
 
+def _ensure_quote_ref(db: Session, lead: Lead) -> None:
+    """Allocate EEPLCP…QnR0 REF when lead gets a primary assignee."""
+    try:
+        from app.services.quotation_form import ensure_quotation_on_assign
+        ensure_quotation_on_assign(db, lead)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "quotation REF on assign failed for lead %s", getattr(lead, "id", None),
+        )
+
+
 def next_enquiry_number(db: Session) -> str:
     seq = db.query(EnquirySequence).with_for_update().first()
     if not seq:
@@ -229,6 +241,8 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
         # Close approved reassignment workflow after manual assign.
         if prior_owner is not None and prior_owner != emp.id:
             fulfill_accepted_reassignment(db, lead, by)
+        # Every assigned lead gets a quotation REF (EEPLCP…QnR0) for the form.
+        _ensure_quote_ref(db, lead)
     elif role == "TECHNICAL":
         lead.technical_employee_id = emp.id
     elif role == "SECONDARY":

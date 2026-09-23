@@ -9,6 +9,7 @@ const NAV = [
   { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
   { to: '/employee-leads', label: 'Employee Leads', icon: '👥', roles: ['ADMIN'] },
   { to: '/reassignments', label: 'Reassign', icon: '⇄', roles: ['ADMIN'] },
+  { to: '/comparison', label: 'Comparison', icon: '⚖', roles: ['ADMIN'] },
   { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
   { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
 ];

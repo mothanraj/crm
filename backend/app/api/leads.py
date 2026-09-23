@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -15,8 +15,9 @@ from app.models import (
 )
 from app.schemas import (
     ActivityIn, AssignIn, ContactIn, LeadCreate, LeadUpdate, LeadValueCalcIn,
-    QuoteIn, ReassignDecisionIn, ReassignRequestIn, StatusChange, VisitIn,
+    QuoteFormIn, QuoteIn, ReassignDecisionIn, ReassignRequestIn, StatusChange, VisitIn,
 )
+from app.services import live
 from app.services.lead_service import (
     assign, change_status, notify_admins, open_reassignment_request,
     record_first_contact, validate_assignee,
@@ -238,13 +239,29 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             })
+    quote_by_lead: dict = {}
+    if lead_ids:
+        for qrow in db.query(Quotation).filter(Quotation.lead_id.in_(lead_ids)).all():
+            prev = quote_by_lead.get(qrow.lead_id)
+            if not prev or (qrow.revision or "") >= (prev.revision or ""):
+                quote_by_lead[qrow.lead_id] = qrow
     items = [
-        _serialize(
-            r, db,
-            product_name=products.get(r.product_id, ""),
-            source_name=sources.get(r.source_id, ""),
-            work_history=hist_by_lead.get(r.id, []),
-        )
+        {
+            **_serialize(
+                r, db,
+                product_name=products.get(r.product_id, ""),
+                source_name=sources.get(r.source_id, ""),
+                work_history=hist_by_lead.get(r.id, []),
+            ),
+            "quotation_form": (
+                {
+                    "quotation_number": quote_by_lead[r.id].quotation_number,
+                    "revision": quote_by_lead[r.id].revision,
+                    "grand_total": _money_str(quote_by_lead[r.id].grand_total),
+                }
+                if r.id in quote_by_lead else None
+            ),
+        }
         for r in rows
     ]
     return {"total": total, "items": items}
@@ -523,9 +540,11 @@ def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin:
         code = 404 if str(exc) == "Employee not found" else 400
         raise HTTPException(code, str(exc)) from exc
 
-    # Changing an existing owner requires an accepted reassignment request from the employee.
+    # Changing an existing owner requires an accepted reassignment request,
+    # unless admin is assigning manually from the leads list.
     if (
-        body.role == "PRIMARY"
+        not getattr(body, "manual", False)
+        and body.role == "PRIMARY"
         and lead.primary_employee_id is not None
         and lead.primary_employee_id != emp.id
     ):
@@ -572,6 +591,7 @@ def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin:
                 db.commit()
         except Exception as exc:
             log.error("manual assignment email failed for %s: %s", lid, exc)
+    live.bump()
     return {"ok": True}
 
 
@@ -665,6 +685,212 @@ def add_quote(lid: UUID, body: QuoteIn, db: Session = Depends(get_db), u: User =
     db.add(q)
     db.commit()
     return {"id": str(q.id)}
+
+
+def _quote_notes_payload(quote: Quotation | None) -> dict:
+    import json
+    if not quote or not (quote.notes or "").strip().startswith("{"):
+        return {}
+    try:
+        data = json.loads(quote.notes)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _next_revision(current: str | None) -> str:
+    raw = (current or "R0").strip().upper()
+    if raw.startswith("R") and raw[1:].isdigit():
+        return f"R{int(raw[1:]) + 1}"
+    return "R1"
+
+
+def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None) -> dict:
+    from app.services.quotation_form import (
+        DEFAULT_DELIVERY_PERIOD, DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY,
+        build_quotation_number, calc_totals,
+    )
+
+    product = db.get(Product, lead.product_id) if lead.product_id else None
+    product_name = (product.name if product else "") or (lead.product_raw or "Parking System")
+    notes = _quote_notes_payload(quote)
+    units = float(quote.units) if quote and quote.units is not None else (
+        float(lead.quantity_num) if lead.quantity_num is not None else 0
+    )
+    unit_cost = float(notes["unit_cost"]) if notes.get("unit_cost") is not None else (
+        float(lead.price_per_car) if lead.price_per_car is not None else 0
+    )
+    to_name = (notes.get("to_name") or "").strip() or (lead.company_name or lead.customer_name or "").strip() or "—"
+    address_parts = [p for p in [(lead.location or "").strip(), (lead.city or "").strip()] if p]
+    to_address = (notes.get("to_address") or "").strip() or ("\n".join(address_parts) if address_parts else "—")
+    cars_label = int(units) if units and float(units) == int(float(units)) else (units or "")
+    subject = (notes.get("subject") or "").strip() or f"Offer for {product_name}- {cars_label} Cars"
+    product_description = (notes.get("product_description") or "").strip() or (
+        f"Design, Manufacture, Supply and Erection of {product_name}"
+    )
+    payment_terms = (notes.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
+    delivery_period = (notes.get("delivery_period") or "").strip() or DEFAULT_DELIVERY_PERIOD
+    post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
+    revision = (quote.revision if quote else "R0") or "R0"
+    if quote and quote.quotation_number:
+        quotation_number = quote.quotation_number
+    else:
+        quotation_number = build_quotation_number(db, lead, revision)
+    qdate = quote.quotation_date if quote and quote.quotation_date else date.today()
+    totals = calc_totals(unit_cost, units)
+    return {
+        "id": str(quote.id) if quote else None,
+        "quotation_number": quotation_number,
+        "revision": revision,
+        "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
+        "to_name": to_name,
+        "to_address": to_address,
+        "subject": subject,
+        "product_description": product_description,
+        "payment_terms": payment_terms,
+        "delivery_period": delivery_period,
+        "post_warranty": post_warranty,
+        "unit_cost": int(round(unit_cost)) if unit_cost else 0,
+        "units": units,
+        "amount_excl": totals["amount_excl"],
+        "gst": totals["gst"],
+        "grand_total": totals["grand_total"],
+        "status": quote.status if quote else "Draft",
+        "customer_name": lead.customer_name or "",
+        "company_name": lead.company_name or "",
+        "city": lead.city or "",
+        "enquiry_number": lead.enquiry_number or "",
+        "product_name": product_name,
+    }
+
+
+@router.get("/{lid}/quotation-form")
+def get_quotation_form(lid: UUID, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    lead = _owned_lead(db, lid, u)
+    quote = (
+        db.query(Quotation)
+        .filter_by(lead_id=lid)
+        .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
+        .first()
+    )
+    # If assigned but REF missing (legacy), create it now so employee always sees REF.
+    if quote is None and lead.primary_employee_id is not None:
+        from app.services.quotation_form import ensure_quotation_on_assign
+        quote = ensure_quotation_on_assign(db, lead)
+        db.commit()
+        db.refresh(quote)
+    return _quotation_form_dict(db, lead, quote)
+
+
+@router.put("/{lid}/quotation-form")
+def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    import json
+    from datetime import date as date_cls
+
+    from app.services.quotation_form import calc_totals, build_quotation_number
+
+    _require_lead_write(u)
+    lead = _owned_lead(db, lid, u)
+    quote = (
+        db.query(Quotation)
+        .filter_by(lead_id=lid)
+        .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
+        .first()
+    )
+    totals = calc_totals(body.unit_cost, body.units)
+    qdate = body.quotation_date or date_cls.today()
+    snap = {
+        "unit_cost": int(round(float(body.unit_cost))),
+        "to_name": (body.to_name or "").strip(),
+        "to_address": (body.to_address or "").strip(),
+        "subject": (body.subject or "").strip(),
+        "product_description": (body.product_description or "").strip(),
+        "payment_terms": (body.payment_terms or "").strip(),
+        "delivery_period": (body.delivery_period or "").strip(),
+        "post_warranty": (body.post_warranty or "").strip(),
+        "units": float(body.units),
+        "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
+    }
+    # First save+download stays R0. The next edit that is saved becomes R1, then R2…
+    # Download itself does not change the revision. Saving the same text again does not bump.
+    if quote:
+        prev_number = quote.quotation_number
+        old = _quote_notes_payload(quote)
+        already_issued = bool(old.get("issued")) or bool((old.get("to_name") or "").strip()) or (
+            quote.amount_excl is not None and float(quote.amount_excl or 0) > 0
+        )
+        old_snap = {k: old.get(k) for k in snap}
+        if old.get("units") is None and quote.units is not None:
+            old_snap["units"] = float(quote.units)
+        if not old_snap.get("quotation_date") and quote.quotation_date is not None:
+            old_snap["quotation_date"] = quote.quotation_date.isoformat()
+        changed = any(old_snap.get(k) != snap[k] for k in snap)
+        if already_issued and changed:
+            quote.revision = _next_revision(quote.revision)
+        else:
+            quote.revision = quote.revision or "R0"
+        quote.quotation_number = build_quotation_number(
+            db, lead, quote.revision, existing_number=prev_number,
+        )
+        quote.quotation_date = qdate
+        quote.units = body.units
+        quote.amount_excl = totals["amount_excl"]
+        quote.gst = totals["gst"]
+        quote.grand_total = totals["grand_total"]
+        quote.notes = json.dumps({**snap, "issued": True})
+        quote.status = "Draft"
+    else:
+        revision = "R0"
+        notes = json.dumps({**snap, "issued": True})
+        quote = Quotation(
+            lead_id=lid,
+            quotation_number=build_quotation_number(db, lead, revision),
+            quotation_date=qdate,
+            revision=revision,
+            units=body.units,
+            amount_excl=totals["amount_excl"],
+            gst=totals["gst"],
+            grand_total=totals["grand_total"],
+            status="Draft",
+            notes=notes,
+        )
+        db.add(quote)
+    # Keep lead quotation_value in sync (excl GST, whole rupees)
+    lead.quotation_value = round_money(totals["amount_excl"])
+    db.add(LeadActivity(
+        lead_id=lead.id, employee_id=u.id, activity_type="Quotation Form",
+        notes=f"Saved quotation {quote.quotation_number} (units={body.units}, unit_cost={int(round(float(body.unit_cost)))})",
+        outcome=quote.revision,
+        quotation_value=round_money(totals["amount_excl"]),
+    ))
+    db.commit()
+    db.refresh(quote)
+    return _quotation_form_dict(db, lead, quote)
+
+
+@router.get("/{lid}/quotation-form/pdf")
+def download_quotation_form_pdf(lid: UUID, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+    from app.services.quotation_form import build_quotation_form_pdf
+
+    lead = _owned_lead(db, lid, u)
+    quote = (
+        db.query(Quotation)
+        .filter_by(lead_id=lid)
+        .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(400, "Save the quotation form before downloading PDF")
+    payload = _quotation_form_dict(db, lead, quote)
+    content = build_quotation_form_pdf(payload)
+    filename = f"{payload['quotation_number']}.pdf"
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{lid}/documents")
