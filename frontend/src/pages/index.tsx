@@ -9,6 +9,7 @@ import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Comparison } from './comparison';
+export { Analytics } from './analytics';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
@@ -1360,13 +1361,13 @@ export function Leads() {
       <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr]">
         <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input min-w-0" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
-          <option value="">All statuses</option>
+          <option value="">Status</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
         <select className="input min-w-0" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
-          <option value="">All sources</option>
+          <option value="">Sources</option>
           {masters?.sources?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <select className="input min-w-0" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
@@ -1377,8 +1378,8 @@ export function Leads() {
         </select>
         <select className="input min-w-0" value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}>
           <option value="">Sort: Recent</option>
-          <option value="lead_value_desc">Lead Value ↓</option>
-          <option value="lead_value">Lead Value ↑</option>
+          <option value="lead_value_desc">Lead High</option>
+          <option value="lead_value">Lead Low</option>
         </select>
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
@@ -2049,7 +2050,9 @@ export function LeadDetail({ id }: { id: string }) {
             <Card title="Update work progress">
               <p className="text-xs text-graphite-500 mb-3">
                 {needsContact
-                  ? 'After you speak to the assigned customer, set progress and add remarks. This also completes the 3-day contact SLA.'
+                  ? ((l.source_name || nameOf('sources', l.source_id)) === 'Direct Call'
+                    ? 'Direct Call is urgent. Update work progress within 24 hours.'
+                    : 'After you speak to the assigned customer, set progress and add remarks. This also completes the 3-day contact SLA.')
                   : 'After each follow-up call, update progress and add remarks.'}
               </p>
               <div className="space-y-2">
@@ -2290,7 +2293,7 @@ export function ImportPage() {
                   <td className="td text-right whitespace-nowrap space-x-1">
                     <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => openEdit(r)}>Correct</button>
                     <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
-                    <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id, true)} title="Create even if enquiry no conflicts">Force add</button>
+                    <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
                     <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => dismiss(r.id)}>Delete</button>
                   </td>
                 )}
@@ -2402,7 +2405,7 @@ export function ImportPage() {
           </button>
         }>
           <p className="text-sm text-graphite-500 mb-3">
-            View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. Use <b>Force add</b> if enquiry no conflicts but it should still become a lead. <b>Delete</b> removes it from this list.
+            View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. A duplicate enquiry number is rejected. <b>Delete</b> removes it from this list.
           </p>
           <div className="flex gap-2 mb-3 text-sm font-medium">
             <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>

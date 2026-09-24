@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.deps import admin_only
 from app.db.session import get_db
-from app.models import Lead, LeadAssignment, Role, User
+from app.models import Lead, LeadAssignment, LeadSource, Role, User
 from app.services import email_service
 
 log = logging.getLogger(__name__)
@@ -147,6 +147,7 @@ def digest_run(
             if lead.sla_deadline
             else 1
         )
+        src = db.get(LeadSource, lead.source_id) if lead.source_id else None
         bucket["leads"].append({
             "enquiry_number": lead.enquiry_number,
             "customer_name": lead.customer_name or "",
@@ -154,6 +155,7 @@ def digest_run(
             "assigned_date_str": assigned_str,
             "deadline_str": lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—",
             "days_overdue": days,
+            "source": src.name if src else "",
             "lead_url": f"{settings.FRONTEND_URL.rstrip('/')}/leads/{lead.id}",
         })
     payload = list(groups.values())

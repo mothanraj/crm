@@ -1,8 +1,9 @@
 """APScheduler: SLA sweeps + Brevo email (assignment batches + admin overdue digest).
 
-- Every 15 min: mark SLA-overdue leads (72h after assignment with no
-  first contact) + in-app notify + mail admins immediately, grouped by
-  employee. Each lead mailed once (overdue_digest_at). No fixed daily slot.
+- Every 15 min: mark SLA-overdue leads (24h for Direct Call, 72h for
+  every other source, after assignment with no first contact) + in-app
+  notify + mail admins immediately, grouped by employee. Each lead mailed
+  once (overdue_digest_at). No fixed daily slot.
 - Hourly backstop: resend for any OVERDUE rows missed earlier (server was
   down at deadline, or Brevo failed last time).
 - Assignment retry: resend failed assignment emails (once per lead).
@@ -17,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Lead, LeadAssignment, LeadSource, Notification, Product, User
+from app.services.lead_service import is_direct_call_name
 from app.services import email_service
 
 log = logging.getLogger(__name__)
@@ -57,22 +59,38 @@ def _sla_sweep():
             lead.sla_state = "OVERDUE"
             owner = db.get(User, lead.primary_employee_id) if lead.primary_employee_id else None
             owner_name = owner.name if owner else "Unassigned employee"
-            body = (
-                f"{owner_name} did not follow up with customer "
-                f"{lead.customer_name or '—'} ({lead.enquiry_number}) within 3 days. "
-                f"Phone: {lead.contact_number or '—'}. Deadline was {lead.sla_deadline:%d-%b-%Y %H:%M}."
-            )
+            src = db.get(LeadSource, lead.source_id) if lead.source_id else None
+            direct = is_direct_call_name(src.name if src else "")
+            if direct:
+                body = (
+                    f"{owner_name} has not followed Direct Call customer "
+                    f"{lead.customer_name or '—'} ({lead.enquiry_number}) within 24 hours. "
+                    f"Phone: {lead.contact_number or '—'}. Deadline was {lead.sla_deadline:%d-%b-%Y %H:%M}."
+                )
+                admin_title = "Direct Call not followed"
+                owner_body = (
+                    f"You have not updated the Direct Call process for {lead.enquiry_number} "
+                    f"({lead.customer_name}) within 24 hours."
+                )
+            else:
+                body = (
+                    f"{owner_name} did not follow up with customer "
+                    f"{lead.customer_name or '—'} ({lead.enquiry_number}) within 3 days. "
+                    f"Phone: {lead.contact_number or '—'}. Deadline was {lead.sla_deadline:%d-%b-%Y %H:%M}."
+                )
+                admin_title = "Employee did not follow up"
+                owner_body = f"You missed the 3-day contact SLA for {lead.enquiry_number} ({lead.customer_name})."
             for admin in admins:
                 db.add(Notification(
                     user_id=admin.id, lead_id=lead.id, kind="SLA_OVERDUE",
-                    title="Employee did not follow up",
+                    title=admin_title,
                     body=body,
                 ))
             if owner:
                 db.add(Notification(
                     user_id=owner.id, lead_id=lead.id, kind="SLA_OVERDUE",
                     title="Follow-up overdue",
-                    body=f"You missed the 3-day contact SLA for {lead.enquiry_number} ({lead.customer_name}).",
+                    body=owner_body,
                 ))
         db.commit()
         _send_overdue_now(db, [x for x in overdue if x.overdue_digest_at is None], now)
@@ -105,6 +123,7 @@ def _digest_groups(db, rows, now) -> list[dict]:
             days = max(1, math.ceil((now - lead.sla_deadline).total_seconds() / 86400))
         else:
             days = 1
+        src = db.get(LeadSource, lead.source_id) if lead.source_id else None
         bucket["leads"].append({
             "enquiry_number": lead.enquiry_number,
             "customer_name": lead.customer_name or "",
@@ -112,6 +131,7 @@ def _digest_groups(db, rows, now) -> list[dict]:
             "assigned_date_str": assigned_str,
             "deadline_str": lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—",
             "days_overdue": days,
+            "source": src.name if src else "",
             "lead_url": _lead_url(lead),
         })
     return list(groups.values())

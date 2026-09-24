@@ -57,8 +57,19 @@ def send_email(to_email: str, to_name: str, subject: str, html: str) -> bool:
         return False
 
 
+def _is_direct_call(item: dict) -> bool:
+    return str(item.get("source") or "").strip().lower() == "direct call"
+
+
 def _lead_card(item: dict) -> str:
     """Full customer details card for one assigned lead."""
+    if _is_direct_call(item):
+        due = (
+            f"<li><b>URGENT — Direct Call. Update the process within 24 hours. Due:</b> "
+            f"{item.get('deadline_str') or '—'}</li>"
+        )
+    else:
+        due = f"<li><b>Due date (contact within 3 days):</b> {item.get('deadline_str') or '—'}</li>"
     return f"""<hr>
 <h3>{item.get('customer_name') or '—'} ({item.get('enquiry_number') or '—'})</h3>
 <ul>
@@ -68,7 +79,7 @@ def _lead_card(item: dict) -> str:
 <li><b>Customer name:</b> {item.get('customer_name') or '—'}</li>
 <li><b>Phone number:</b> {item.get('contact_number') or '—'}{(' / ' + str(item.get('alternate_contact'))) if item.get('alternate_contact') else ''}</li>
 <li><b>Product details:</b> {item.get('product') or '—'}{(' (' + str(item.get('quantity_raw')) + ')') if item.get('quantity_raw') else ''}</li>
-<li><b>Due date (contact within 3 days):</b> {item.get('deadline_str') or '—'}</li>
+{due}
 <li><b>Email:</b> {item.get('email') or '—'}</li>
 <li><b>Company:</b> {item.get('company_name') or '—'}</li>
 <li><b>City:</b> {item.get('city') or '—'}</li>
@@ -83,13 +94,31 @@ def build_assignment_email(employee_name: str, leads: list[dict]) -> tuple[str, 
     leads: [{enquiry_number, legacy_enq, enquiry_date, assigned_date_str,
       customer_name, contact_number, alternate_contact, email, company_name,
       city, source, product, quantity_raw, deadline_str, lead_url}]
+    Direct Call rows ask for an update within 24 hours. Other sources stay at 3 days.
     """
     n = len(leads)
     enqs = ", ".join(str(x.get("enquiry_number") or "") for x in leads[:5] if x.get("enquiry_number"))
-    subject = f"New customers assigned: {n} ({enqs})" if enqs else f"New customers assigned: {n}"
+    direct = [x for x in leads if _is_direct_call(x)]
+    if direct and len(direct) == n:
+        subject = (
+            f"URGENT Direct Call — update within 24 hours: {n} ({enqs})"
+            if enqs else f"URGENT Direct Call — update within 24 hours: {n}"
+        )
+        intro = (
+            f"{n} Direct Call customer(s) have been assigned to you. "
+            "This is urgent. Please update the work progress in the CRM within 24 hours."
+        )
+    else:
+        subject = f"New customers assigned: {n} ({enqs})" if enqs else f"New customers assigned: {n}"
+        intro = (
+            f"{n} new customer(s) have been assigned to you. "
+            "Please talk to each customer and update the work progress in the CRM within 3 days."
+        )
+        if direct:
+            intro += " Direct Call leads in this list are urgent — update those within 24 hours."
     cards = "".join(_lead_card(x) for x in leads)
     html = f"""<p>Hi {employee_name or 'there'},</p>
-<p>{n} new customer(s) have been assigned to you. Please talk to each customer and update the work progress in the CRM within 3 days.</p>
+<p>{intro}</p>
 {cards}
 <p>— {settings.BREVO_SENDER_NAME}</p>"""
     return subject, html
@@ -110,20 +139,50 @@ def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:
       assigned_date_str, deadline_str, days_overdue, lead_url}]}]
     """
     total = sum(len(g.get("leads", [])) for g in groups)
-    subject = f"Not updated: {total} customer(s) past 3-day due ({date_str})"
+    all_items = [item for g in groups for item in g.get("leads", [])]
+    direct_n = sum(1 for item in all_items if _is_direct_call(item))
+    if direct_n and direct_n == total:
+        subject = f"Direct Call not followed: {total} customer(s) past 24 hours ({date_str})"
+        intro = (
+            "The following Direct Call customers were not updated within 24 hours. "
+            "The assigned employee has not followed them yet:"
+        )
+    elif direct_n:
+        subject = f"Not updated: {total} customer(s) past due ({date_str})"
+        intro = (
+            "The following assigned customers were not updated on time. "
+            "Direct Call leads were due within 24 hours. Other leads were due within 3 days:"
+        )
+    else:
+        subject = f"Not updated: {total} customer(s) past 3-day due ({date_str})"
+        intro = (
+            "The following assigned customers were not talked to and their status "
+            "was not updated within the 3-day due date:"
+        )
     rows = ""
     for g in groups:
         rows += f"<h3>{g.get('employee', '—')} — {len(g.get('leads', []))} not updated</h3><ul>"
         for item in g.get("leads", []):
-            rows += (
-                f"<li><b>{item.get('customer_name') or '—'}</b> "
-                f"({item.get('enquiry_number')}) — {item.get('phone') or '—'}, "
-                f"assigned {item.get('assigned_date_str') or '—'}, "
-                f"due {item.get('deadline_str')}, {item.get('days_overdue')} day(s) overdue — "
-                f"<a href=\"{item.get('lead_url')}\">open lead</a></li>"
-            )
+            if _is_direct_call(item):
+                rows += (
+                    f"<li><b>{g.get('employee', 'Employee')}</b> has not followed "
+                    f"<b>{item.get('customer_name') or '—'}</b> "
+                    f"({item.get('enquiry_number')}) yet. Direct Call — process was not updated "
+                    f"within 24 hours. Phone {item.get('phone') or '—'}, "
+                    f"assigned {item.get('assigned_date_str') or '—'}, "
+                    f"due {item.get('deadline_str')} — "
+                    f"<a href=\"{item.get('lead_url')}\">open lead</a></li>"
+                )
+            else:
+                rows += (
+                    f"<li><b>{item.get('customer_name') or '—'}</b> "
+                    f"({item.get('enquiry_number')}) — {item.get('phone') or '—'}, "
+                    f"assigned {item.get('assigned_date_str') or '—'}, "
+                    f"due {item.get('deadline_str')}, {item.get('days_overdue')} day(s) overdue — "
+                    f"<a href=\"{item.get('lead_url')}\">open lead</a></li>"
+                )
         rows += "</ul>"
-    html = f"""<p>The following assigned customers were not talked to and their status was not updated within the 3-day due date:</p>
+    html = f"""<p>{intro}</p>
 {rows}
 <p>— {settings.BREVO_SENDER_NAME}</p>"""
     return subject, html

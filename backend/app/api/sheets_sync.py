@@ -28,7 +28,7 @@ from app.models import (
     LeadStatusHistory, Product, ProductAlias, User,
 )
 from app.services import live
-from app.services.lead_service import auto_assign, next_enquiry_number
+from app.services.lead_service import auto_assign, format_enquiry_number, next_enquiry_number
 from app.services.normalize import (
     PRODUCT_ALIASES, canonical_source, norm_key, parse_excel_date, parse_quantity,
 )
@@ -202,14 +202,16 @@ async def ingest_rows(
             errors.append({"row": r.row_id, "reason": "INVALID", "error": ",".join(classified["errs"])})
             continue
         seen_phones.add(phone_n)
-        seen_enqs.add(legacy)  # type: ignore[arg-type]
+        if legacy is not None:
+            seen_enqs.add(legacy)
         src = _norm_source(db, r.source or "")
         prod = _norm_product(db, r.product or "")
         cars = (r.cars or "").strip()
+        enquiry_number = format_enquiry_number(int(legacy)) if legacy is not None else next_enquiry_number(db)
         try:
             with db.begin_nested():
                 lead = Lead(
-                    enquiry_number=next_enquiry_number(db),
+                    enquiry_number=enquiry_number,
                     legacy_enquiry_no=legacy,
                     enquiry_date=parse_excel_date(r.date),
                     customer_name=name,
@@ -264,6 +266,10 @@ async def ingest_rows(
             _send_assignment_batches(db, new_by_emp)
         except Exception as exc:
             log.error("sheets assignment mail failed: %s", exc)
+    if not inserted and errors:
+        # Apps Script treats HTTP 200 as synced and clears SEND. A rejected
+        # enquiry must stay checked and show the duplicate or invalid reason.
+        raise HTTPException(409, "; ".join(str(item.get("error") or "rejected") for item in errors)[:300])
     return {"batch_id": str(batch.id), "inserted": len(inserted),
             "enquiry_numbers": inserted, "duplicates": batch.duplicates,
             "invalid": batch.invalid, "errors": errors}

@@ -22,7 +22,7 @@ from app.models import (
     Product, ProductAlias, User,
 )
 from app.services import email_service, live
-from app.services.lead_service import auto_assign, next_enquiry_number
+from app.services.lead_service import auto_assign, format_enquiry_number, next_enquiry_number
 from app.services.pricing import apply_pricing_to_lead
 
 log = logging.getLogger(__name__)
@@ -99,12 +99,22 @@ class PromoteIn(BaseModel):
 
 
 def parse_legacy_enq(raw) -> int | None:
+    """Enquiry number from Excel or Google Sheets: 1, 1.0, '225', or 'ENQ-000225'."""
     if raw is None or raw == "":
         return None
-    try:
-        return int(float(str(raw).strip()))
-    except (ValueError, TypeError):
+    text = str(raw).strip()
+    if not text:
         return None
+    try:
+        number = int(float(text))
+    except (ValueError, TypeError):
+        digits = re.sub(r"\D", "", text)
+        if not digits:
+            return None
+        number = int(digits)
+    if number < 1:
+        return None
+    return number
 
 
 def suggest_sheet(names: list[str]) -> str:
@@ -206,13 +216,12 @@ def classify_intake_row(
     seen_phones: set[str] | None = None,
     seen_enqs: set[int] | None = None,
 ) -> dict:
-    """Shared Excel + Google Sheets rules: duplicates vs invalid.
+    """Shared Excel + Google Sheets rules.
 
-    Duplicate (review, do not auto-create): same phone or enquiry no in this
-    batch or already in leads.
-    Invalid (review, do not auto-create): missing name, bad/missing phone,
-    missing enquiry no, or invalid email.
-    If both apply, duplicate wins so the admin sees the conflict first.
+    Only the phone number is required. Name, enquiry number, email, and the
+    other columns may be blank. A supplied enquiry number must still be unique.
+    A duplicate phone is rejected. An unusable email is stored and does not
+    block the row.
     """
     seen_phones = seen_phones or set()
     seen_enqs = seen_enqs or set()
@@ -222,18 +231,17 @@ def classify_intake_row(
     email_bad = bool(email_v) and not is_valid_email(email_v)
     errs: list[str] = []
     dups: list[str] = []
-    if not (name or "").strip():
-        errs.append("missing name")
     if not is_valid_phone(phone or ""):
-        errs.append("missing/invalid phone")
+        shown = phone_n or str(phone or "").strip() or "blank"
+        errs.append(f"missing/invalid phone ({shown})")
     elif phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
         dups.append("duplicate phone")
-    if legacy is None:
-        errs.append("missing/invalid enquiry no")
-    elif legacy in seen_enqs or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-        dups.append("duplicate enquiry no")
-    if email_bad:
-        errs.append("invalid email")
+    if legacy is not None and (
+        legacy in seen_enqs
+        or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
+        or db.query(Lead).filter_by(enquiry_number=format_enquiry_number(legacy)).first()
+    ):
+        dups.append(f"duplicate enquiry no {format_enquiry_number(legacy)}")
     return {
         "phone_norm": phone_n,
         "legacy_enq": legacy,
@@ -357,8 +365,6 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
 def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
     name = str(raw.get("name") or "").strip()
     phone = str(raw.get("phone") or "").strip()
-    if not name:
-        raise HTTPException(400, "Name is required")
     if not phone:
         raise HTTPException(400, "Phone is required")
     phone_n = norm_phone(phone)
@@ -370,20 +376,18 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     legacy = raw.get("legacy_enq")
     if legacy is None:
         legacy = parse_legacy_enq(raw.get("enq"))
-    if legacy is None and not force:
-        raise HTTPException(400, "Enquiry number is required — correct it first")
-    if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-        if force:
-            legacy = None
-        else:
-            raise HTTPException(
-                400,
-                "Enquiry number already exists. Correct it, or Force add to create without that Excel enquiry no.",
-            )
+    if legacy is None:
+        enquiry_number = next_enquiry_number(db)
+        legacy = None
+    else:
+        enquiry_number = format_enquiry_number(int(legacy))
+        if (
+            db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
+            or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
+        ):
+            raise HTTPException(400, f"Enquiry number {enquiry_number} already exists")
 
     email_v = str(raw.get("email") or "").strip()
-    if email_v and not is_valid_email(email_v):
-        raise HTTPException(400, "Enter a valid email address")
     company = str(raw.get("company") or "").strip()
     city = str(raw.get("city") or "").strip()
     cars = str(raw.get("cars") or "").strip()
@@ -394,7 +398,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     try:
         with db.begin_nested():
             lead = Lead(
-                enquiry_number=next_enquiry_number(db),
+                enquiry_number=enquiry_number,
                 legacy_enquiry_no=legacy,
                 enquiry_date=parse_excel_date(raw.get("date")),
                 customer_name=name,
@@ -425,7 +429,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
             ))
             auto_assign(db, lead, admin)
     except IntegrityError:
-        raise HTTPException(400, "Enquiry number already exists. Correct it, or Force add.")
+        raise HTTPException(400, "Enquiry number already exists")
     return lead
 
 
@@ -537,7 +541,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "enquiry no", "received date", "name", "company/organisation (optional)",
             "contact no", "city", "no. of cars", "lead source", "product/type", "email",
         ],
-        "note": "Only listed columns are imported. Duplicate phone/enquiry no and invalid name, phone, enquiry no, or email are held for admin review (same rules as Google Sheets). Unmapped product names still import as-is.",
+        "note": "Only the phone number is required. Other columns may be blank. A duplicate phone, or a duplicate enquiry number when one is filled in, is held for review. Unmapped product names still import as-is.",
     }
 
 
@@ -559,13 +563,20 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
             ))
             continue
         legacy = rec.get("legacy_enq")
-        if legacy is not None and db.query(Lead).filter_by(legacy_enquiry_no=legacy).first():
-            db.add(ImportError(
-                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error="duplicate enquiry no", reason="DUPLICATE",
-            ))
-            batch.duplicates += 1
-            continue
+        if legacy is None:
+            enquiry_number = next_enquiry_number(db)
+        else:
+            enquiry_number = format_enquiry_number(int(legacy))
+            if (
+                db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
+                or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
+            ):
+                db.add(ImportError(
+                    batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                    error=f"duplicate enquiry no {enquiry_number}", reason="DUPLICATE",
+                ))
+                batch.duplicates += 1
+                continue
         phone_n = rec.get("phone_norm") or norm_phone(str(rec.get("phone") or ""))
         if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
             db.add(ImportError(
@@ -583,7 +594,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
         try:
             with db.begin_nested():
                 lead = Lead(
-                    enquiry_number=next_enquiry_number(db),
+                    enquiry_number=enquiry_number,
                     legacy_enquiry_no=legacy,
                     enquiry_date=parse_excel_date(rec.get("date")),
                     customer_name=str(rec.get("name") or ""),

@@ -11,6 +11,7 @@ const NAV = [
   { to: '/reassignments', label: 'Reassign', icon: '⇄', roles: ['ADMIN'] },
   { to: '/comparison', label: 'Comparison', icon: '⚖', roles: ['ADMIN'] },
   { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
+  { to: '/analytics', label: 'Analytics', icon: '▤', roles: ['ADMIN', 'MANAGER'] },
   { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
 ];
 

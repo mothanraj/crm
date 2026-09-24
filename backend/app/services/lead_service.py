@@ -7,8 +7,26 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.models import (
     AssignmentState, EnquirySequence, Lead, LeadActivity, LeadAssignment,
-    LeadReassignmentRequest, LeadStatus, LeadStatusHistory, Notification, Role, User,
+    LeadReassignmentRequest, LeadSource, LeadStatus, LeadStatusHistory, Notification, Role, User,
 )
+
+DIRECT_CALL_SOURCE = "Direct Call"
+
+
+def is_direct_call_name(name: str | None) -> bool:
+    return (name or "").strip().lower() == DIRECT_CALL_SOURCE.lower()
+
+
+def source_name_for_lead(db: Session, lead: Lead) -> str:
+    if not getattr(lead, "source_id", None):
+        return ""
+    src = db.get(LeadSource, lead.source_id)
+    return src.name if src else ""
+
+
+def sla_hours_for_lead(db: Session, lead: Lead) -> int:
+    """Direct Call must be updated within 24 hours. Every other source stays at 72 hours."""
+    return 24 if is_direct_call_name(source_name_for_lead(db, lead)) else 72
 
 
 def _ensure_quote_ref(db: Session, lead: Lead) -> None:
@@ -21,6 +39,11 @@ def _ensure_quote_ref(db: Session, lead: Lead) -> None:
         logging.getLogger(__name__).exception(
             "quotation REF on assign failed for lead %s", getattr(lead, "id", None),
         )
+
+
+def format_enquiry_number(number: int) -> str:
+    """Sheet/Excel enquiry 1 becomes ENQ-000001. Wider numbers keep every digit."""
+    return f"ENQ-{int(number):06d}"
 
 
 def next_enquiry_number(db: Session) -> str:
@@ -200,7 +223,9 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
     import logging
     log = logging.getLogger(__name__)
     now = datetime.now(timezone.utc)
-    deadline = now + timedelta(hours=72)
+    hours = sla_hours_for_lead(db, lead) if role == "PRIMARY" else 72
+    direct_call = hours == 24
+    deadline = now + timedelta(hours=hours)
     db.query(LeadAssignment).filter(
         LeadAssignment.lead_id == lead.id, LeadAssignment.role == role,
         LeadAssignment.is_current.is_(True)).update({"is_current": False})
@@ -247,10 +272,22 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
         lead.technical_employee_id = emp.id
     elif role == "SECONDARY":
         lead.secondary_support_employee_id = emp.id
+    if direct_call:
+        note_title = "URGENT Direct Call assigned"
+        note_body = (
+            f"{lead.enquiry_number} is a Direct Call. Update the process within 24 hours "
+            f"(by {deadline:%d-%b-%Y %H:%M})."
+        )
+    else:
+        note_title = "New lead assigned"
+        note_body = (
+            f"{lead.enquiry_number} assigned. Contact the customer within 3 days "
+            f"(by {deadline:%d-%b-%Y %H:%M})."
+        )
     db.add(Notification(
         user_id=emp.id, lead_id=lead.id, kind="ASSIGNMENT",
-        title="New lead assigned",
-        body=f"{lead.enquiry_number} assigned. Contact the customer within 3 days (by {deadline:%d-%b-%Y %H:%M}).",
+        title=note_title,
+        body=note_body,
     ))
     db.flush()
 

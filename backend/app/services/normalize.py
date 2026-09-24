@@ -170,9 +170,17 @@ CANONICAL_STATUSES = [
     ("Duplicate", True, True, 16),
 ]
 def norm_phone(raw: str) -> str:
+    """Digits only. +91 and a leading 0 are removed only for an Indian mobile.
+
+    Numbers such as +971… also begin with 91, so they are kept in full.
+    """
     d = re.sub(r"\D", "", raw or "")
-    if len(d) > 10 and d.startswith("91"):
-        d = d[-10:]
+    if d.startswith("00"):
+        d = d[2:]
+    if len(d) == 12 and d.startswith("91") and d[2] in "6789":
+        d = d[2:]
+    elif len(d) == 11 and d.startswith("0") and d[1] in "6789":
+        d = d[1:]
     return d
 
 
@@ -182,9 +190,9 @@ def is_valid_email(raw: str) -> bool:
 
 
 def is_valid_phone(raw: str) -> bool:
-    """Indian mobile: 10 digits starting 6–9; optional +91/0 prefix."""
+    """Accept an Indian mobile or any other number of 8–15 digits."""
     d = norm_phone(raw)
-    return bool(re.fullmatch(r"[6-9]\d{9}", d))
+    return bool(re.fullmatch(r"\d{8,15}", d))
 
 
 def format_phone(raw: str) -> str:

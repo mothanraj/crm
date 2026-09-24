@@ -6,9 +6,21 @@ def test_parse_legacy_enq_float():
     assert parse_legacy_enq(76.0) == 76
     assert parse_legacy_enq(5) == 5
     assert parse_legacy_enq("449") == 449
+    assert parse_legacy_enq("ENQ-000001") == 1
+    assert parse_legacy_enq("ENQ-225") == 225
+    assert parse_legacy_enq("ENQ-000225") == 225
     assert parse_legacy_enq(None) is None
     assert parse_legacy_enq("") is None
     assert parse_legacy_enq("abc") is None
+    assert parse_legacy_enq(0) is None
+
+
+def test_enquiry_number_normalization():
+    from app.services.lead_service import format_enquiry_number
+    assert format_enquiry_number(parse_legacy_enq(1)) == "ENQ-000001"
+    assert format_enquiry_number(parse_legacy_enq(225)) == "ENQ-000225"
+    assert format_enquiry_number(parse_legacy_enq("ENQ-225")) == "ENQ-000225"
+    assert format_enquiry_number(parse_legacy_enq("ENQ-000225")) == "ENQ-000225"
 
 
 def test_header_score_tracker():
