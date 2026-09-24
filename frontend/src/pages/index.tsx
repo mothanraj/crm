@@ -40,30 +40,41 @@ function inr(n: any) {
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
 }
 
-/** Estar webmail. Opens in a new tab; if the browser blocks that, uses this tab. */
+const ESTAR_WEBMAIL = 'https://webmail.estar.in';
+
+/** Roundcube compose on cPanel. After a fresh login, this path is kept and
+ *  opened with the customer address and subject. It must not be opened during
+ *  an existing webmail session: cPanel then returns HTTP 401 because the
+ *  address has no /cpsess…/ token. */
 function customerWebmailUrl(email?: string, enquiry?: string) {
   const to = (email || '').trim();
   const params = new URLSearchParams();
-  if (to) {
-    params.set('_task', 'mail');
-    params.set('_action', 'compose');
-    params.set('_to', to);
-    if (enquiry) params.set('_subject', `Regarding your enquiry ${enquiry}`);
-  }
-  const q = params.toString();
-  return q ? `https://webmail.estar.in/?${q}` : 'https://webmail.estar.in/';
+  params.set('_task', 'mail');
+  params.set('_action', 'compose');
+  params.set('_extwin', '1');
+  if (to) params.set('_to', to);
+  if (enquiry) params.set('_subject', `Regarding your enquiry ${enquiry}`);
+  return `${ESTAR_WEBMAIL}/3rdparty/roundcube/index.php?${params.toString()}`;
+}
+
+function whatsappUrl(raw?: string) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  if (digits.length === 10) digits = `91${digits}`;
+  return `https://wa.me/${digits}`;
 }
 
 function openEstarWebmail(event: { preventDefault: () => void; stopPropagation: () => void }, email?: string, enquiry?: string) {
   event.preventDefault();
   event.stopPropagation();
-  const url = customerWebmailUrl(email, enquiry);
-  const popup = window.open(url, '_blank');
-  if (popup) {
-    popup.opener = null;
-    return;
-  }
-  window.location.assign(url);
+  const compose = customerWebmailUrl(email, enquiry);
+  const tab = window.open(`${ESTAR_WEBMAIL}/logout/`, '_blank');
+  if (!tab) return;
+  window.setTimeout(() => {
+    if (tab.closed) return;
+    try { tab.location.replace(compose); } catch { /* opened window can still be navigated */ }
+  }, 1200);
 }
 
 function previewLeadValue(pricePerCar: any, cars: any) {
@@ -628,7 +639,7 @@ export function EmployeeDashboard() {
   const tiles = [
     { label: 'My assigned leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
     { label: 'Needs first contact', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
-    { label: 'SLA overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
+    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
     { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#2F9E44]', hint: 'First contact recorded' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#0e7490]', hint: 'My pipeline' },
     { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#65A30D]', hint: 'My wins' },
@@ -768,6 +779,10 @@ function quoteDocField({
     return <textarea {...rest} readOnly={readOnly} className={`${base} resize-y min-h-[52px] ${className || ''}`} />;
   }
   return <input {...rest} readOnly={readOnly} className={`${base} ${className || ''}`} />;
+}
+
+function QuoteField(props: any) {
+  return quoteDocField(props);
 }
 
 function QuotationFormModal({
@@ -960,8 +975,6 @@ function QuotationFormModal({
     setErr('');
   };
 
-  const Field = (props: any) => quoteDocField({ ...props, readOnly: !editing });
-
   return (
     <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
       <div
@@ -1030,7 +1043,7 @@ function QuotationFormModal({
                 </div>
                 <div className="flex items-baseline gap-2 shrink-0 ml-auto">
                   <span className="font-bold">Date:</span>
-                  <Field
+                  <QuoteField readOnly={!editing}
                     type="date"
                     value={form.quotation_date}
                     onChange={(e: any) => set({ quotation_date: e.target.value })}
@@ -1041,28 +1054,29 @@ function QuotationFormModal({
               </div>
 
               <div className="mb-1 font-bold">To</div>
-              <Field
+              <QuoteField readOnly={!editing}
                 value={form.to_name}
                 onChange={(e: any) => set({ to_name: e.target.value })}
                 placeholder="Company / Customer name"
                 className="font-bold mb-1"
               />
-              <Field
+              <QuoteField readOnly={!editing}
                 multiline
                 value={form.to_address}
                 onChange={(e: any) => set({ to_address: e.target.value })}
                 placeholder="Address"
-                className="text-[14px] mb-5"
+                className="text-[14px] mb-5 font-bold"
               />
 
               <p className="mb-4">Dear Sir,</p>
 
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="font-bold shrink-0">Sub: -</span>
-                <Field
+                <QuoteField readOnly={!editing}
                   value={form.subject}
                   onChange={(e: any) => set({ subject: e.target.value })}
                   placeholder="Offer for Parking System"
+                  className="font-bold"
                 />
               </div>
 
@@ -1086,7 +1100,7 @@ function QuotationFormModal({
                   <tr>
                     <td className="border border-slate-400 px-2 py-2 text-center align-middle">1</td>
                     <td className="border border-slate-400 px-2 py-2 align-top">
-                      <Field
+                      <QuoteField readOnly={!editing}
                         multiline
                         value={form.product_description}
                         onChange={(e: any) => set({ product_description: e.target.value })}
@@ -1094,18 +1108,16 @@ function QuotationFormModal({
                       />
                     </td>
                     <td className="border border-slate-400 px-2 py-2 text-center align-middle">
-                      <Field
-                        type="number"
-                        min={0}
+                      <QuoteField readOnly={!editing}
+                        inputMode="numeric"
                         value={form.unit_cost}
                         onChange={(e: any) => set({ unit_cost: e.target.value.replace(/[^\d]/g, '') })}
                         className="text-center tabular-nums"
                       />
                     </td>
                     <td className="border border-slate-400 px-2 py-2 text-center align-middle">
-                      <Field
-                        type="number"
-                        min={1}
+                      <QuoteField readOnly={!editing}
+                        inputMode="numeric"
                         value={form.units}
                         onChange={(e: any) => set({ units: e.target.value.replace(/[^\d.]/g, '') })}
                         className="text-center tabular-nums"
@@ -1154,7 +1166,7 @@ function QuotationFormModal({
                   <div className="space-y-5">
                     <div>
                       <div className="font-bold mb-2">Payment Terms:</div>
-                      <Field
+                      <QuoteField readOnly={!editing}
                         multiline
                         value={form.payment_terms}
                         onChange={(e: any) => set({ payment_terms: e.target.value })}
@@ -1163,7 +1175,7 @@ function QuotationFormModal({
                     </div>
                     <div>
                       <div className="font-bold mb-2">Delivery Period:</div>
-                      <Field
+                      <QuoteField readOnly={!editing}
                         multiline
                         value={form.delivery_period}
                         onChange={(e: any) => set({ delivery_period: e.target.value })}
@@ -1172,7 +1184,7 @@ function QuotationFormModal({
                     </div>
                     <div>
                       <div className="font-bold mb-2">Post Warranty:</div>
-                      <Field
+                      <QuoteField readOnly={!editing}
                         multiline
                         value={form.post_warranty}
                         onChange={(e: any) => set({ post_warranty: e.target.value })}
@@ -1283,6 +1295,11 @@ export function Leads() {
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
   const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
+  const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
+  const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
+  const lockedLeadMessage = (lead: any) => isConvertedLocked(lead)
+    ? 'This lead is converted and cannot be edited.'
+    : 'This lead is not interested and cannot be edited.';
   const saveLead = async (lead: any, done = false, conversionConfirmed = false) => {
     if (role === 'EMPLOYEE' && isConvertedLocked(lead)) {
       setValidationMessage('Converted leads cannot be edited or reopened.');
@@ -1412,10 +1429,10 @@ export function Leads() {
                   <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}
                     onClickCapture={(event) => {
                       const target = event.target as HTMLElement;
-                      if (target.closest?.('[data-webmail]')) return;
-                      if (role === 'EMPLOYEE' && isConvertedLocked(l) && target.closest?.('button, select, textarea')) {
+                      if (target.closest?.('[data-reopen]')) return;
+                      if (role === 'EMPLOYEE' && isOutreachLocked(l) && target.closest?.('button, select, textarea, [data-webmail], [data-quote-pdf]')) {
                         event.preventDefault(); event.stopPropagation();
-                        setValidationMessage('Converted leads cannot be edited or reopened.');
+                        setValidationMessage(lockedLeadMessage(l));
                       }
                     }}>
 
@@ -1424,11 +1441,29 @@ export function Leads() {
                     <td className="td align-top">{l.company_name || '—'}</td>
                     <td className="td align-top">{l.city || '—'}</td>
                     <td className="td align-top">
-                      <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                      <div className="whitespace-nowrap flex items-center gap-1.5">
+                        <span>{l.contact_number || '—'}</span>
+                        {role === 'EMPLOYEE' && l.contact_number && whatsappUrl(l.contact_number) && (
+                          <a
+                            href={whatsappUrl(l.contact_number)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open WhatsApp"
+                            className="inline-flex text-[#25D366] hover:text-[#128C7E]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <svg viewBox="0 0 24 24" className="w-4 h-4" aria-hidden="true">
+                              <path fill="currentColor" d="M20.5 3.5A11 11 0 0 0 2.1 17.8L1 23l5.3-1.1A11 11 0 0 0 12 23a11 11 0 0 0 8.5-19.5zM12 21a9 9 0 0 1-4.6-1.3l-.3-.2-3.1.7.7-3-.2-.3A9 9 0 1 1 12 21zm5-6.7c-.3-.1-1.6-.8-1.8-.9s-.4-.1-.6.1-.7.9-.8 1-.3.2-.6.1a7.4 7.4 0 0 1-2.2-1.4 8.2 8.2 0 0 1-1.5-1.9c-.2-.3 0-.4.1-.6l.4-.5.2-.3a.5.5 0 0 0 0-.5c-.1-.1-.6-1.4-.8-1.9s-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.8 11.8 0 0 0 4.4 4 14 14 0 0 0 1.5.5 3.6 3.6 0 0 0 1.6.1 2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .2-1.2c-.1-.1-.3-.2-.6-.3z" />
+                            </svg>
+                          </a>
+                        )}
+                      </div>
                       <div className="text-xs mt-0.5 break-all">
-                        {l.email
-                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-all" onClick={(e) => openEstarWebmail(e, l.email, l.enquiry_number)}>{l.email}</button>
-                          : <span className="text-graphite-400">No email</span>}
+                        {l.email && role === 'EMPLOYEE'
+                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-all" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
+                          : l.email
+                            ? <span className="break-all">{l.email}</span>
+                            : <span className="text-graphite-400">No email</span>}
                       </div>
                     </td>
                     {role === 'EMPLOYEE' && (
@@ -1438,7 +1473,10 @@ export function Leads() {
                           data-webmail
                           className="btn-secondary !px-2 !py-1 text-xs"
                           title={l.email ? `Open Estar webmail to ${l.email}` : 'Open Estar webmail'}
-                          onClick={(e) => openEstarWebmail(e, l.email, l.enquiry_number)}
+                          onClick={(e) => {
+                            if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
+                            openEstarWebmail(e, l.email, l.enquiry_number);
+                          }}
                         >
                           ✉️ Email
                         </button>
@@ -1450,7 +1488,10 @@ export function Leads() {
                           <button
                             type="button"
                             className="btn-primary !px-2 !py-1 text-xs"
-                            onClick={() => setQuoteFormLead(l)}
+                            onClick={(e) => {
+                              if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
+                              setQuoteFormLead(l);
+                            }}
                             title={l.quotation_form?.quotation_number ? `Edit ${l.quotation_form.quotation_number}` : 'Open quotation form'}
                           >
                             {l.quotation_form?.quotation_number ? 'Edit' : 'Open form'}
@@ -1458,10 +1499,13 @@ export function Leads() {
                           {l.quotation_form?.quotation_number && (
                             <button
                               type="button"
+                              data-quote-pdf
                               className="btn-secondary !px-2 !py-1 text-[10px]"
                               title={`Download ${l.quotation_form.quotation_number} PDF`}
                               onClick={async (e) => {
+                                e.preventDefault();
                                 e.stopPropagation();
+                                if (isOutreachLocked(l)) { setValidationMessage(lockedLeadMessage(l)); return; }
                                 try {
                                   const res = await api.get(`/leads/${l.id}/quotation-form/pdf`, { responseType: 'blob' });
                                   const url = URL.createObjectURL(res.data);
@@ -1473,7 +1517,7 @@ export function Leads() {
                                   a.remove();
                                   setTimeout(() => URL.revokeObjectURL(url), 2000);
                                 } catch {
-                                  setQuoteFormLead(l);
+                                  if (!isOutreachLocked(l)) setQuoteFormLead(l);
                                 }
                               }}
                             >
@@ -1502,7 +1546,7 @@ export function Leads() {
                         </select>
                       ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
-                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">✓ Completed — reopen to edit</span>
+                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : isNotInterestedLocked(l) ? '✓ Not interested — click Reopen for email and quotation' : '✓ Completed — reopen to edit'}</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
@@ -1542,7 +1586,7 @@ export function Leads() {
                           {isConvertedLocked(l) ? (
                             <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
                           ) : (
-                            <button type="button" className={`btn-secondary !px-3 !py-1 text-xs ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200' : '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700'}`}
+                            <button type="button" data-reopen={l.sla_state === 'COMPLETED' ? '' : undefined} className={`btn-secondary !px-3 !py-1 text-xs ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200' : '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700'}`}
                               disabled={savingId === l.id}
                               onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
                               {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
@@ -1608,7 +1652,7 @@ export function Leads() {
       {validationMessage && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setValidationMessage('')}>
           <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-graphite-900">Complete the lead details</h3>
+            <h3 className="text-lg font-semibold text-graphite-900">{validationMessage.includes('cannot be edited') ? 'Cannot edit this lead' : 'Complete the lead details'}</h3>
             <p className="text-sm text-graphite-600 mt-2">{validationMessage}</p>
             <div className="flex justify-end mt-5"><button type="button" className="btn-primary" onClick={() => setValidationMessage('')}>OK</button></div>
           </div>
@@ -1675,7 +1719,6 @@ export function EmployeeLeads() {
       return v === label;
     }).length,
   }));
-  const unreviewed = items.filter((l) => !(l.customer_review || '').trim()).length;
   return (
     <div>
       <PageHeader title="Employee Leads" subtitle="Select an employee to see all data of their assigned customers." />
@@ -1694,41 +1737,51 @@ export function EmployeeLeads() {
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
             {[
-              { label: 'Total assigned', value: total },
-              { label: 'Needs first contact', value: needsContact },
-              { label: 'SLA overdue', value: overdue },
-              { label: 'Contact done', value: done },
+              { label: 'Total assigned', value: total, bg: 'bg-[#1e3a5f]' },
+              { label: 'Needs first contact', value: needsContact, bg: 'bg-[#c0392b]' },
+              { label: 'Overdue', value: overdue, bg: 'bg-[#7b241c]' },
+              { label: 'Contact done', value: done, bg: 'bg-[#2F9E44]' },
             ].map((s) => (
-              <div key={s.label} className="card p-4 text-center">
-                <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
-                <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
+              <div key={s.label} className={`${s.bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
+                <div className="text-2xl font-bold tabular-nums">{s.value}</div>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1">{s.label}</div>
               </div>
             ))}
           </div>
           <div className="mb-4">
             <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {workActionCounts.map((s) => (
-                <div key={s.label} className="card p-4 text-center">
-                  <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
-                  <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
-                </div>
-              ))}
+              {workActionCounts.map((s) => {
+                const bg: Record<string, string> = {
+                  Assigned: 'bg-[#0e7490]',
+                  'In Followup': 'bg-[#c0392b]',
+                  Meeting: 'bg-[#0284c7]',
+                  'Site Visit': 'bg-[#65A30D]',
+                  'Quotation sent': 'bg-[#2F9E44]',
+                  Converted: 'bg-[#3F6212]',
+                  'Not Interested': 'bg-[#7b241c]',
+                };
+                return (
+                  <div key={s.label} className={`${bg[s.label] || 'bg-[#1e3a5f]'} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
+                    <div className="text-2xl font-bold tabular-nums">{s.value}</div>
+                    <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1 leading-tight">{s.label}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="mb-4">
             <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-              {reviewCounts.map((s) => (
-                <div key={s.label} className="card p-4 text-center">
-                  <div className="text-2xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
-                  <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
-                </div>
-              ))}
-              <div className="card p-4 text-center">
-                <div className="text-2xl font-bold text-graphite-900 tabular-nums">{unreviewed}</div>
-                <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">Unreviewed</div>
-              </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {reviewCounts.map((s) => {
+                const bg = s.label.startsWith('A+') ? 'bg-[#7c3aed]' : s.label.startsWith('A ') ? 'bg-[#d97706]' : s.label.startsWith('B ') ? 'bg-[#0284c7]' : 'bg-[#475569]';
+                return (
+                  <div key={s.label} className={`${bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
+                    <div className="text-2xl font-bold tabular-nums">{s.value}</div>
+                    <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1 leading-tight">{s.label}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="card overflow-hidden">
@@ -1815,13 +1868,16 @@ export function LeadDetail({ id }: { id: string }) {
   }
   if (!l) return <Spinner />;
   const nameOf = (kind: string, v?: string) => masters?.[kind]?.find((x: any) => x.id === v)?.name ?? (v ?? '—');
+  const convertedLocked = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED' && nameOf('statuses', l.status_id) === 'Converted';
+  const notInterestedLocked = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', l.status_id));
+  const leadLocked = convertedLocked || notInterestedLocked;
   const selectedProduct = masters?.products?.find((p: any) => p.id === productId);
   const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, cars);
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
-  const canUpdateProgress = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id);
-  const canEditPricing = role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id);
+  const canUpdateProgress = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
+  const canEditPricing = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id));
   const rr = l.reassignment_request;
-  const canRequestReassign = role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
+  const canRequestReassign = !leadLocked && role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
   const addNote = async () => {
     if (!note.trim() || busy) return;
     setBusy(true); setErr('');
@@ -1833,6 +1889,7 @@ export function LeadDetail({ id }: { id: string }) {
     } finally { setBusy(false); }
   };
   const saveProgress = async () => {
+    if (leadLocked) return;
     if (!progressId) { setErr('Select work progress'); return; }
     if (!remarks.trim()) { setErr('Enter remarks about the conversation'); return; }
     setBusy(true); setErr(''); setOkMsg('');
@@ -1877,7 +1934,7 @@ export function LeadDetail({ id }: { id: string }) {
     } finally { setBusy(false); }
   };
   const savePricing = async () => {
-    if (!canEditPricing) return;
+    if (!canEditPricing || leadLocked) return;
     setPricingBusy(true); setErr(''); setOkMsg('');
     try {
       const { data } = await api.put(`/leads/${id}`, {
@@ -1909,7 +1966,7 @@ export function LeadDetail({ id }: { id: string }) {
             <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm">
               <span>📞 {l.contact_number ? <a className="text-brand-700 font-semibold hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}{l.alternate_contact ? <span className="text-graphite-400"> (alt: {l.alternate_contact})</span> : null}</span>
-              <span>✉️ {l.email ? <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</span>
+              <span>✉️ {l.email ? (leadLocked ? <span className="font-semibold">{l.email}</span> : <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a>) : <span className="text-graphite-400">No email</span>}</span>
               <span>🚗 {l.quantity_raw ? `${l.quantity_raw} cars` : '—'}</span>
               <span className="font-semibold text-graphite-900">💰 Lead Value {inr(l.lead_value)}</span>
             </div>
@@ -2046,6 +2103,16 @@ export function LeadDetail({ id }: { id: string }) {
 
       <div className="grid lg:grid-cols-3 gap-4">
         <div className="space-y-4 lg:col-span-1">
+          {convertedLocked && (
+            <Card title="Converted">
+              <p className="text-sm text-emerald-800">This converted lead cannot be edited or reopened, and webmail cannot be opened from it.</p>
+            </Card>
+          )}
+          {notInterestedLocked && (
+            <Card title="Not interested">
+              <p className="text-sm text-amber-900">This lead is locked. Click Reopen on the leads page to edit it and open webmail and the quotation form.</p>
+            </Card>
+          )}
           {canUpdateProgress && (
             <Card title="Update work progress">
               <p className="text-xs text-graphite-500 mb-3">
@@ -3699,7 +3766,7 @@ export function EmployeesPage() {
                 {[
                   { label: 'Total assigned', value: employeeLeads.length },
                   { label: 'Needs first contact', value: empNeedsContact },
-                  { label: 'SLA overdue', value: empOverdue },
+                  { label: 'Overdue', value: empOverdue },
                   { label: 'Contact done', value: empContactDone },
                 ].map((s) => (
                   <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
