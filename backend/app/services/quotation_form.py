@@ -258,6 +258,7 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     body = ParagraphStyle("body", fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#1e293b"), spaceAfter=2)
     bold = ParagraphStyle("bold", parent=body, fontName="Helvetica-Bold")
     small = ParagraphStyle("small", fontName="Helvetica", fontSize=9, leading=13, textColor=colors.HexColor("#334155"), spaceAfter=2)
+    small_bold = ParagraphStyle("small_bold", parent=small, fontName="Helvetica-Bold")
     section = ParagraphStyle("section", parent=bold, spaceBefore=10, spaceAfter=4)
     cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
     cell_left = ParagraphStyle("cell_l", fontName="Helvetica", fontSize=9, leading=12, alignment=0)
@@ -309,11 +310,11 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     story.append(Paragraph("<b>To</b>", bold))
     story.append(Spacer(1, 4))
     story.append(Paragraph(to_name, bold))
-    story.append(Paragraph(to_address, small))
+    story.append(Paragraph(to_address, small_bold))
     story.append(Spacer(1, 14))
     story.append(Paragraph("Dear Sir,", body))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(f"<b>Sub: -</b> {subject}", body))
+    story.append(Paragraph(f"<b>Sub: - {subject}</b>", body))
     story.append(Spacer(1, 10))
     story.append(Paragraph(
         "E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike "
