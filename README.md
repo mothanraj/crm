@@ -68,6 +68,21 @@ uvicorn app.main:app --reload --port 8000
 
 Then create employees again in the UI. If you still see old demo names, they are leftover rows in **your** old database — delete them in Admin → Employees (deactivate) or wipe/recreate the `crm` database and re-run seed.
 
+## Host on Render (one link)
+
+The Docker image serves the website and `/api` on the same address. Open that Render URL and you get the CRM: login, leads, quotations, reports, and the rest.
+
+1. Push this repo to GitHub.
+2. In Render, **New → Blueprint** and select the repo (`render.yaml`), or **New → Web Service**, runtime **Docker**, Dockerfile `./Dockerfile`.
+3. Set environment variables:
+   - `DATABASE_URL` — Supabase **Session pooler** URL, including `?sslmode=require`. Do not use the direct `db.<ref>.supabase.co` host.
+   - `ADMIN_PASSWORD` — password for the first admin login.
+   - `FRONTEND_URL` — the Render URL, for example `https://estar-crm.onrender.com` (used in email links).
+4. Deploy. The pre-deploy step runs migrations and seeds roles, products, and the admin user if that email does not exist yet.
+5. Open the service URL and sign in with `ADMIN_EMAIL` (default `admin@crm.local`) and the password you set.
+
+WhatsApp and Estar webmail still open in a new tab. They are not hosted on Render.
+
 ## Docs
 
 See `docs/excel-analysis.md`, `docs/database-design.md`, `docs/business-rules.md`, `docs/api-documentation.md`.

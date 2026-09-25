@@ -1,0 +1,22 @@
+# One public URL. Render builds this Dockerfile and serves the CRM plus /api.
+services:
+  - type: web
+    name: estar-crm
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    preDeployCommand: alembic upgrade head && python -m app.db.seed
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@crm.local
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Administrator
+      - key: FRONTEND_URL
+        sync: false
