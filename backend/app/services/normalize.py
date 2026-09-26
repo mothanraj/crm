@@ -190,9 +190,9 @@ def is_valid_email(raw: str) -> bool:
 
 
 def is_valid_phone(raw: str) -> bool:
-    """Accept an Indian mobile or any other number of 8–15 digits."""
+    """Indian mobile only: 10 digits starting with 6, 7, 8, or 9. +91 is removed first."""
     d = norm_phone(raw)
-    return bool(re.fullmatch(r"\d{8,15}", d))
+    return bool(re.fullmatch(r"[6-9]\d{9}", d))
 
 
 def format_phone(raw: str) -> str:

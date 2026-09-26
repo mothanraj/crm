@@ -1,8 +1,8 @@
 /** Google Sheets -> CRM.
  *
  * Column N header must be Employee.
- * A valid phone (and a valid email, when one is typed) writes the next
- * employee into that column. Ticking SEND (column M) posts the row, and the
+ * A phone number or an email is enough. When either one is valid, the next
+ * employee is written into column N. Ticking SEND (column M) posts the row.
  * CRM creates the lead for the employee named in column N.
  *
  * Script properties: WEBHOOK_URL = https://<host>/api/sheets/rows
@@ -120,11 +120,14 @@ function rowIsEmpty_(sh, row, m) {
 function rowProblem_(sh, row, m) {
   if (rowIsEmpty_(sh, row, m)) return 'NOT SENT - empty row';
   const phoneValue = m.phone > 0 ? sh.getRange(row, m.phone).getValue() : '';
-  const digits = phoneDigits_(phoneValue);
-  if (!/^\d{8,15}$/.test(digits)) return 'NOT SENT - missing/invalid phone';
   const emailValue = m.email > 0 ? sh.getRange(row, m.email).getValue() : '';
-  if (!emailOk_(emailValue)) return 'NOT SENT - invalid email';
-  return '';
+  const phoneOk = /^[6-9]\d{9}$/.test(phoneDigits_(phoneValue));
+  const emailPresent = String(emailValue || '').trim() !== '';
+  const emailValid = emailPresent && emailOk_(emailValue);
+  if (String(phoneText_(phoneValue)).trim() !== '' && !phoneOk) return 'NOT SENT - phone must be a 10-digit Indian number';
+  if (phoneOk || emailValid) return '';
+  if (emailPresent) return 'NOT SENT - invalid email';
+  return 'NOT SENT - phone or email is required';
 }
 
 function signedPost_(url, payload) {

@@ -228,20 +228,21 @@ def classify_intake_row(
     phone_n = norm_phone(phone or "")
     legacy = parse_legacy_enq(enq)
     email_v = (email or "").strip()
+    phone_present = bool(str(phone or "").strip())
     phone_ok = is_valid_phone(phone or "")
     email_ok = bool(email_v) and is_valid_email(email_v)
     email_bad = bool(email_v) and not email_ok
     errs: list[str] = []
     dups: list[str] = []
-    if phone_ok and (phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first()):
+    if phone_present and not phone_ok:
+        shown = phone_n or str(phone or "").strip()
+        errs.append(f"missing/invalid phone ({shown})")
+    elif phone_ok and (phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first()):
         dups.append("duplicate phone")
-    if not phone_ok and not email_ok:
-        shown = phone_n or str(phone or "").strip() or "blank"
-        if str(phone or "").strip():
-            errs.append(f"missing/invalid phone ({shown})")
+    elif not phone_ok and not email_ok:
         if email_bad:
             errs.append("invalid email")
-        if not errs:
+        else:
             errs.append("missing phone or email")
     if legacy is not None and (
         legacy in seen_enqs
@@ -375,6 +376,8 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     email_v = str(raw.get("email") or "").strip()
     phone_ok = is_valid_phone(phone)
     email_ok = bool(email_v) and is_valid_email(email_v)
+    if phone and not phone_ok:
+        raise HTTPException(400, "Phone must be a 10-digit Indian number")
     if not phone_ok and not email_ok:
         raise HTTPException(400, "A valid phone or email is required")
     phone_n = norm_phone(phone) if phone_ok else ""

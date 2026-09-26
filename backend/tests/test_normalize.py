@@ -5,12 +5,11 @@ def test_phone():
     assert norm_phone("p:+919995910299") == "9995910299"
     assert norm_phone("+919876543210") == "9876543210"
     assert is_valid_phone("9876543210")
-    assert is_valid_phone("+44 7911 123456")
-    assert norm_phone("+44 7911 123456") == "447911123456"
-    assert is_valid_phone("+1 202 555 0123")
-    assert norm_phone("+971 50 123 4567") == "971501234567"
-    assert is_valid_phone("+971 50 123 4567")
-    assert is_valid_phone("4428123456")
+    assert is_valid_phone("+91 9876543210")
+    assert not is_valid_phone("+44 7911 123456")
+    assert not is_valid_phone("+1 202 555 0123")
+    assert not is_valid_phone("+971 50 123 4567")
+    assert not is_valid_phone("4428123456")
     assert not is_valid_phone("12345")
 
 

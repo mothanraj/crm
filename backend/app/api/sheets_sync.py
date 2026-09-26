@@ -33,7 +33,7 @@ from app.services.lead_service import (
     format_enquiry_number, next_enquiry_number, remember_assignment,
 )
 from app.services.normalize import (
-    PRODUCT_ALIASES, canonical_source, is_valid_email, norm_key, parse_excel_date, parse_quantity,
+    PRODUCT_ALIASES, canonical_source, norm_key, parse_excel_date, parse_quantity,
 )
 from app.services.pricing import apply_pricing_to_lead
 
@@ -205,12 +205,6 @@ async def ingest_rows(
             db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
                                error=",".join(classified["errs"]), reason="INVALID"))
             errors.append({"row": r.row_id, "reason": "INVALID", "error": ",".join(classified["errs"])})
-            continue
-        if email_v and not is_valid_email(email_v):
-            batch.invalid += 1
-            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
-                               error="invalid email", reason="INVALID"))
-            errors.append({"row": r.row_id, "reason": "INVALID", "error": "invalid email"})
             continue
         named = (r.employee or "").strip()
         chosen = employee_by_name(db, named) if named else None
