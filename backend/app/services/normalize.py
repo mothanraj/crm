@@ -135,6 +135,7 @@ PRODUCT_ALIASES = {
     "ss car parking (238 cars)": "Shuttle Parking",
     # Car Elevator
     "car elevator": "Car Elevator",
+    "car elevation": "Car Elevator",
     "car lift": "Car Elevator",
     "car lift parking": "Car Elevator",
     # ASRS
@@ -247,3 +248,45 @@ def parse_quantity(raw: str):
         return float(m.group())
     except ValueError:
         return None
+
+
+# These products may use an odd car count. Every other product must be even.
+# The smallest count is 2. A blank value is stored as 2.
+ODD_CAR_PRODUCTS = frozenset({
+    "Puzzle Parking",
+    "Pit Puzzle Parking",
+    "Car Elevator",
+    "Shuttle Parking",
+    "ASRS Parking",
+})
+
+
+def canonical_product_name(name: str | None) -> str:
+    key = norm_key(name or "")
+    if not key:
+        return ""
+    return PRODUCT_ALIASES.get(key, str(name or "").strip())
+
+
+def allows_odd_cars(product_name: str | None) -> bool:
+    return canonical_product_name(product_name) in ODD_CAR_PRODUCTS
+
+
+def normalize_car_count(raw, product_name: str | None = None) -> tuple[int | None, str | None]:
+    """Return (count, error). Blank becomes 2. Counts start at 2.
+
+    Odd counts are allowed only for Puzzle, Pit Puzzle, Car Elevator,
+    Shuttle, and ASRS. Every other product must be an even number.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return 2, None
+    parsed = parse_quantity(text)
+    if parsed is None or parsed != int(parsed):
+        return None, "Number of cars must be a whole number starting at 2"
+    cars = int(parsed)
+    if cars < 2:
+        return None, "Number of cars starts at 2"
+    if cars % 2 == 1 and not allows_odd_cars(product_name):
+        return None, "Number of cars must be even for this product. Odd numbers are only for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS"
+    return cars, None

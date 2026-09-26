@@ -22,7 +22,7 @@ from app.services.lead_service import (
     assign, change_status, notify_admins, open_reassignment_request,
     record_first_contact, validate_assignee,
 )
-from app.services.normalize import parse_quantity
+from app.services.normalize import parse_quantity, normalize_car_count
 from app.services.pricing import apply_pricing_to_lead, calc_lead_value, round_money
 from app.utils.storage import get_storage
 
@@ -451,13 +451,16 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
 
     if "quantity_raw" in data:
         raw = data.pop("quantity_raw") or ""
-        lead.quantity_raw = str(raw).strip()
-        cars = parse_quantity(lead.quantity_raw)
-        if lead.quantity_raw and cars is None:
-            raise HTTPException(400, "Number of cars must be a positive number")
-        if cars is not None and cars <= 0:
-            raise HTTPException(400, "Number of cars must be greater than zero")
-        lead.quantity_num = cars
+        product_name = lead.product_raw or ""
+        if lead.product_id:
+            current_product = db.get(Product, lead.product_id)
+            if current_product:
+                product_name = current_product.name
+        count, car_error = normalize_car_count(raw, product_name)
+        if car_error:
+            raise HTTPException(400, car_error)
+        lead.quantity_raw = str(count)
+        lead.quantity_num = count
         pricing_changed = True
 
     for k, v in data.items():

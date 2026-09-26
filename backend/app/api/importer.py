@@ -28,7 +28,7 @@ from app.services.pricing import apply_pricing_to_lead
 log = logging.getLogger(__name__)
 from app.services.normalize import (
     PRODUCT_ALIASES, SOURCE_ALIASES, canonical_source, is_valid_email, is_valid_phone,
-    norm_key, norm_phone, parse_excel_date, parse_quantity,
+    norm_key, norm_phone, normalize_car_count, parse_excel_date, parse_quantity,
 )
 
 router = APIRouter(prefix="/api/import", tags=["import"])
@@ -403,6 +403,9 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     cars = str(raw.get("cars") or "").strip()
     src = _norm_source(db, str(raw.get("source") or ""))
     prod = _norm_product(db, str(raw.get("product") or ""))
+    count, car_error = normalize_car_count(cars or str(raw.get("quantity") or ""), str(raw.get("product") or ""))
+    if car_error:
+        raise HTTPException(400, car_error)
     st = _default_status(db)
 
     try:
@@ -420,8 +423,8 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 city=city,
                 product_raw=str(raw.get("product") or "").strip(),
                 requirement=str(raw.get("requirement") or "").strip(),
-                quantity_raw=cars or str(raw.get("quantity") or "").strip(),
-                quantity_num=parse_quantity(cars or raw.get("quantity")),
+                quantity_raw=str(count),
+                quantity_num=count,
                 priority=str(raw.get("priority") or "").strip(),
                 first_contact_notes=str(raw.get("remarks") or "").strip(),
                 source_id=src.id if src else None,
@@ -526,10 +529,16 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             rec["errors"] = classified["errs"]
             invalids.append(rec)
         else:
-            if classified["phone_norm"]:
-                seen_phones.add(classified["phone_norm"])
-            if classified["legacy_enq"] is not None:
-                seen_enqs.add(classified["legacy_enq"])
+            count, car_error = normalize_car_count(rec["cars"] or rec["quantity"], rec["product"])
+            if car_error:
+                rec["errors"] = [car_error]
+                invalids.append(rec)
+            else:
+                rec["cars"] = str(count)
+                if classified["phone_norm"]:
+                    seen_phones.add(classified["phone_norm"])
+                if classified["legacy_enq"] is not None:
+                    seen_enqs.add(classified["legacy_enq"])
         preview.append(rec)
 
     batch = ImportBatch(
@@ -601,6 +610,14 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
         phone_n = rec.get("phone_norm") or norm_phone(phone)
         src = _norm_source(db, str(rec.get("source") or ""))
         prod = _norm_product(db, str(rec.get("product") or ""))
+        count, car_error = normalize_car_count(cars or str(rec.get("quantity") or ""), str(rec.get("product") or ""))
+        if car_error:
+            db.add(ImportError(
+                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
+                error=car_error, reason="INVALID",
+            ))
+            batch.invalid += 1
+            continue
         try:
             with db.begin_nested():
                 lead = Lead(
@@ -616,8 +633,8 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                     city=str(rec.get("city") or ""),
                     product_raw=str(rec.get("product") or "").strip(),
                     requirement=str(rec.get("requirement") or "").strip(),
-                    quantity_raw=cars or str(rec.get("quantity") or "").strip(),
-                    quantity_num=parse_quantity(cars or rec.get("quantity")),
+                    quantity_raw=str(count),
+                    quantity_num=count,
                     priority=str(rec.get("priority") or "").strip(),
                     first_contact_notes=str(rec.get("remarks") or "").strip(),
                     source_id=src.id if src else None,

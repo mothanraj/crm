@@ -33,7 +33,7 @@ from app.services.lead_service import (
     format_enquiry_number, next_enquiry_number, remember_assignment,
 )
 from app.services.normalize import (
-    PRODUCT_ALIASES, canonical_source, norm_key, parse_excel_date, parse_quantity,
+    PRODUCT_ALIASES, canonical_source, norm_key, normalize_car_count, parse_excel_date,
 )
 from app.services.pricing import apply_pricing_to_lead
 
@@ -219,7 +219,13 @@ async def ingest_rows(
             seen_enqs.add(legacy)
         src = _norm_source(db, r.source or "")
         prod = _norm_product(db, r.product or "")
-        cars = (r.cars or "").strip()
+        count, car_error = normalize_car_count((r.cars or "").strip() or str(r.quantity or "").strip(), r.product or "")
+        if car_error:
+            batch.invalid += 1
+            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
+                               error=car_error, reason="INVALID"))
+            errors.append({"row": r.row_id, "reason": "INVALID", "error": car_error})
+            continue
         enquiry_number = format_enquiry_number(int(legacy)) if legacy is not None else next_enquiry_number(db)
         try:
             with db.begin_nested():
@@ -236,8 +242,8 @@ async def ingest_rows(
                     city=(r.city or "").strip(),
                     product_raw=(r.product or "").strip(),
                     requirement=(r.requirement or "").strip(),
-                    quantity_raw=cars or str(r.quantity or "").strip(),
-                    quantity_num=parse_quantity(cars or r.quantity),
+                    quantity_raw=str(count),
+                    quantity_num=count,
                     priority=(r.priority or "").strip(),
                     first_contact_notes=(r.remarks or "").strip(),
                     source_id=src.id if src else None,

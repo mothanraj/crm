@@ -28,3 +28,18 @@ def test_canonical_source_variants():
     assert canonical_source("Meta") == "Facebook/Instagram"
     assert canonical_source("refferal") == "Referral"
     assert canonical_source("") == "Others"
+
+
+def test_car_count_rules():
+    from app.services.normalize import normalize_car_count
+
+    assert normalize_car_count("", "Two Post Stack Parking") == (2, None)
+    assert normalize_car_count("4", "Tower Parking") == (4, None)
+    assert normalize_car_count("3", "Tower Parking")[0] is None
+    assert normalize_car_count("1", "Puzzle Parking")[0] is None
+    assert normalize_car_count("3", "Puzzle Parking") == (3, None)
+    assert normalize_car_count("5", "Pit Puzzle Parking") == (5, None)
+    assert normalize_car_count("7", "car elevation") == (7, None)
+    assert normalize_car_count("9", "Shuttle Parking") == (9, None)
+    assert normalize_car_count("11", "ASRS Parking") == (11, None)
+    assert normalize_car_count("3", "Two Post Stack Parking")[1]
