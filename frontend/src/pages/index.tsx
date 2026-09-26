@@ -100,7 +100,7 @@ function carCountError(raw: string, productName: string) {
   const cars = Number(text);
   if (!Number.isInteger(cars)) return 'Number of cars must be a whole number starting at 2';
   if (cars < 2) return 'Number of cars starts at 2';
-  if (cars % 2 === 1 && !allowsOddCars(productName)) return 'Number of cars must be even for this product. Odd numbers are only for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS';
+  if (cars % 2 === 1 && !allowsOddCars(productName)) return 'Number of cars must be even for Two Post, Four Post, Pit Stack, and Tower. Odd numbers are only for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS';
   return '';
 }
 
@@ -1494,6 +1494,23 @@ export function Leads() {
   const lockedLeadMessage = (lead: any) => isConvertedLocked(lead)
     ? 'This lead is converted and cannot be edited.'
     : 'This lead is not interested and cannot be edited.';
+  const canEditProductCars = (lead: any) => role === 'ADMIN' || (role === 'EMPLOYEE' && !isOutreachLocked(lead));
+  const saveProductCars = async (lead: any, productId: string, carsRaw: string) => {
+    if (!canEditProductCars(lead)) return;
+    const productName = masters?.products?.find((p: any) => p.id === productId)?.name || prodName(lead, nameOf);
+    const problem = carCountError(String(carsRaw || ''), productName);
+    if (problem) { setValidationMessage(problem); return; }
+    setSavingId(lead.id);
+    try {
+      const { data } = await api.put(`/leads/${lead.id}`, {
+        product_id: productId || null,
+        quantity_raw: String(carsRaw || '').trim() || '2',
+      });
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, ...data } : item));
+    } catch (e: any) {
+      setValidationMessage(e?.response?.data?.detail || 'Could not save product and cars');
+    } finally { setSavingId(null); }
+  };
   const saveLead = async (lead: any, done = false, conversionConfirmed = false) => {
     if (role === 'EMPLOYEE' && isConvertedLocked(lead)) {
       setValidationMessage('Converted leads cannot be edited or reopened.');
@@ -1606,8 +1623,8 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[170px]">Contact / Email</th>
                 {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[100px] text-center">Email</th>}
                 {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[120px] text-center">Quotation form</th>}
-                <th className="th whitespace-nowrap align-top w-[90px] text-center">Cars</th>
-                <th className="th whitespace-nowrap align-top w-[180px]">Product</th>
+                <th className="th whitespace-nowrap align-top w-[110px] text-center">Cars</th>
+                <th className="th whitespace-nowrap align-top w-[200px]">Product</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
                 <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Progress</th>
@@ -1736,8 +1753,35 @@ export function Leads() {
                         )}
                       </td>
                     )}
-                    <td className="td align-top text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
-                    <td className="td align-top">{prodName(l, nameOf)}</td>
+                    <td className="td align-top text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {canEditProductCars(l) ? (
+                        <input
+                          className="input text-xs text-center"
+                          type="number"
+                          min="2"
+                          step={allowsOddCars(prodName(l, nameOf)) ? 1 : 2}
+                          disabled={savingId === l.id}
+                          value={l.quantity_raw || ''}
+                          placeholder="2"
+                          title="Starts at 2. Odd or even for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Even only for Two Post, Four Post, Pit Stack, and Tower."
+                          onChange={(e) => setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: e.target.value } : item))}
+                          onBlur={(e) => saveProductCars(l, l.product_id || '', e.target.value)}
+                        />
+                      ) : (l.quantity_raw || '—')}
+                    </td>
+                    <td className="td align-top" onClick={(e) => e.stopPropagation()}>
+                      {canEditProductCars(l) ? (
+                        <select
+                          className="input text-xs"
+                          disabled={savingId === l.id}
+                          value={l.product_id || ''}
+                          onChange={(e) => saveProductCars(l, e.target.value, l.quantity_raw || '')}
+                        >
+                          <option value="">Select product…</option>
+                          {(masters?.products || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      ) : prodName(l, nameOf)}
+                    </td>
                     <td className="td align-top">
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
@@ -1853,7 +1897,7 @@ export function Leads() {
       {validationMessage && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setValidationMessage('')}>
           <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-graphite-900">{validationMessage.includes('cannot be edited') ? 'Cannot edit this lead' : 'Complete the lead details'}</h3>
+            <h3 className="text-lg font-semibold text-graphite-900">{validationMessage.includes('cannot be edited') ? 'Cannot edit this lead' : validationMessage.toLowerCase().includes('car') ? 'Check the car count' : 'Complete the lead details'}</h3>
             <p className="text-sm text-graphite-600 mt-2">{validationMessage}</p>
             <div className="flex justify-end mt-5"><button type="button" className="btn-primary" onClick={() => setValidationMessage('')}>OK</button></div>
           </div>
@@ -2203,7 +2247,7 @@ export function LeadDetail({ id }: { id: string }) {
           <div>
             <label className="text-xs font-medium text-graphite-600">Number of Cars</label>
             <input className="input mt-1" type="number" min="2" step={allowsOddCars(selectedProduct?.name || '') ? 1 : 2} disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} placeholder="2" />
-            <p className="text-[11px] text-graphite-500 mt-1">Starts at 2. Even numbers only, except Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Blank saves as 2.</p>
+            <p className="text-[11px] text-graphite-500 mt-1">Starts at 2. Blank saves as 2. Odd or even: Puzzle Parking, Pit Puzzle Parking, Car Elevator, Shuttle Parking, ASRS Parking. Even only: Two Post, Four Post, Pit Stack, Tower.</p>
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">Price / Car</label>

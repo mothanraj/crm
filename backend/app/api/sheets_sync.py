@@ -303,6 +303,45 @@ async def ingest_rows(
             "invalid": batch.invalid, "errors": errors}
 
 
+class SheetsProductCars(BaseModel):
+    enquiry_number: str = ""
+    product: str = ""
+    cars: str = ""
+
+
+@router.post("/product-cars")
+async def update_product_cars(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_sheets_timestamp: str = Header(default=""),
+    x_sheets_signature: str = Header(default=""),
+):
+    """Update product and car count on a lead that was already sent from the sheet."""
+    raw = await request.body()
+    _verify_signature(raw, x_sheets_timestamp, x_sheets_signature)
+    body = SheetsProductCars.model_validate_json(raw)
+    enquiry = (body.enquiry_number or "").strip()
+    lead = db.query(Lead).filter(Lead.enquiry_number == enquiry, Lead.is_active.is_(True)).first()
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    count, car_error = normalize_car_count(body.cars, body.product)
+    if car_error:
+        raise HTTPException(400, car_error)
+    prod = _norm_product(db, body.product)
+    lead.product_raw = (body.product or "").strip()
+    lead.product_id = prod.id if prod else None
+    lead.quantity_raw = str(count)
+    lead.quantity_num = count
+    apply_pricing_to_lead(lead, product=prod)
+    db.commit()
+    live.bump()
+    return {
+        "enquiry_number": lead.enquiry_number,
+        "cars": count,
+        "product": prod.name if prod else lead.product_raw,
+    }
+
+
 @router.post("/next-employee")
 async def next_employee(
     request: Request,

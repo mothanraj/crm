@@ -288,5 +288,9 @@ def normalize_car_count(raw, product_name: str | None = None) -> tuple[int | Non
     if cars < 2:
         return None, "Number of cars starts at 2"
     if cars % 2 == 1 and not allows_odd_cars(product_name):
-        return None, "Number of cars must be even for this product. Odd numbers are only for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS"
+        return None, (
+            "Number of cars must be even for Two Post Stack Parking, Four Post Stack Parking, "
+            "Pit Stack Parking, and Tower Parking. Odd numbers are only for Puzzle Parking, "
+            "Pit Puzzle Parking, Car Elevator, Shuttle Parking, and ASRS Parking"
+        )
     return cars, None

@@ -29,6 +29,23 @@ function onEditHandler(e) {
     if (row === 1) return;
 
     const m = headerMap_(sh);
+    if (col === m.cars || col === m.product) {
+      if (col === m.cars && String(e.value || '').trim() === '') {
+        sh.getRange(row, m.cars).setValue(2);
+        return;
+      }
+      const carsRaw = m.cars > 0 ? sh.getRange(row, m.cars).getValue() : '';
+      const productName = m.product > 0 ? sh.getRange(row, m.product).getValue() : '';
+      const status = m.syncStatus > 0 ? String(sh.getRange(row, m.syncStatus).getValue() || '') : '';
+      const synced = (status.match(/SYNCED:(ENQ-\d+)/) || [])[1] || '';
+      const problem = carProblem_(carsRaw, productName);
+      if (problem) {
+        if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue(synced ? (problem + ' (SYNCED:' + synced + ')') : problem);
+        return;
+      }
+      if (synced) updateProductCars_(sh, row, m, synced);
+      return;
+    }
     if (col === CONFIG.SEND_COLUMN) {
       if (e.value !== 'TRUE') return;
       const problem = rowProblem_(sh, row, m);
@@ -133,7 +150,7 @@ function carProblem_(raw, productName) {
     'shuttle parking': true, 'shuttle': true, 'shuttle parking system': true,
     'asrs parking': true, 'asrs': true
   };
-  if (cars % 2 === 1 && !oddOk[product]) return 'NOT SENT - number of cars must be even for this product';
+  if (cars % 2 === 1 && !oddOk[product]) return 'NOT SENT - even cars only for Two Post, Four Post, Pit Stack, and Tower';
   return '';
 }
 
@@ -188,6 +205,33 @@ function suggestEmployee_(sh, row, m) {
     else if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue('No free employee');
   } catch (err) {
     console.error(err);
+  }
+}
+
+function updateProductCars_(sh, row, m, enquiryNumber) {
+  const url = props_().getProperty('WEBHOOK_URL') || '';
+  if (!url) return;
+  const get = function(col) {
+    if (col <= 0) return '';
+    const value = sh.getRange(row, col).getValue();
+    return value === null || value === undefined ? '' : value;
+  };
+  const payload = JSON.stringify({
+    enquiry_number: enquiryNumber,
+    product: String(get(m.product) || ''),
+    cars: String(get(m.cars) || '2'),
+  });
+  try {
+    const response = signedPost_(url.replace(/\/rows\/?$/, '/product-cars'), payload);
+    const code = response.getResponseCode();
+    if (code === 200) {
+      if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue('SYNCED:' + enquiryNumber);
+      return;
+    }
+    const text = (response.getContentText() || '').substring(0, 80);
+    if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue('ERROR HTTP ' + code + ' - ' + text + ' (SYNCED:' + enquiryNumber + ')');
+  } catch (err) {
+    if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue('ERROR: ' + err.message + ' (SYNCED:' + enquiryNumber + ')');
   }
 }
 
