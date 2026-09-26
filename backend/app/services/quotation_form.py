@@ -38,13 +38,22 @@ DEFAULT_PAYMENT_TERMS = (
     "2. 30% Advance for Structural Erection & Procurement\n"
     "3. 10% on successful Testing & Commissioning"
 )
-DEFAULT_DELIVERY_PERIOD = (
+_DELIVERY_BODY = (
     "2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition."
 )
+DEFAULT_DELIVERY_PERIOD = f"1. {_DELIVERY_BODY}"
 DEFAULT_POST_WARRANTY = (
     "1. After the warranty period AMC is applicable.\n"
     "2. 3 - 4% of the Total cost per unit/year will be approximately charged for AMC."
 )
+
+
+def normalize_delivery_period(text: str | None) -> str:
+    """Keep the standard delivery line numbered as 1."""
+    value = (text or "").strip()
+    if not value or value == _DELIVERY_BODY:
+        return DEFAULT_DELIVERY_PERIOD
+    return value
 
 
 def enquiry_ddmm(lead: Lead | None = None, enquiry_date=None) -> str:
@@ -96,9 +105,10 @@ def build_quotation_number(
     *,
     existing_number: str | None = None,
     seq: int | None = None,
+    on_date=None,
 ) -> str:
-    """Build EEPLCP{DDMM}Q{n}R{rev}. Reuses Q seq from existing REF when editing."""
-    ddmm = enquiry_ddmm(lead)
+    """Build EEPLCP{DDMM}Q{n}R{rev}. DDMM follows on_date when the form date changes."""
+    ddmm = enquiry_ddmm(lead, on_date)
     reuse = parse_quote_seq(existing_number) if existing_number else None
     if reuse is not None:
         q = reuse
@@ -184,6 +194,39 @@ def calc_totals(unit_cost: float, units: float) -> dict:
         "gst": gst,
         "grand_total": grand,
     }
+
+
+def clean_extra_lines(lines) -> list[dict]:
+    """Drop blank added rows. A typed amount with no units counts as 1 unit."""
+    out = []
+    for line in lines or []:
+        if isinstance(line, dict):
+            desc = str(line.get("description") or "").strip()
+            cost = float(line.get("unit_cost") or 0)
+            qty = float(line.get("units") or 0)
+        else:
+            desc = str(getattr(line, "description", "") or "").strip()
+            cost = float(getattr(line, "unit_cost", 0) or 0)
+            qty = float(getattr(line, "units", 0) or 0)
+        if not desc and cost <= 0:
+            continue
+        if qty <= 0:
+            qty = 1
+        out.append({"description": desc, "unit_cost": int(round(cost)), "units": qty})
+    return out
+
+
+def calc_form_totals(unit_cost: float, units: float, extra_lines: list | None = None) -> dict:
+    """GST is 18% of the sum of every row (first line plus added rows such as Transport)."""
+    total = round(float(unit_cost or 0) * float(units or 0))
+    for line in extra_lines or []:
+        cost = float(line.get("unit_cost") or 0) if isinstance(line, dict) else float(getattr(line, "unit_cost", 0) or 0)
+        qty = float(line.get("units") or 0) if isinstance(line, dict) else float(getattr(line, "units", 0) or 0)
+        if qty <= 0 and cost:
+            qty = 1
+        total += round(cost * qty)
+    gst = round(total * GST_RATE)
+    return {"amount_excl": total, "gst": gst, "grand_total": total + gst}
 
 
 def _logo_path() -> Path | None:
@@ -278,11 +321,13 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     subject = escape(str(data.get("subject") or "Offer for Parking System"))
     desc = escape(str(data.get("product_description") or "Design, Manufacture, Supply and Erection of Parking System"))
     payment_terms = (data.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
-    delivery_period = (data.get("delivery_period") or "").strip() or DEFAULT_DELIVERY_PERIOD
+    delivery_period = normalize_delivery_period(data.get("delivery_period"))
     post_warranty = (data.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
+    just = ParagraphStyle("just", parent=small, alignment=4)
     unit_cost = float(data.get("unit_cost") or 0)
     units = float(data.get("units") or 0)
-    totals = calc_totals(unit_cost, units)
+    extra_lines = data.get("extra_lines") or []
+    totals = calc_form_totals(unit_cost, units, extra_lines)
     amount = totals["amount_excl"]
     gst = totals["gst"]
     grand = totals["grand_total"]
@@ -312,7 +357,7 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     story.append(Paragraph(to_name, bold))
     story.append(Paragraph(to_address, small_bold))
     story.append(Spacer(1, 14))
-    story.append(Paragraph("Dear Sir,", body))
+    story.append(Paragraph("<b>Dear Sir,</b>", bold))
     story.append(Spacer(1, 10))
     story.append(Paragraph(f"<b>Sub: - {subject}</b>", body))
     story.append(Spacer(1, 10))
@@ -320,10 +365,35 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         "E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike "
         "Parking System, Design &amp; Manufacturing Company in Association with International Tycoons "
         "from Japan, Germany &amp; Korea, also a Group Company of MECHCI since 1995.",
-        small,
+        just,
     ))
     story.append(Spacer(1, 14))
 
+    line_rows = [[
+        Paragraph("1", cell),
+        Paragraph(desc, cell_left),
+        Paragraph(_inr_indian(unit_cost), cell),
+        Paragraph(str(int(units) if units == int(units) else units), cell),
+        Paragraph(_inr_indian(round(unit_cost * units)), cell),
+    ]]
+    for index, line in enumerate(extra_lines, start=2):
+        if isinstance(line, dict):
+            line_desc = str(line.get("description") or "")
+            line_cost = float(line.get("unit_cost") or 0)
+            line_units = float(line.get("units") or 0)
+        else:
+            line_desc = str(getattr(line, "description", "") or "")
+            line_cost = float(getattr(line, "unit_cost", 0) or 0)
+            line_units = float(getattr(line, "units", 0) or 0)
+        if line_units <= 0 and line_cost:
+            line_units = 1
+        line_rows.append([
+            Paragraph(str(index), cell),
+            Paragraph(escape(line_desc), cell_left),
+            Paragraph(_inr_indian(line_cost), cell),
+            Paragraph(str(int(line_units) if line_units == int(line_units) else line_units), cell),
+            Paragraph(_inr_indian(round(line_cost * line_units)), cell),
+        ])
     rows = [
         [
             Paragraph("S. No", head),
@@ -332,13 +402,7 @@ def build_quotation_form_pdf(data: dict) -> bytes:
             Paragraph("No of Units", head),
             Paragraph("Total Cost (INR)", head),
         ],
-        [
-            Paragraph("1", cell),
-            Paragraph(desc, cell_left),
-            Paragraph(_inr_indian(unit_cost), cell),
-            Paragraph(str(int(units) if units == int(units) else units), cell),
-            Paragraph(_inr_indian(amount), cell),
-        ],
+        *line_rows,
         [
             Paragraph("", cell),
             Paragraph("GST 18%", cell_left),

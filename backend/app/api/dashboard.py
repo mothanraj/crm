@@ -185,6 +185,21 @@ def _kpis(db: Session, u: User | None = None):
                 "quotation_value": str(int(round(float(lead.quotation_value)))),
             })
     lead_value = _lead_value_analytics(db, u)
+    status_category = []
+    for status_name, review, n in (
+        db.query(LeadStatus.name, Lead.customer_review, func.count(Lead.id))
+        .join(Lead, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), *emp)
+        .group_by(LeadStatus.name, Lead.customer_review)
+        .all()
+    ):
+        label = (review or "").strip()
+        label = CUSTOMER_REVIEW_ALIASES.get(label, label)
+        status_category.append({
+            "status": status_name,
+            "category": label,
+            "count": int(n or 0),
+        })
     return {
         "quoted_customers": quoted_customers,
         "total": total,
@@ -225,6 +240,7 @@ def _kpis(db: Session, u: User | None = None):
             .filter(Lead.is_active.is_(True), *emp).count()
             if is_emp else db.query(SiteVisit).count()
         ),
+        "status_category": status_category,
     }
 
 

@@ -133,6 +133,12 @@ class QuoteIn(BaseModel):
     notes: str = ""
 
 
+class QuoteLineIn(BaseModel):
+    description: str = ""
+    unit_cost: float = 0
+    units: float = 1
+
+
 class QuoteFormIn(BaseModel):
     """Editable EEPL quotation form (unit cost × units → total + GST + grand)."""
     unit_cost: float = Field(ge=0)
@@ -145,3 +151,4 @@ class QuoteFormIn(BaseModel):
     delivery_period: str = ""
     post_warranty: str = ""
     quotation_date: Optional[date] = None
+    extra_lines: list[QuoteLineIn] = []

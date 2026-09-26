@@ -79,7 +79,7 @@ def _sla_sweep():
                     f"Phone: {lead.contact_number or '—'}. Deadline was {lead.sla_deadline:%d-%b-%Y %H:%M}."
                 )
                 admin_title = "Employee did not follow up"
-                owner_body = f"You missed the 3-day contact SLA for {lead.enquiry_number} ({lead.customer_name})."
+                owner_body = f"You missed the 3-day contact and this lead is overdue for {lead.enquiry_number} ({lead.customer_name})."
             for admin in admins:
                 db.add(Notification(
                     user_id=admin.id, lead_id=lead.id, kind="SLA_OVERDUE",

@@ -53,9 +53,9 @@ export function AppShell() {
     navigate('/login', { replace: true });
   };
   return (
-    <div className="flex min-h-screen">
-      {/* sidebar — graphite gradient, signal active pill */}
-      <aside className="w-60 shrink-0 hidden md:flex flex-col text-white bg-gradient-to-b from-graphite-500 via-graphite-700 to-graphite-800">
+    <div className="flex h-screen overflow-hidden">
+      {/* sidebar stays put while the centre page scrolls */}
+      <aside className="w-60 shrink-0 hidden md:flex flex-col h-screen overflow-y-auto text-white bg-gradient-to-b from-graphite-500 via-graphite-700 to-graphite-800">
         <div className="px-5 py-5 flex items-center justify-center">
           <img src="/estar-logo.png" alt="E-Star" className="h-16 w-auto max-w-[220px] rounded-lg object-contain bg-white p-1.5 shadow-sm" />
         </div>
@@ -87,7 +87,7 @@ export function AppShell() {
       </aside>
 
       {/* main */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {/* mobile nav */}
         <div className="md:hidden bg-graphite-700 text-white px-4 py-3 flex gap-4 overflow-x-auto text-sm sticky top-0 z-20 items-center">
           <img src="/estar-logo.png" alt="E-Star" className="h-11 w-auto max-w-[150px] rounded object-contain bg-white p-1 shrink-0" />
@@ -104,7 +104,7 @@ export function AppShell() {
           <button onClick={logout} className="whitespace-nowrap text-graphite-200 underline underline-offset-2">Sign out</button>
         </div>
         {/* topbar */}
-        <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+        <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between shrink-0 z-10">
           <div className="flex items-center gap-3">
             <img src="/estar-logo.png" alt="E-Star" className="hidden md:block h-12 w-auto max-w-[170px] rounded object-contain" />
             <div className="text-sm text-graphite-500">
@@ -119,8 +119,10 @@ export function AppShell() {
             </Link>
           </div>
         </header>
-        <main className="p-6 max-w-[1400px] w-full mx-auto">
+        <main className="flex-1 min-h-0 overflow-y-auto p-6">
+          <div className="max-w-[1400px] w-full mx-auto">
           <Outlet />
+          </div>
         </main>
       </div>
     </div>

@@ -492,7 +492,7 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"}:
         raise HTTPException(400, "Invalid customer review")
     if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
-        raise HTTPException(400, "Invalid SLA state")
+        raise HTTPException(400, "Invalid overdue state")
     completion_only = (
         body.sla_state is not None
         and (body.sla_state == "COMPLETED" or lead.sla_state == "COMPLETED")
@@ -707,8 +707,9 @@ def _next_revision(current: str | None) -> str:
 
 def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None) -> dict:
     from app.services.quotation_form import (
-        DEFAULT_DELIVERY_PERIOD, DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY,
-        build_quotation_number, calc_totals,
+        DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY,
+        normalize_delivery_period,
+        build_quotation_number, calc_form_totals, clean_extra_lines,
     )
 
     product = db.get(Product, lead.product_id) if lead.product_id else None
@@ -729,15 +730,16 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         f"Design, Manufacture, Supply and Erection of {product_name}"
     )
     payment_terms = (notes.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
-    delivery_period = (notes.get("delivery_period") or "").strip() or DEFAULT_DELIVERY_PERIOD
+    delivery_period = normalize_delivery_period(notes.get("delivery_period"))
     post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
+    extra_lines = clean_extra_lines(notes.get("extra_lines") or [])
     revision = (quote.revision if quote else "R0") or "R0"
     if quote and quote.quotation_number:
         quotation_number = quote.quotation_number
     else:
         quotation_number = build_quotation_number(db, lead, revision)
     qdate = quote.quotation_date if quote and quote.quotation_date else date.today()
-    totals = calc_totals(unit_cost, units)
+    totals = calc_form_totals(unit_cost, units, extra_lines)
     return {
         "id": str(quote.id) if quote else None,
         "quotation_number": quotation_number,
@@ -752,6 +754,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         "post_warranty": post_warranty,
         "unit_cost": int(round(unit_cost)) if unit_cost else 0,
         "units": units,
+        "extra_lines": extra_lines,
         "amount_excl": totals["amount_excl"],
         "gst": totals["gst"],
         "grand_total": totals["grand_total"],
@@ -787,7 +790,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
     import json
     from datetime import date as date_cls
 
-    from app.services.quotation_form import calc_totals, build_quotation_number
+    from app.services.quotation_form import calc_form_totals, build_quotation_number, clean_extra_lines
 
     _require_lead_write(u)
     lead = _owned_lead(db, lid, u)
@@ -797,7 +800,8 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
         .first()
     )
-    totals = calc_totals(body.unit_cost, body.units)
+    extra_lines = clean_extra_lines(body.extra_lines)
+    totals = calc_form_totals(body.unit_cost, body.units, extra_lines)
     qdate = body.quotation_date or date_cls.today()
     snap = {
         "unit_cost": int(round(float(body.unit_cost))),
@@ -809,6 +813,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         "delivery_period": (body.delivery_period or "").strip(),
         "post_warranty": (body.post_warranty or "").strip(),
         "units": float(body.units),
+        "extra_lines": extra_lines,
         "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
     }
     # First save+download stays R0. The next edit that is saved becomes R1, then R2…
@@ -824,14 +829,23 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
             old_snap["units"] = float(quote.units)
         if not old_snap.get("quotation_date") and quote.quotation_date is not None:
             old_snap["quotation_date"] = quote.quotation_date.isoformat()
+        if not old_snap.get("extra_lines"):
+            old_snap["extra_lines"] = []
         changed = any(old_snap.get(k) != snap[k] for k in snap)
         if already_issued and changed:
             quote.revision = _next_revision(quote.revision)
         else:
             quote.revision = quote.revision or "R0"
-        quote.quotation_number = build_quotation_number(
-            db, lead, quote.revision, existing_number=prev_number,
+        new_number = build_quotation_number(
+            db, lead, quote.revision, existing_number=prev_number, on_date=qdate,
         )
+        taken = db.query(Quotation).filter(
+            Quotation.quotation_number == new_number,
+            Quotation.id != quote.id,
+        ).first()
+        if taken:
+            raise HTTPException(409, "That quotation reference is already used. Choose another date.")
+        quote.quotation_number = new_number
         quote.quotation_date = qdate
         quote.units = body.units
         quote.amount_excl = totals["amount_excl"]
@@ -844,7 +858,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         notes = json.dumps({**snap, "issued": True})
         quote = Quotation(
             lead_id=lid,
-            quotation_number=build_quotation_number(db, lead, revision),
+            quotation_number=build_quotation_number(db, lead, revision, on_date=qdate),
             quotation_date=qdate,
             revision=revision,
             units=body.units,

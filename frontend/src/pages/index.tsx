@@ -142,9 +142,9 @@ export function Login() {
         </div>
         <div className="relative">
           <h1 className="text-4xl font-bold leading-tight">Every lead,<br />followed up.</h1>
-          <p className="text-graphite-200 mt-4 max-w-sm">Live funnel dashboard, 3-day contact SLA, automatic assignment and full activity history — replacing the Excel tracker.</p>
+          <p className="text-graphite-200 mt-4 max-w-sm">Live funnel dashboard, overdue follow-ups, automatic assignment and full activity history — replacing the Excel tracker.</p>
           <div className="grid grid-cols-3 gap-4 mt-8 text-sm">
-            {['Live funnel', 'SLA alerts', 'Reports'].map((t, i) => (
+            {['Live funnel', 'Overdue', 'Reports'].map((t, i) => (
               <div key={t} className="bg-white/10 backdrop-blur rounded-xl p-4 border border-white/10">
                 <div className="text-2xl font-bold text-brand-400">{['629', '72h', '4'][i]}</div>
                 <div className="text-graphite-100 mt-1">{t}</div>
@@ -622,7 +622,7 @@ export function EmployeeDashboard() {
   if (error && !d) {
     return (
       <div>
-        <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and SLA alerts." />
+        <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and overdue." />
         <div className="card p-8 text-center">
           <p className="font-medium text-graphite-700">Could not load your dashboard</p>
           <p className="text-sm text-graphite-500 mt-1">{error}</p>
@@ -636,6 +636,33 @@ export function EmployeeDashboard() {
   const statusName = (sid?: string) => masters?.statuses?.find((s: any) => s.id === sid)?.name ?? 'Assigned';
   const overduePending = pending.filter((l: any) => l.sla_state === 'OVERDUE').slice(0, 5);
   const recent = todos.slice(0, 5);
+  const normProgress = (name: string) => name === 'New Lead' ? 'Assigned' : (name === 'Not Interested/Spam' ? 'Not Interested' : name);
+  const normCategory = (name: string) => {
+    const v = (name || '').trim();
+    if (v === 'C (plan stage)' || v === 'Planning Stage') return 'C (Planning Stage)';
+    return v;
+  };
+  const mixRows: { status: string; category: string; count: number }[] = d.status_category || [];
+  const mixCount = (progress: string, category: string) => mixRows.reduce((sum, row) => {
+    if (progress && normProgress(row.status) !== progress) return sum;
+    if (category && normCategory(row.category) !== category) return sum;
+    return sum + (Number(row.count) || 0);
+  }, 0);
+  const progressTiles = [
+    { label: 'Assigned', bg: 'bg-[#0e7490]' },
+    { label: 'In Followup', bg: 'bg-[#c0392b]' },
+    { label: 'Meeting', bg: 'bg-[#0284c7]' },
+    { label: 'Site Visit', bg: 'bg-[#65A30D]' },
+    { label: 'Quotation sent', bg: 'bg-[#2F9E44]' },
+    { label: 'Converted', bg: 'bg-[#3F6212]' },
+    { label: 'Not Interested', bg: 'bg-[#7b241c]' },
+  ];
+  const categoryTiles = [
+    { label: 'A+ (Immediate)', bg: 'bg-[#7c3aed]' },
+    { label: 'A (3-6 months)', bg: 'bg-[#d97706]' },
+    { label: 'B (1 year)', bg: 'bg-[#0284c7]' },
+    { label: 'C (Planning Stage)', bg: 'bg-[#475569]' },
+  ];
   const tiles = [
     { label: 'My assigned leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
     { label: 'Needs first contact', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
@@ -646,7 +673,7 @@ export function EmployeeDashboard() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and SLA alerts." actions={
+      <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and overdue." actions={
         <Link to="/leads" className="btn-primary">View all my leads →</Link>
       } />
       {d.warning && (
@@ -660,6 +687,28 @@ export function EmployeeDashboard() {
             <div className="text-[11px] opacity-80 mt-0.5">{t.hint}</div>
           </div>
         ))}
+      </div>
+      <div>
+        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {progressTiles.map((t) => (
+            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount(t.label, '')}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {categoryTiles.map((t) => (
+            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount('', t.label)}</div>
+            </div>
+          ))}
+        </div>
       </div>
       <Card title={`My to-dos — new leads (${pending.length})`} action={
         truncated
@@ -678,8 +727,8 @@ export function EmployeeDashboard() {
         )}
       </Card>
       <div className="grid lg:grid-cols-2 gap-5">
-        <Card title="Needs attention — overdue SLA" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
-          {overduePending.length === 0 ? <EmptyState title="Nothing overdue" hint="All caught up on SLAs." /> : (
+        <Card title="Needs attention — overdue" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
+          {overduePending.length === 0 ? <EmptyState title="Nothing overdue" hint="All caught up." /> : (
             <div className="overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[560px] text-sm">
                 <thead className="bg-graphite-50"><tr>
@@ -708,7 +757,7 @@ export function EmployeeDashboard() {
             <div className="overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Status</th><th className="th">SLA</th>
+                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Status</th><th className="th">Overdue</th>
                 </tr></thead>
                 <tbody>
                   {recent.map((l: any) => (
@@ -799,7 +848,7 @@ function QuotationFormModal({
   const defaultPayment =
     '1. 60% Advance along with P.O\n2. 30% Advance for Structural Erection & Procurement\n3. 10% on successful Testing & Commissioning';
   const defaultDelivery =
-    '2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition.';
+    '1. 2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition.';
   const defaultWarranty =
     '1. After the warranty period AMC is applicable.\n2. 3 - 4% of the Total cost per unit/year will be approximately charged for AMC.';
   const [form, setForm] = useState({
@@ -812,6 +861,7 @@ function QuotationFormModal({
     post_warranty: defaultWarranty,
     unit_cost: '',
     units: '',
+    extra_lines: [] as { description: string; unit_cost: string; units: string }[],
     quotation_date: new Date().toISOString().slice(0, 10),
     quotation_number: '',
     revision: 'R0',
@@ -839,10 +889,20 @@ function QuotationFormModal({
           subject: d.subject || '',
           product_description: d.product_description || 'Design, Manufacture, Supply and Erection of Parking System',
           payment_terms: d.payment_terms || defaultPayment,
-          delivery_period: d.delivery_period || defaultDelivery,
+          delivery_period: (() => {
+            const value = (d.delivery_period || '').trim();
+            const unnumbered = '2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition.';
+            if (!value || value === unnumbered) return defaultDelivery;
+            return d.delivery_period;
+          })(),
           post_warranty: d.post_warranty || defaultWarranty,
           unit_cost: d.unit_cost != null ? String(d.unit_cost) : '',
           units: d.units != null ? String(d.units) : '',
+          extra_lines: Array.isArray(d.extra_lines) ? d.extra_lines.map((line: any) => ({
+            description: line.description || '',
+            unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
+            units: line.units != null ? String(line.units) : '1',
+          })) : [],
           quotation_date: (d.quotation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
           quotation_number: d.quotation_number || '',
           revision: d.revision || 'R0',
@@ -861,9 +921,15 @@ function QuotationFormModal({
     return () => { cancelled = true; };
   }, [lead.id, startInEdit]);
 
+  const rowAmount = (cost: string, qty: string) => {
+    const c = Number(cost) || 0;
+    let q = Number(qty);
+    if (!Number.isFinite(q) || q <= 0) q = c ? 1 : 0;
+    return Math.round(c * q);
+  };
   const unitCost = Number(form.unit_cost) || 0;
   const units = Number(form.units) || 0;
-  const amountExcl = Math.round(unitCost * units);
+  const amountExcl = rowAmount(form.unit_cost, form.units) + form.extra_lines.reduce((sum, line) => sum + rowAmount(line.unit_cost, line.units), 0);
   const gst = Math.round(amountExcl * 0.18);
   const grand = amountExcl + gst;
   const dateDisp = (() => {
@@ -872,6 +938,16 @@ function QuotationFormModal({
       if (y && m && d) return `${d}-${m}-${y}`;
     } catch { /* ignore */ }
     return form.quotation_date;
+  })();
+  const refShown = (() => {
+    const number = form.quotation_number || '';
+    const parts = (form.quotation_date || '').split('-');
+    if (!number || parts.length < 3) return number;
+    const day = parts[2];
+    const month = parts[1];
+    if (!day || !month) return number;
+    const ddmm = `${day.padStart(2, '0')}${month.padStart(2, '0')}`;
+    return number.replace(/^EEPLCP\d{4}/, `EEPLCP${ddmm}`);
   })();
 
   const set = (patch: Partial<typeof form>) => {
@@ -891,6 +967,13 @@ function QuotationFormModal({
     unit_cost: unitCost,
     units,
     quotation_date: form.quotation_date || undefined,
+    extra_lines: form.extra_lines
+      .filter((line) => (line.description || '').trim() || Number(line.unit_cost))
+      .map((line) => ({
+        description: (line.description || '').trim(),
+        unit_cost: Number(line.unit_cost) || 0,
+        units: Number(line.units) > 0 ? Number(line.units) : 1,
+      })),
   });
 
   const applySaved = (data: any) => {
@@ -900,6 +983,11 @@ function QuotationFormModal({
       revision: data.revision || cur.revision,
       unit_cost: data.unit_cost != null ? String(data.unit_cost) : cur.unit_cost,
       units: data.units != null ? String(data.units) : cur.units,
+      extra_lines: Array.isArray(data.extra_lines) ? data.extra_lines.map((line: any) => ({
+        description: line.description || '',
+        unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
+        units: line.units != null ? String(line.units) : '1',
+      })) : cur.extra_lines,
       payment_terms: data.payment_terms || cur.payment_terms,
       delivery_period: data.delivery_period || cur.delivery_period,
       post_warranty: data.post_warranty || cur.post_warranty,
@@ -1039,7 +1127,7 @@ function QuotationFormModal({
               <div className="flex items-baseline justify-between gap-4 mb-6">
                 <div className="flex items-baseline gap-2 min-w-0">
                   <span className="font-bold shrink-0">REF:</span>
-                  <span className="font-semibold text-[#1e3a5f] tracking-wide">{form.quotation_number || 'Will assign on save'}</span>
+                  <span className="font-semibold text-[#1e3a5f] tracking-wide">{refShown || 'Will assign on save'}</span>
                 </div>
                 <div className="flex items-baseline gap-2 shrink-0 ml-auto">
                   <span className="font-bold">Date:</span>
@@ -1068,7 +1156,7 @@ function QuotationFormModal({
                 className="text-[14px] mb-5 font-bold"
               />
 
-              <p className="mb-4">Dear Sir,</p>
+              <p className="mb-4 font-bold">Dear Sir,</p>
 
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="font-bold shrink-0">Sub: -</span>
@@ -1080,7 +1168,7 @@ function QuotationFormModal({
                 />
               </div>
 
-              <p className="mb-6 text-[13.5px] leading-relaxed text-slate-700">
+              <p className="mb-6 text-[13.5px] leading-relaxed text-slate-700 text-justify">
                 E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike
                 Parking System, Design &amp; Manufacturing Company in Association with International Tycoons
                 from Japan, Germany &amp; Korea, also a Group Company of MECHCI since 1995.
@@ -1124,9 +1212,99 @@ function QuotationFormModal({
                       />
                     </td>
                     <td className="border border-slate-400 px-2 py-2 text-center align-middle tabular-nums font-medium">
-                      {inrIndian(amountExcl)}
+                      {inrIndian(rowAmount(form.unit_cost, form.units))}
                     </td>
                   </tr>
+                  {form.extra_lines.map((line, index) => (
+                    <tr key={index}>
+                      <td className="border border-slate-400 px-2 py-2 text-center align-middle">
+                        <div className="flex items-center justify-center gap-1">
+                          <span>{index + 2}</span>
+                          {editing && (
+                            <button
+                              type="button"
+                              className="text-slate-400 hover:text-red-600 leading-none"
+                              title="Remove row"
+                              onClick={() => {
+                                setForm((cur) => ({ ...cur, extra_lines: cur.extra_lines.filter((_, i) => i !== index) }));
+                                setDirty(true);
+                              }}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="border border-slate-400 px-2 py-2 align-top">
+                        <QuoteField readOnly={!editing}
+                          value={line.description}
+                          onChange={(e: any) => {
+                            const description = e.target.value;
+                            setForm((cur) => ({
+                              ...cur,
+                              extra_lines: cur.extra_lines.map((row, i) => i === index ? { ...row, description } : row),
+                            }));
+                            setDirty(true);
+                          }}
+                          placeholder="Transport"
+                          className="text-[13px]"
+                        />
+                      </td>
+                      <td className="border border-slate-400 px-2 py-2 text-center align-middle">
+                        <QuoteField readOnly={!editing}
+                          inputMode="numeric"
+                          value={line.unit_cost}
+                          onChange={(e: any) => {
+                            const unit_cost = e.target.value.replace(/[^\d]/g, '');
+                            setForm((cur) => ({
+                              ...cur,
+                              extra_lines: cur.extra_lines.map((row, i) => i === index ? { ...row, unit_cost } : row),
+                            }));
+                            setDirty(true);
+                          }}
+                          className="text-center tabular-nums"
+                        />
+                      </td>
+                      <td className="border border-slate-400 px-2 py-2 text-center align-middle">
+                        <QuoteField readOnly={!editing}
+                          inputMode="numeric"
+                          value={line.units}
+                          onChange={(e: any) => {
+                            const unitsValue = e.target.value.replace(/[^\d.]/g, '');
+                            setForm((cur) => ({
+                              ...cur,
+                              extra_lines: cur.extra_lines.map((row, i) => i === index ? { ...row, units: unitsValue } : row),
+                            }));
+                            setDirty(true);
+                          }}
+                          className="text-center tabular-nums"
+                        />
+                      </td>
+                      <td className="border border-slate-400 px-2 py-2 text-center align-middle tabular-nums font-medium">
+                        {inrIndian(rowAmount(line.unit_cost, line.units))}
+                      </td>
+                    </tr>
+                  ))}
+                  {editing && (
+                    <tr>
+                      <td className="border border-slate-400 px-2 py-1" colSpan={5}>
+                        <button
+                          type="button"
+                          className="font-bold text-[#1e3a5f] px-1 leading-none text-lg"
+                          title="Add a row"
+                          onClick={() => {
+                            setForm((cur) => ({
+                              ...cur,
+                              extra_lines: [...cur.extra_lines, { description: '', unit_cost: '', units: '1' }],
+                            }));
+                            setDirty(true);
+                          }}
+                        >
+                          +
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                   <tr>
                     <td className="border border-slate-400 px-2 py-2" />
                     <td className="border border-slate-400 px-2 py-2">GST 18%</td>
@@ -1797,7 +1975,7 @@ export function EmployeeLeads() {
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
                   <th className="th">City</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">Lead Value</th><th className="th">Source</th>
-                  <th className="th">Product</th><th className="th">Status</th><th className="th">SLA</th>
+                  <th className="th">Product</th><th className="th">Status</th><th className="th">Overdue</th>
                   <th className="th">Due date</th>
                   <th className="th">First contact</th><th className="th">Enquiry date</th>
                 </tr></thead>
@@ -2126,7 +2304,7 @@ export function LeadDetail({ id }: { id: string }) {
                 {needsContact
                   ? ((l.source_name || nameOf('sources', l.source_id)) === 'Direct Call'
                     ? 'Direct Call is urgent. Update work progress within 24 hours.'
-                    : 'After you speak to the assigned customer, set progress and add remarks. This also completes the 3-day contact SLA.')
+                    : 'After you speak to the assigned customer, set progress and add remarks. This also clears an overdue contact.')
                   : 'After each follow-up call, update progress and add remarks.'}
               </p>
               <div className="space-y-2">
@@ -3993,15 +4171,15 @@ export function NotificationsPage() {
   }, []);
   return (
     <div className="max-w-3xl space-y-4">
-      <PageHeader title="Notifications" subtitle="SLA breaches, assignments, reassignment requests and follow-up reminders." />
+      <PageHeader title="Notifications" subtitle="Overdue, assignments, reassignment requests and follow-up reminders." />
       {loading ? <div className="card"><Spinner /></div>
       : error ? <div className="card"><EmptyState title="Could not load notifications" hint={error} /></div>
       : items.length === 0 ? <div className="card"><EmptyState title="All caught up" hint="No notifications." /></div> : items.map((n) => (
         <div key={n.id} className={`card p-4 flex gap-3 ${n.is_read ? 'opacity-80' : ''}`}>
           <div className="w-9 h-9 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0">⚠</div>
           <div>
-            <div className="font-semibold text-sm">{n.title}</div>
-            <div className="text-sm text-graphite-600 mt-0.5">{n.body}</div>
+            <div className="font-semibold text-sm">{String(n.title || '').replace(/\bSLAs?\b/gi, 'Overdue')}</div>
+            <div className="text-sm text-graphite-600 mt-0.5">{String(n.body || '').replace(/\bSLAs?\b/gi, 'overdue')}</div>
             <div className="flex flex-wrap gap-3 mt-1 text-xs">
               {n.created_at && <span className="text-graphite-400">{fmtDT(n.created_at, 19)}</span>}
               {n.lead_id && <Link className="text-brand-700 underline" to={`/leads/${n.lead_id}`}>Open lead</Link>}
