@@ -259,7 +259,7 @@ async def ingest_rows(
                     new_by_emp.setdefault(chosen.id, []).append(lead.id)
                     assigned_name = chosen.name
                 else:
-                    emp = auto_assign(db, lead, None)
+                    emp = auto_assign(db, lead, None, ignore_limit=True)
                     assigned_name = emp.name if emp else ""
                     if emp:
                         new_by_emp.setdefault(emp.id, []).append(lead.id)
@@ -307,7 +307,7 @@ async def next_employee(
     """Name of the next free employee. Does not create a lead."""
     raw = await request.body()
     _verify_signature(raw, x_sheets_timestamp, x_sheets_signature)
-    chosen = choose_next_employee(db)
+    chosen = choose_next_employee(db, ignore_limit=True)
     return {"employee": chosen.name if chosen else ""}
 
 

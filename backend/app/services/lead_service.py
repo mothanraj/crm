@@ -102,15 +102,19 @@ def free_employees(db: Session) -> list[User]:
     return [u for u in eligible_employees(db) if loads.get(u.id, 0) < limit]
 
 
-def choose_next_employee(db: Session) -> User | None:
-    """Next employee in the round-robin who is still under the open-lead limit.
+def choose_next_employee(db: Session, *, ignore_limit: bool = False) -> User | None:
+    """Next employee in the round-robin.
 
-    Does not assign a lead and does not move the rotation pointer.
+    By default only employees under the open-lead limit are eligible.
+    Sheet rows with no employee selected pass ignore_limit so the lead
+    still gets an owner when everyone is already at that limit.
     """
-    free = free_employees(db)
+    all_emps = eligible_employees(db)
+    if not all_emps:
+        return None
+    free = all_emps if ignore_limit else free_employees(db)
     if not free:
         return None
-    all_emps = eligible_employees(db)
     st = db.query(AssignmentState).first()
     all_ids = [u.id for u in all_emps]
     free_ids = {u.id for u in free}
@@ -136,11 +140,11 @@ def employee_by_name(db: Session, name: str) -> User | None:
     return None
 
 
-def auto_assign(db: Session, lead: Lead, by: User | None = None) -> User | None:
-    """Round-robin among employees under OPEN_LEAD_LIMIT; otherwise leave pending."""
+def auto_assign(db: Session, lead: Lead, by: User | None = None, *, ignore_limit: bool = False) -> User | None:
+    """Round-robin among employees. Leave pending only when no employee exists."""
     if lead.primary_employee_id:
         return None
-    chosen = choose_next_employee(db)
+    chosen = choose_next_employee(db, ignore_limit=ignore_limit)
     if not chosen:
         return None
     st = db.query(AssignmentState).with_for_update().first()
