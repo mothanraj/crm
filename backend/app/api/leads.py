@@ -433,6 +433,38 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
     data.pop("lead_value", None)
     data.pop("price_per_car", None)
     data.pop("gst_amount", None)
+    role = getattr(getattr(u, "role", None), "name", None)
+    admin_fields = {
+        "enquiry_number", "enquiry_date", "customer_name", "company_name",
+        "contact_number", "city", "email", "source_id",
+    }
+    if role != "ADMIN" and any(key in data for key in admin_fields):
+        raise HTTPException(403, "Only an admin can edit these lead details")
+    if "enquiry_number" in data:
+        number = str(data.pop("enquiry_number") or "").strip()
+        if not number:
+            raise HTTPException(400, "Enquiry number is required")
+        taken = db.query(Lead).filter(Lead.enquiry_number == number, Lead.id != lead.id).first()
+        if taken:
+            raise HTTPException(409, "That enquiry number is already used")
+        lead.enquiry_number = number
+        suffix = number.upper().removeprefix("ENQ-")
+        if number.upper().startswith("ENQ-") and suffix.isdigit():
+            lead.legacy_enquiry_no = int(suffix)
+    if "enquiry_date" in data:
+        lead.enquiry_date = data.pop("enquiry_date")
+    if "source_id" in data:
+        sid = data.pop("source_id")
+        if sid is None:
+            lead.source_id = None
+        else:
+            src = db.get(LeadSource, sid)
+            if not src:
+                raise HTTPException(400, "Select a valid lead source")
+            lead.source_id = src.id
+    for key in ("customer_name", "company_name", "contact_number", "city", "email"):
+        if key in data and isinstance(data[key], str):
+            data[key] = data[key].strip()
 
     pricing_changed = False
     if "product_id" in data:
@@ -466,7 +498,7 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
     if body.email is not None and body.email.strip() and not is_valid_email(body.email.strip()):
         raise HTTPException(400, "Enter a valid email address")
     if body.contact_number is not None:
-        lead.contact_number_norm = norm_phone(body.contact_number)
+        lead.contact_number_norm = norm_phone(lead.contact_number)
 
     if pricing_changed or lead.lead_value is None:
         prod = db.get(Product, lead.product_id) if lead.product_id else None

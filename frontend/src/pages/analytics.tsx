@@ -1,19 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../services/api';
 import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, Spinner } from '../components/ui';
 
-const COLORS = ['#65A30D', '#1971C2', '#E8890C', '#3F6212', '#6E6E6E', '#2F9E44', '#B5CC18', '#0e7490', '#A3A380', '#84cc16'];
+const COUNT_COLOR = '#1971C2';
+const VALUE_COLOR = '#65A30D';
+const COUNT_SHADES = ['#1971C2', '#0e7490', '#7c3aed', '#0369a1', '#1d4ed8', '#0891b2'];
+const VALUE_SHADES = ['#65A30D', '#3F6212', '#E8890C', '#15803d', '#84cc16', '#a16207'];
 const COMPARE = [
-  ['lead_value', 'Lead Value'],
-  ['quotation_value', 'Quotation Value'],
+  ['lead', 'Lead'],
+  ['quotation', 'Quotation'],
 ] as const;
-const MEASURES: Record<string, [string, string][]> = {
-  lead_value: [['leads', 'No. of Leads'], ['lead_value', 'Total Lead Value']],
-  quotation_value: [['quotations', 'No. of Quotations'], ['quotation_value', 'Total Quotation Value']],
-};
+const PERIODS: [string, string][] = [
+  ['last_24_previous', 'Compare last 24 hours to previous period'],
+  ['last_24_wow', 'Compare last 24 hours week over week'],
+  ['last_7_previous', 'Compare last 7 days to previous period'],
+  ['last_7_yoy', 'Compare last 7 days year over year'],
+  ['last_28_previous', 'Compare last 28 days to previous period'],
+  ['last_28_yoy', 'Compare last 28 days year over year'],
+  ['last_3m_previous', 'Compare last 3 months to previous period'],
+  ['last_3m_yoy', 'Compare last 3 months year over year'],
+  ['last_6m_previous', 'Compare last 6 months to previous period'],
+  ['custom', 'Custom'],
+];
 const PROGRESS_OPTIONS = [
   'Assigned',
   'New Lead',
@@ -24,13 +35,13 @@ const PROGRESS_OPTIONS = [
   'Not Interested',
   'Quotation sent',
 ];
-const QUARTERS: [string, number[]][] = [
-  ['Q1', [1, 2, 3]],
-  ['Q2', [4, 5, 6]],
-  ['Q3', [7, 8, 9]],
-  ['Q4', [10, 11, 12]],
-];
-const FILTER_KEYS = ['year', 'month', 'from_date', 'to_date', 'employee', 'source', 'product', 'category', 'progress', 'city', 'cars', 'customer', 'enquiry'];
+const FILTER_KEYS = ['employee', 'source', 'product', 'category', 'progress', 'city', 'cars', 'customer', 'enquiry'];
+const CUSTOM_DEFAULT = {
+  current_from: '2026-06-24',
+  current_to: '2026-09-23',
+  previous_from: '2026-01-24',
+  previous_to: '2026-06-23',
+};
 
 function inr(n: number | null | undefined) {
   if (n == null || Number.isNaN(Number(n))) return '—';
@@ -40,75 +51,77 @@ function num(n: number | null | undefined) {
   if (n == null || Number.isNaN(Number(n))) return '—';
   return Number(n).toLocaleString('en-IN');
 }
-function show(money: boolean, value: number | null | undefined) {
-  return money ? inr(value) : num(value);
-}
-function prettyDate(iso: string) {
+function prettyDate(iso?: string | null) {
+  if (!iso) return '—';
   const [year, month, day] = iso.split('-');
   if (!year || !month || !day) return iso;
   return `${day}-${month}-${year}`;
 }
-function sameNumbers(left: number[], right: number[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+function ymd(d: Date) {
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+function shiftDays(d: Date, n: number) {
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  next.setDate(next.getDate() + n);
+  return next;
+}
+function shiftMonths(d: Date, n: number) {
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  next.setMonth(next.getMonth() + n);
+  return next;
+}
+function shiftYears(d: Date, n: number) {
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  next.setFullYear(next.getFullYear() + n);
+  return next;
+}
+function periodRange(preset: string, today = new Date()) {
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const pack = (currentFrom: Date, currentTo: Date, previousFrom: Date, previousTo: Date) => ({
+    current_from: ymd(currentFrom),
+    current_to: ymd(currentTo),
+    previous_from: ymd(previousFrom),
+    previous_to: ymd(previousTo),
+  });
+  if (preset === 'last_24_previous') return pack(end, end, shiftDays(end, -1), shiftDays(end, -1));
+  if (preset === 'last_24_wow') {
+    const previous = shiftDays(end, -7);
+    return pack(end, end, previous, previous);
+  }
+  const days: Record<string, [number, 'previous' | 'yoy']> = {
+    last_7_previous: [7, 'previous'],
+    last_7_yoy: [7, 'yoy'],
+    last_28_previous: [28, 'previous'],
+    last_28_yoy: [28, 'yoy'],
+  };
+  if (preset in days) {
+    const [count, mode] = days[preset];
+    const start = shiftDays(end, -(count - 1));
+    if (mode === 'yoy') return pack(start, end, shiftYears(start, -1), shiftYears(end, -1));
+    const previousTo = shiftDays(start, -1);
+    return pack(start, end, shiftDays(previousTo, -(count - 1)), previousTo);
+  }
+  const months: Record<string, [number, 'previous' | 'yoy']> = {
+    last_3m_previous: [3, 'previous'],
+    last_3m_yoy: [3, 'yoy'],
+    last_6m_previous: [6, 'previous'],
+  };
+  if (preset in months) {
+    const [count, mode] = months[preset];
+    const start = shiftMonths(end, -count);
+    if (mode === 'yoy') return pack(start, end, shiftYears(start, -1), shiftYears(end, -1));
+    const previousTo = shiftDays(start, -1);
+    return pack(start, end, shiftMonths(previousTo, -count), previousTo);
+  }
+  return periodRange('last_3m_previous', today);
 }
 
-function CheckGroup({ label, options, selected, onToggle }: {
-  label: string;
-  options: { value: string; label: string }[];
-  selected: string[];
-  onToggle: (value: string) => void;
-}) {
-  return (
-    <fieldset className="min-w-0">
-      <legend className="text-[11px] font-semibold uppercase tracking-wide text-graphite-500 mb-1">{label}</legend>
-      <div className="max-h-36 overflow-auto rounded-lg border border-graphite-200 bg-white p-2 space-y-1">
-        {options.length === 0 && <div className="text-xs text-graphite-400">None in the database</div>}
-        {options.map((option) => (
-          <label key={option.value} className="flex items-center gap-2 text-sm text-graphite-800">
-            <input type="checkbox" checked={selected.includes(option.value)} onChange={() => onToggle(option.value)} />
-            <span className="truncate">{option.label}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function ComparisonTable({ rowHeader, columns, rows, totalLabel, totals, money }: {
-  rowHeader: string;
-  columns: number[];
-  rows: { key: string; label: string; values: Record<string, number> }[];
-  totalLabel?: string;
-  totals?: Record<string, number>;
-  money: boolean;
-}) {
-  if (!columns.length) return <EmptyState title="No enquiry dates for this selection" hint="Leads without an enquiry date stay in the summary totals only." />;
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm min-w-[640px]">
-        <thead>
-          <tr>
-            <th className="th text-left">{rowHeader}</th>
-            {columns.map((year) => <th key={year} className="th text-right">{year}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.key}>
-              <td className="td font-medium">{row.label}</td>
-              {columns.map((year) => <td key={year} className="td text-right tabular-nums">{show(money, row.values?.[String(year)] || 0)}</td>)}
-            </tr>
-          ))}
-          {totals && (
-            <tr className="bg-graphite-50 font-semibold">
-              <td className="td">{totalLabel || 'Total'}</td>
-              {columns.map((year) => <td key={year} className="td text-right tabular-nums">{show(money, totals[String(year)] || 0)}</td>)}
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
+function changeText(value: number | null | undefined) {
+  if (value == null || Number.isNaN(Number(value))) return '—';
+  const rounded = Number(value);
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString('en-IN')}%`;
 }
 
 export function Analytics() {
@@ -123,24 +136,26 @@ export function Analytics() {
   const [enquiry, setEnquiry] = useState(params.get('enquiry') || '');
   const [refreshed, setRefreshed] = useState('');
   const [tick, setTick] = useState(0);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [yearsOpen, setYearsOpen] = useState(false);
 
-  const requestedCompare = params.get('compare') || 'lead_value';
-  const compareBy = requestedCompare in MEASURES ? requestedCompare : 'lead_value';
-  const measureOptions = MEASURES[compareBy] || MEASURES.lead_value;
-  const measure = measureOptions.some(([key]) => key === params.get('measure')) ? (params.get('measure') as string) : measureOptions[0][0];
+  const requestedCompare = params.get('compare') || 'lead';
+  const compareBy = requestedCompare === 'quotation' || requestedCompare === 'quotation_value' ? 'quotation' : 'lead';
+  const period = PERIODS.some(([id]) => id === params.get('period')) ? (params.get('period') as string) : 'last_28_previous';
+  const customSeed = CUSTOM_DEFAULT;
+  const activeRange = period === 'custom'
+    ? {
+        current_from: params.get('current_from') || customSeed.current_from,
+        current_to: params.get('current_to') || customSeed.current_to,
+        previous_from: params.get('previous_from') || customSeed.previous_from,
+        previous_to: params.get('previous_to') || customSeed.previous_to,
+      }
+    : periodRange(period);
 
   function update(mutate: (next: URLSearchParams) => void) {
     const next = new URLSearchParams(paramsRef.current);
     mutate(next);
     setParams(next, { replace: true });
-  }
-  function toggle(key: string, value: string) {
-    update((next) => {
-      const current = next.getAll(key);
-      const had = current.includes(value);
-      next.delete(key);
-      (had ? current.filter((item) => item !== value) : [...current, value]).forEach((item) => next.append(key, item));
-    });
   }
   function setOne(key: string, value: string) {
     update((next) => {
@@ -148,10 +163,34 @@ export function Analytics() {
       else next.set(key, value);
     });
   }
-  function setMonths(values: number[]) {
+  function selectPeriod(value: string) {
     update((next) => {
+      next.set('period', value);
       next.delete('month');
-      values.forEach((value) => next.append('month', String(value)));
+      next.delete('from_date');
+      next.delete('to_date');
+      next.delete('measure');
+      if (value === 'custom') {
+        const seed = CUSTOM_DEFAULT;
+        if (!next.get('current_from')) next.set('current_from', seed.current_from);
+        if (!next.get('current_to')) next.set('current_to', seed.current_to);
+        if (!next.get('previous_from')) next.set('previous_from', seed.previous_from);
+        if (!next.get('previous_to')) next.set('previous_to', seed.previous_to);
+      } else {
+        next.delete('current_from');
+        next.delete('current_to');
+        next.delete('previous_from');
+        next.delete('previous_to');
+      }
+    });
+  }
+
+  function toggleYear(value: string) {
+    update((next) => {
+      const current = next.getAll('year');
+      const had = current.includes(value);
+      next.delete('year');
+      (had ? current.filter((item) => item !== value) : [...current, value]).forEach((item) => next.append('year', item));
     });
   }
 
@@ -175,14 +214,23 @@ export function Analytics() {
   }, [enquiry]);
 
   const query = useMemo(() => {
-    const next: Record<string, string | string[]> = { compare_by: compareBy, measure };
+    const years = params.getAll('year').filter((value) => value !== '');
+    const next: Record<string, string | string[]> = {
+      compare_by: compareBy,
+      current_from: activeRange.current_from,
+      current_to: activeRange.current_to,
+      previous_from: activeRange.previous_from,
+      previous_to: activeRange.previous_to,
+    };
+    if (years.length === 1) next.year = years[0];
+    else if (years.length > 1) next.year = years;
     FILTER_KEYS.forEach((key) => {
       const values = params.getAll(key).filter((value) => value !== '');
       if (values.length === 1) next[key] = values[0];
       else if (values.length > 1) next[key] = values;
     });
     return next;
-  }, [params, compareBy, measure]);
+  }, [params, compareBy, activeRange.current_from, activeRange.current_to, activeRange.previous_from, activeRange.previous_to]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -204,50 +252,35 @@ export function Analytics() {
 
   useEffect(() => subscribeLeadUpdates(() => setTick((value) => value + 1)), []);
 
-  const years: number[] = data?.years || [];
-  const money = Boolean(data?.money);
-  const selectedMonths = params.getAll('month').map(Number).filter((value) => value >= 1 && value <= 12).sort((a, b) => a - b);
-  const monthOptions = (meta?.months || []).map((item: any) => ({ value: String(item.value), label: item.label }));
-  const yearOptions = (meta?.years || []).map((year: number) => ({ value: String(year), label: String(year) }));
   const kpi = data?.kpi;
-  const monthRows = (data?.months || []).map((row: any) => ({ key: String(row.month), label: row.name, values: row.values || {} }));
-  const detailRows = (data?.details || []).map((row: any) => ({ key: row.name, label: row.name, values: row.values || {} }));
-  const chartSource = data?.detail_label ? detailRows : monthRows;
-  const chartRows = chartSource
-    .map((row: { label: string; values: Record<string, number> }) => ({
-      name: row.label.length > 18 ? `${row.label.slice(0, 16)}…` : row.label,
-      total: years.reduce((sum, year) => sum + Number(row.values[String(year)] || 0), 0),
-      ...Object.fromEntries(years.map((year) => [String(year), Number(row.values[String(year)] || 0)])),
-    }))
-    .filter((row: { total: number }) => row.total > 0)
-    .slice(0, 12);
-
-  const extra = [
-    params.get('employee') && `Employee ${meta?.employees?.find((item: any) => item.id === params.get('employee'))?.name || ''}`,
-    params.get('source') && `Source ${meta?.sources?.find((item: any) => item.id === params.get('source'))?.name || ''}`,
-    params.get('product') && `Product ${meta?.products?.find((item: any) => item.id === params.get('product'))?.name || ''}`,
-    params.get('category') && `Category ${params.get('category')}`,
-    params.get('progress') && `Progress ${params.get('progress')}`,
-    params.get('city') && `City ${params.get('city')}`,
-    params.get('cars') && `Cars ${params.get('cars')}`,
-    params.get('customer') && `Customer ${params.get('customer')}`,
-    params.get('enquiry') && `Enquiry ${params.get('enquiry')}`,
-  ].filter(Boolean);
-  const scope = [
-    data?.compare_label && `Compare by ${data.compare_label}`,
-    data?.measure_label,
-    params.getAll('year').length ? `Years ${[...params.getAll('year')].sort().join(', ')}` : 'All years',
-    selectedMonths.length ? `Months ${selectedMonths.map((month) => meta?.months?.find((item: any) => item.value === month)?.label || month).join(', ')}` : 'All months',
-    params.get('from_date') && `From ${prettyDate(params.get('from_date') || '')}`,
-    params.get('to_date') && `To ${prettyDate(params.get('to_date') || '')}`,
-    ...extra,
-  ].filter(Boolean).join(' · ');
+  const series = (data?.series || []).map((row: any) => ({
+    ...row,
+    label: row.current_date ? prettyDate(row.current_date) : (row.previous_date ? prettyDate(row.previous_date) : `Day ${row.day}`),
+  }));
+  const countLabel = data?.count_label || (compareBy === 'quotation' ? 'No. of Quotations' : 'No. of Leads');
+  const valueLabel = data?.value_label || (compareBy === 'quotation' ? 'Quotation Value' : 'Lead Value');
+  const yearComparison = data?.year_comparison;
+  const compareYears: number[] = yearComparison?.years || [];
+  const yearRows = (yearComparison?.months || []).map((row: any) => {
+    const point: Record<string, string | number> = { name: String(row.name || '').slice(0, 3) };
+    compareYears.forEach((year) => {
+      point[`count_${year}`] = Number(row.counts?.[String(year)] || 0);
+      point[`value_${year}`] = Number(row.values?.[String(year)] || 0);
+    });
+    return point;
+  });
+  const selectedYears = params.getAll('year');
+  const yearChoices = useMemo(() => {
+    const end = new Date().getFullYear() + 15;
+    const years: number[] = [];
+    for (let year = end; year >= 1990; year -= 1) years.push(year);
+    return years;
+  }, []);
 
   function selectCompare(value: string) {
     update((next) => {
       next.set('compare', value);
-      const allowed = (MEASURES[value] || MEASURES.lead_value).map(([key]) => key);
-      if (!allowed.includes(next.get('measure') || '')) next.set('measure', allowed[0]);
+      next.delete('measure');
     });
   }
 
@@ -261,41 +294,71 @@ export function Analytics() {
     <div>
       <PageHeader
         title="Lead comparison"
-        subtitle="Compare years and groups of months from the live lead records. Each lead is counted once."
+        subtitle="Compare a period with the one before it. Lead shows the number of leads and lead value. Quotation shows the number of quotations and quotation value."
         actions={<button type="button" className="btn-primary" onClick={reset}>Reset filters</button>}
       />
       {refreshed && <p className="text-xs text-graphite-500 -mt-4 mb-4">Last updated {refreshed}. New and updated leads refresh this page automatically.</p>}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{String(error)}</div>}
 
       <Card title="Comparison">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-          <label className="text-sm">Compare by
+        <div className="flex flex-wrap items-end gap-3 mb-4">
+          <label className="text-sm w-full max-w-xs">Compare by
             <select className="input mt-1" value={compareBy} onChange={(e) => selectCompare(e.target.value)}>
               {COMPARE.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-          <label className="text-sm">Measure
-            <select className="input mt-1" value={measure} onChange={(e) => setOne('measure', e.target.value)}>
-              {measureOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">From date
-            <input type="date" className="input mt-1" value={params.get('from_date') || ''} onChange={(e) => setOne('from_date', e.target.value)} />
-          </label>
-          <label className="text-sm">To date
-            <input type="date" className="input mt-1" value={params.get('to_date') || ''} onChange={(e) => setOne('to_date', e.target.value)} />
-          </label>
+          <button type="button" className="btn-secondary" onClick={() => setCompareOpen((open) => !open)}>
+            Compare
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => setYearsOpen((open) => !open)}>
+            Select years
+          </button>
         </div>
-        <div className="flex flex-wrap gap-2 mb-4">
-          <button type="button" className={`btn-secondary !py-1 ${selectedMonths.length === 0 ? '!bg-brand-50 !border-brand-400' : ''}`} onClick={() => setMonths([])}>All months</button>
-          {QUARTERS.map(([label, values]) => (
-            <button key={label} type="button" className={`btn-secondary !py-1 ${sameNumbers(selectedMonths, values) ? '!bg-brand-50 !border-brand-400' : ''}`} onClick={() => setMonths(values)}>{label}</button>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-          <CheckGroup label="Select years" options={yearOptions} selected={params.getAll('year')} onToggle={(value) => toggle('year', value)} />
-          <CheckGroup label="Select months" options={monthOptions} selected={params.getAll('month')} onToggle={(value) => toggle('month', value)} />
-        </div>
+        {compareOpen && (
+          <div className="mb-4 max-w-xl rounded-lg border border-graphite-200 bg-white p-3 space-y-2">
+            {PERIODS.map(([value, label]) => (
+              <label key={value} className="flex items-center gap-2 text-sm text-graphite-800">
+                <input type="radio" name="compare-period" checked={period === value} onChange={() => selectPeriod(value)} />
+                <span>{label}</span>
+              </label>
+            ))}
+            {period === 'custom' && (
+              <div className="pt-2 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm">Start date
+                    <input type="date" className="input mt-1" value={activeRange.current_from} onChange={(e) => setOne('current_from', e.target.value)} />
+                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
+                  </label>
+                  <label className="text-sm">End date
+                    <input type="date" className="input mt-1" value={activeRange.current_to} onChange={(e) => setOne('current_to', e.target.value)} />
+                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
+                  </label>
+                </div>
+                <div className="text-sm font-semibold text-graphite-600">vs.</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm">Start date
+                    <input type="date" className="input mt-1" value={activeRange.previous_from} onChange={(e) => setOne('previous_from', e.target.value)} />
+                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
+                  </label>
+                  <label className="text-sm">End date
+                    <input type="date" className="input mt-1" value={activeRange.previous_to} onChange={(e) => setOne('previous_to', e.target.value)} />
+                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {yearsOpen && (
+          <div className="mb-4 max-h-56 overflow-auto flex flex-wrap gap-2">
+            {yearChoices.map((year) => (
+              <label key={year} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${selectedYears.includes(String(year)) ? 'border-brand-400 bg-brand-50' : 'border-graphite-200 bg-white'}`}>
+                <input type="checkbox" checked={selectedYears.includes(String(year))} onChange={() => toggleYear(String(year))} />
+                {year}
+              </label>
+            ))}
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <label className="text-sm">Employee
             <select className="input mt-1" value={params.get('employee') || ''} onChange={(e) => setOne('employee', e.target.value)}>
@@ -346,10 +409,6 @@ export function Analytics() {
             <input className="input mt-1" value={enquiry} placeholder="Search enquiry number" onChange={(e) => setEnquiry(e.target.value)} />
           </label>
         </div>
-        {scope && <p className="text-sm text-graphite-600 mt-4">{scope}. The date range, years, and months all apply together.</p>}
-        {compareBy === 'quotation_value' && (
-          <p className="text-xs text-graphite-500 mt-2">A missing quotation is left out. A saved ₹0 is included. This uses the quotation stored on the lead, not a sum of quotation revisions.</p>
-        )}
       </Card>
 
       {loading && !data ? <Spinner /> : (
@@ -374,48 +433,125 @@ export function Analytics() {
               ))}
             </div>
             {Number(kpi?.undated) > 0 && (
-              <p className="text-xs text-graphite-500 mt-3">{num(kpi.undated)} leads have no enquiry date. They are included in these totals and omitted from the year columns.</p>
+              <p className="text-xs text-graphite-500 mt-3">{num(kpi.undated)} leads have no enquiry date, so they are left out of this comparison.</p>
             )}
           </Card>
 
           <Card title="Year comparison">
-            <ComparisonTable
-              rowHeader="Month"
-              columns={years}
-              rows={monthRows}
-              totalLabel={data?.period_label || 'Total'}
-              totals={data?.selected_total}
-              money={money}
-            />
+            {compareYears.length === 0 ? <EmptyState title="No enquiry years for this selection" /> : (
+              <>
+                <div className="h-80 mb-4">
+                  <ResponsiveContainer>
+                    <LineChart data={yearRows}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="count" tick={{ fontSize: 11 }} allowDecimals={false} />
+                      <YAxis yAxisId="value" orientation="right" tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(value: any, name: any) => [String(name).includes('value') || String(name).includes('Value') ? inr(Number(value)) : num(Number(value)), name]} />
+                      <Legend />
+                      {compareYears.map((year, index) => (
+                        <Line key={`count-${year}`} yAxisId="count" type="monotone" dataKey={`count_${year}`} name={`${year} ${countLabel}`} stroke={COUNT_SHADES[index % COUNT_SHADES.length]} strokeWidth={2} dot={false} />
+                      ))}
+                      {compareYears.map((year, index) => (
+                        <Line key={`value-${year}`} yAxisId="value" type="monotone" dataKey={`value_${year}`} name={`${year} ${valueLabel}`} stroke={VALUE_SHADES[index % VALUE_SHADES.length]} strokeWidth={2} dot={false} />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[640px]">
+                    <thead>
+                      <tr>
+                        <th className="th text-left">Month</th>
+                        {compareYears.map((year) => (
+                          <th key={year} className="th text-right" colSpan={2}>{year}</th>
+                        ))}
+                      </tr>
+                      <tr>
+                        <th className="th" />
+                        {compareYears.map((year) => (
+                          <Fragment key={year}>
+                            <th className="th text-right">{countLabel}</th>
+                            <th className="th text-right">{valueLabel}</th>
+                          </Fragment>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(yearComparison?.months || []).map((row: any) => (
+                        <tr key={row.month}>
+                          <td className="td font-medium">{row.name}</td>
+                          {compareYears.map((year) => (
+                            <Fragment key={`${row.month}-${year}`}>
+                              <td className="td text-right tabular-nums">{num(row.counts?.[String(year)])}</td>
+                              <td className="td text-right tabular-nums">{inr(row.values?.[String(year)])}</td>
+                            </Fragment>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </Card>
 
-          <Card title="Visual comparison">
-            {chartRows.length === 0 ? <EmptyState title="No records for the selected period" /> : (
+          <Card title={`${data?.compare_label || 'Lead'} comparison`}>
+            <div className="overflow-x-auto mb-4">
+              <table className="w-full text-sm min-w-[520px]">
+                <thead>
+                  <tr>
+                    <th className="th text-left"> </th>
+                    <th className="th text-right">Selected period</th>
+                    <th className="th text-right">Compared period</th>
+                    <th className="th text-right">Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td className="td font-medium" style={{ color: COUNT_COLOR }}>{countLabel}</td>
+                    <td className="td text-right tabular-nums">{num(data?.totals?.count)}</td>
+                    <td className="td text-right tabular-nums">{num(data?.totals?.previous_count)}</td>
+                    <td className="td text-right tabular-nums">{changeText(data?.count_change)}</td>
+                  </tr>
+                  <tr>
+                    <td className="td font-medium" style={{ color: VALUE_COLOR }}>{valueLabel}</td>
+                    <td className="td text-right tabular-nums">{inr(data?.totals?.value)}</td>
+                    <td className="td text-right tabular-nums">{inr(data?.totals?.previous_value)}</td>
+                    <td className="td text-right tabular-nums">{changeText(data?.value_change)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {series.length === 0 ? <EmptyState title="No records for the selected period" /> : (
               <div className="h-80">
                 <ResponsiveContainer>
-                  <BarChart data={chartRows}>
+                  <LineChart data={series}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-28} height={70} textAnchor="end" />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(value: any, name: any) => [show(money, Number(value)), name]} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={28} />
+                    <YAxis yAxisId="count" tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <YAxis yAxisId="value" orientation="right" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      formatter={(value: any, name: any) => [
+                        String(name).includes('Value') ? inr(Number(value)) : num(Number(value)),
+                        name,
+                      ]}
+                      labelFormatter={(_label: any, payload: any) => {
+                        const row = payload?.[0]?.payload;
+                        if (!row) return '';
+                        return `Day ${row.day}: ${prettyDate(row.current_date)} vs ${prettyDate(row.previous_date)}`;
+                      }}
+                    />
                     <Legend />
-                    {years.map((year, index) => (
-                      <Bar key={year} dataKey={String(year)} name={String(year)} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </BarChart>
+                    <Line yAxisId="count" type="monotone" dataKey="count" name={countLabel} stroke={COUNT_COLOR} strokeWidth={2} dot={false} />
+                    <Line yAxisId="count" type="monotone" dataKey="previous_count" name={`${countLabel} (previous)`} stroke={COUNT_COLOR} strokeWidth={2} strokeDasharray="6 4" dot={false} />
+                    <Line yAxisId="value" type="monotone" dataKey="value" name={valueLabel} stroke={VALUE_COLOR} strokeWidth={2} dot={false} />
+                    <Line yAxisId="value" type="monotone" dataKey="previous_value" name={`${valueLabel} (previous)`} stroke={VALUE_COLOR} strokeWidth={2} strokeDasharray="6 4" dot={false} />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
             )}
-            {chartSource.length > 12 && chartRows.length > 0 && (
-              <p className="text-xs text-graphite-500 mt-2">The chart shows the 12 largest rows. The table lists every row.</p>
-            )}
           </Card>
-
-          {data?.detail_label && (
-            <Card title="Detailed results">
-              <ComparisonTable rowHeader={data.detail_label} columns={years} rows={detailRows} money={money} />
-            </Card>
-          )}
         </div>
       )}
     </div>

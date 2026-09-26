@@ -7,7 +7,7 @@ history or quotation rows.
 from __future__ import annotations
 
 import csv
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO
 from uuid import UUID
 
@@ -28,6 +28,8 @@ from app.services.analytics import (
     LeadFilters,
     available_years,
     build_comparison,
+    build_period_comparison,
+    year_month_matrix,
     build_summary,
     iter_export_rows,
     meta_payload,
@@ -235,10 +237,44 @@ def analytics_comparison(
     db: Session = Depends(get_db),
     u: User = Depends(current_user),
     filters: LeadFilters = Depends(_common),
-    compare_by: str = "lead_value",
+    compare_by: str = "lead",
     measure: str | None = None,
+    current_from: str | None = None,
+    current_to: str | None = None,
+    previous_from: str | None = None,
+    previous_to: str | None = None,
 ):
     _require(u)
+    kind = {"lead": "lead", "quotation": "quotation", "lead_value": "lead", "quotation_value": "quotation"}.get(compare_by)
+    if kind and any([current_from, current_to, previous_from, previous_to, compare_by in {"lead", "quotation"}]):
+        today = date.today()
+        if not all([current_from, current_to, previous_from, previous_to]):
+            current_end = today
+            current_start = today - timedelta(days=27)
+            previous_end = current_start - timedelta(days=1)
+            previous_start = previous_end - timedelta(days=27)
+        else:
+            current_start = _parse_date(current_from, "current start")
+            current_end = _parse_date(current_to, "current end")
+            previous_start = _parse_date(previous_from, "previous start")
+            previous_end = _parse_date(previous_to, "previous end")
+            if not all([current_start, current_end, previous_start, previous_end]):
+                raise HTTPException(400, "Comparison needs a start and end date on both periods")
+        if current_start > current_end or previous_start > previous_end:
+            raise HTTPException(400, "A comparison period starts after it ends")
+        if (current_end - current_start).days > 1100 or (previous_end - previous_start).days > 1100:
+            raise HTTPException(400, "Choose a range of 3 years or less")
+        chosen_years = list(filters.years)
+        # The period chart uses its own dates. Year comparison is separate.
+        filters.years = []
+        filters.months = []
+        filters.from_date = None
+        filters.to_date = None
+        payload = build_period_comparison(
+            db, filters, kind, current_start, current_end, previous_start, previous_end,
+        )
+        payload["year_comparison"] = year_month_matrix(db, filters, chosen_years, kind)
+        return payload
     if compare_by not in COMPARE_OPTIONS:
         raise HTTPException(400, "Invalid compare by")
     try:
