@@ -54,11 +54,14 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
+    enquiry_number: Optional[str] = None
+    enquiry_date: Optional[date] = None
     customer_name: Optional[str] = None
     contact_number: Optional[str] = None
     email: Optional[str] = None
     company_name: Optional[str] = None
     city: Optional[str] = None
+    source_id: Optional[UUID] = None
     requirement: Optional[str] = None
     next_followup_at: Optional[datetime] = None
     customer_review: Optional[str] = None

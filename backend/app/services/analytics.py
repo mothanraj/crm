@@ -14,7 +14,7 @@ max, and median. Dates use ``enquiry_date`` (a date column, no timezone shift).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
 from sqlalchemy import Integer, String, and_, case, cast, exists, func, or_
@@ -879,6 +879,133 @@ def build_comparison(db: Session, f: LeadFilters, compare_by: str, measure: str 
     }
 
 
+def build_period_comparison(
+    db: Session,
+    f: LeadFilters,
+    compare_by: str,
+    current_start: date,
+    current_end: date,
+    previous_start: date,
+    previous_end: date,
+) -> dict:
+    """Daily lines for the selected window and the window it is compared with.
+
+    Lead shows enquiry count and lead value. Quotation shows saved quotations
+    and quotation value. NULL quotation is not a quotation. Each lead is once.
+    """
+    kind = {"lead_value": "lead", "quotation_value": "quotation"}.get(compare_by, compare_by)
+    if kind not in {"lead", "quotation"}:
+        raise ValueError(compare_by)
+    count_key = "quotations" if kind == "quotation" else "leads"
+    value_key = "quotation_value" if kind == "quotation" else "lead_value"
+
+    def daily(start: date, end: date) -> tuple[dict[date, int], dict[date, int]]:
+        rows = (
+            apply_filters(_base(db), f, DateScope(start=start, end=end))
+            .with_entities(Lead.enquiry_date.label("day"), *_measure_cells())
+            .group_by(Lead.enquiry_date)
+            .all()
+        )
+        counts: dict[date, int] = {}
+        values: dict[date, int] = {}
+        for row in rows:
+            if row.day is None:
+                continue
+            counts[row.day] = _int(getattr(row, count_key))
+            values[row.day] = _rupee0(getattr(row, value_key))
+        return counts, values
+
+    def days_between(start: date, end: date) -> list[date]:
+        out = []
+        cursor = start
+        while cursor <= end:
+            out.append(cursor)
+            cursor += timedelta(days=1)
+        return out
+
+    current_counts, current_values = daily(current_start, current_end)
+    previous_counts, previous_values = daily(previous_start, previous_end)
+    current_days = days_between(current_start, current_end)
+    previous_days = days_between(previous_start, previous_end)
+    series = []
+    for index in range(max(len(current_days), len(previous_days))):
+        current_day = current_days[index] if index < len(current_days) else None
+        previous_day = previous_days[index] if index < len(previous_days) else None
+        series.append({
+            "day": index + 1,
+            "current_date": current_day.isoformat() if current_day else None,
+            "previous_date": previous_day.isoformat() if previous_day else None,
+            "count": current_counts.get(current_day, 0) if current_day else 0,
+            "value": current_values.get(current_day, 0) if current_day else 0,
+            "previous_count": previous_counts.get(previous_day, 0) if previous_day else 0,
+            "previous_value": previous_values.get(previous_day, 0) if previous_day else 0,
+        })
+    totals = {
+        "count": sum(current_counts.values()),
+        "value": sum(current_values.values()),
+        "previous_count": sum(previous_counts.values()),
+        "previous_value": sum(previous_values.values()),
+    }
+    current_scope = DateScope(start=current_start, end=current_end)
+    return {
+        "compare_by": kind,
+        "compare_label": "Quotation" if kind == "quotation" else "Lead",
+        "count_label": "No. of Quotations" if kind == "quotation" else "No. of Leads",
+        "value_label": "Quotation Value" if kind == "quotation" else "Lead Value",
+        "current": {"from": current_start.isoformat(), "to": current_end.isoformat()},
+        "previous": {"from": previous_start.isoformat(), "to": previous_end.isoformat()},
+        "totals": totals,
+        "count_change": percent_change(totals["count"], totals["previous_count"]),
+        "value_change": percent_change(totals["value"], totals["previous_value"]),
+        "series": series,
+        "kpi": _query_kpi(db, f, current_scope),
+        "rules": {
+            "date_field": "enquiry_date",
+            "quotation": "leads.quotation_value. NULL is missing and is not counted as a quotation. 0 is a saved zero.",
+            "lead_value": "sum of leads.lead_value. NULL is left out of the total.",
+            "counting": "each lead is counted once",
+        },
+    }
+
+
+def year_month_matrix(db: Session, f: LeadFilters, years: list[int], compare_by: str) -> dict:
+    """Month rows for every selected year. Both the count and the value are included."""
+    kind = {"lead_value": "lead", "quotation_value": "quotation"}.get(compare_by, compare_by)
+    count_key = "quotations" if kind == "quotation" else "leads"
+    value_key = "quotation_value" if kind == "quotation" else "lead_value"
+    chosen = sorted({int(year) for year in years})
+    rows = (
+        apply_filters(_base(db), f, DateScope(years=chosen))
+        .filter(Lead.enquiry_date.isnot(None))
+        .with_entities(
+            func.extract("year", Lead.enquiry_date).label("year"),
+            func.extract("month", Lead.enquiry_date).label("month"),
+            *_measure_cells(),
+        )
+        .group_by(func.extract("year", Lead.enquiry_date), func.extract("month", Lead.enquiry_date))
+        .all()
+    )
+    found = sorted({int(row.year) for row in rows if row.year is not None})
+    use_years = chosen or found
+    counts: dict[tuple[int, int], int] = {}
+    values: dict[tuple[int, int], int] = {}
+    for row in rows:
+        if row.year is None or row.month is None:
+            continue
+        key = (int(row.year), int(row.month))
+        counts[key] = _int(getattr(row, count_key))
+        values[key] = _rupee0(getattr(row, value_key))
+    months = []
+    for number in range(1, 13):
+        months.append({
+            "month": number,
+            "name": MONTH_NAMES[number - 1],
+            "counts": {str(year): counts.get((year, number), 0) for year in use_years},
+            "values": {str(year): values.get((year, number), 0) for year in use_years},
+        })
+    return {"years": use_years, "months": months}
+
+
 SORTS = {
     "date": Lead.enquiry_date,
     "enquiry": Lead.enquiry_number,
@@ -968,12 +1095,10 @@ def available_years(db: Session) -> list[int]:
         if year is not None
     ]
     today = date.today().year
-    options = set(found)
-    options.add(today)
-    options.add(today - 1)
+    start = today - 15
     if found:
-        options.add(min(found) - 1)
-    return sorted(options, reverse=True)
+        start = min(start, min(found))
+    return list(range(today, start - 1, -1))
 
 
 def meta_payload(db: Session) -> dict:

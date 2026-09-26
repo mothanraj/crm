@@ -2085,6 +2085,19 @@ export function LeadDetail({ id }: { id: string }) {
   const [cars, setCars] = useState('');
   const [busy, setBusy] = useState(false);
   const [pricingBusy, setPricingBusy] = useState(false);
+  const [detailsBusy, setDetailsBusy] = useState(false);
+  const [details, setDetails] = useState({
+    enquiry_number: '',
+    enquiry_date: '',
+    customer_name: '',
+    company_name: '',
+    contact_number: '',
+    city: '',
+    quantity_raw: '',
+    source_id: '',
+    product_id: '',
+    email: '',
+  });
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [tab, setTab] = useState<'timeline' | 'history'>('timeline');
@@ -2100,8 +2113,20 @@ export function LeadDetail({ id }: { id: string }) {
     if (l) {
       setProductId(l.product_id || '');
       setCars(l.quantity_raw || (l.quantity_num != null ? String(l.quantity_num) : ''));
+      setDetails({
+        enquiry_number: l.enquiry_number || '',
+        enquiry_date: (l.enquiry_date || '').slice(0, 10),
+        customer_name: l.customer_name || '',
+        company_name: l.company_name || '',
+        contact_number: l.contact_number || '',
+        city: l.city || '',
+        quantity_raw: l.quantity_raw || (l.quantity_num != null ? String(l.quantity_num) : ''),
+        source_id: l.source_id || '',
+        product_id: l.product_id || '',
+        email: l.email || '',
+      });
     }
-  }, [l?.status_id, l?.id, l?.product_id, l?.quantity_raw, l?.quantity_num]);
+  }, [l?.status_id, l?.id, l?.product_id, l?.quantity_raw, l?.quantity_num, l?.updated_at, l?.enquiry_number, l?.enquiry_date, l?.customer_name, l?.company_name, l?.contact_number, l?.city, l?.source_id, l?.email]);
   if (loadError && !l) {
     return (
       <div className="card p-8 text-center">
@@ -2198,6 +2223,29 @@ export function LeadDetail({ id }: { id: string }) {
       setErr(e?.response?.data?.detail || 'Could not save product / cars');
     } finally { setPricingBusy(false); }
   };
+  const saveDetails = async () => {
+    if (role !== 'ADMIN' || detailsBusy) return;
+    if (!details.enquiry_number.trim()) { setErr('Enquiry number is required'); return; }
+    setDetailsBusy(true); setErr(''); setOkMsg('');
+    try {
+      const { data } = await api.put(`/leads/${id}`, {
+        enquiry_number: details.enquiry_number.trim(),
+        enquiry_date: details.enquiry_date || null,
+        customer_name: details.customer_name.trim(),
+        company_name: details.company_name.trim(),
+        contact_number: details.contact_number.trim(),
+        city: details.city.trim(),
+        email: details.email.trim(),
+        source_id: details.source_id || null,
+        product_id: details.product_id || null,
+        quantity_raw: details.quantity_raw.trim(),
+      });
+      setL(data);
+      setOkMsg('Lead details saved');
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not save lead details');
+    } finally { setDetailsBusy(false); }
+  };
   return (
     <div className="space-y-5">
       <div className="card p-6">
@@ -2230,6 +2278,62 @@ export function LeadDetail({ id }: { id: string }) {
           <Link to="/leads" className="btn-secondary">← All leads</Link>
         </div>
       </div>
+      {role === 'ADMIN' && (
+        <Card title="Edit lead details">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Enq no</label>
+              <input className="input mt-1" value={details.enquiry_number} onChange={(e) => setDetails((cur) => ({ ...cur, enquiry_number: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Date Received</label>
+              <input className="input mt-1" type="date" value={details.enquiry_date} onChange={(e) => setDetails((cur) => ({ ...cur, enquiry_date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Lead Name / Full Name</label>
+              <input className="input mt-1" value={details.customer_name} onChange={(e) => setDetails((cur) => ({ ...cur, customer_name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Company / Organisation</label>
+              <input className="input mt-1" value={details.company_name} onChange={(e) => setDetails((cur) => ({ ...cur, company_name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Contact No.</label>
+              <input className="input mt-1" value={details.contact_number} onChange={(e) => setDetails((cur) => ({ ...cur, contact_number: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">City</label>
+              <input className="input mt-1" value={details.city} onChange={(e) => setDetails((cur) => ({ ...cur, city: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">No. of Cars</label>
+              <input className="input mt-1" type="number" min="1" step="1" value={details.quantity_raw} onChange={(e) => setDetails((cur) => ({ ...cur, quantity_raw: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Lead Source</label>
+              <select className="input mt-1" value={details.source_id} onChange={(e) => setDetails((cur) => ({ ...cur, source_id: e.target.value }))}>
+                <option value="">Select source…</option>
+                {(masters?.sources || []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Product / Type</label>
+              <select className="input mt-1" value={details.product_id} onChange={(e) => setDetails((cur) => ({ ...cur, product_id: e.target.value }))}>
+                <option value="">Select product…</option>
+                {(masters?.products || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-graphite-600">Email</label>
+              <input className="input mt-1" type="email" value={details.email} onChange={(e) => setDetails((cur) => ({ ...cur, email: e.target.value }))} />
+            </div>
+          </div>
+          <p className="text-xs text-graphite-500 mt-3">Saving product and number of cars also recalculates Lead Value.</p>
+          <button type="button" className="btn-primary mt-3" disabled={detailsBusy} onClick={saveDetails}>
+            {detailsBusy ? 'Saving…' : 'Save lead details'}
+          </button>
+        </Card>
+      )}
       {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{err}</div>}
       {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3">{okMsg}</div>}
 
