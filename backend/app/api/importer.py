@@ -218,24 +218,31 @@ def classify_intake_row(
 ) -> dict:
     """Shared Excel + Google Sheets rules.
 
-    Only the phone number is required. Name, enquiry number, email, and the
+    A valid phone or a valid email is enough. Name, enquiry number, and the
     other columns may be blank. A supplied enquiry number must still be unique.
-    A duplicate phone is rejected. An unusable email is stored and does not
-    block the row.
+    A duplicate phone is rejected. When the phone is valid, an unusable email
+    is stored and does not block the row.
     """
     seen_phones = seen_phones or set()
     seen_enqs = seen_enqs or set()
     phone_n = norm_phone(phone or "")
     legacy = parse_legacy_enq(enq)
     email_v = (email or "").strip()
-    email_bad = bool(email_v) and not is_valid_email(email_v)
+    phone_ok = is_valid_phone(phone or "")
+    email_ok = bool(email_v) and is_valid_email(email_v)
+    email_bad = bool(email_v) and not email_ok
     errs: list[str] = []
     dups: list[str] = []
-    if not is_valid_phone(phone or ""):
-        shown = phone_n or str(phone or "").strip() or "blank"
-        errs.append(f"missing/invalid phone ({shown})")
-    elif phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+    if phone_ok and (phone_n in seen_phones or db.query(Lead).filter_by(contact_number_norm=phone_n).first()):
         dups.append("duplicate phone")
+    if not phone_ok and not email_ok:
+        shown = phone_n or str(phone or "").strip() or "blank"
+        if str(phone or "").strip():
+            errs.append(f"missing/invalid phone ({shown})")
+        if email_bad:
+            errs.append("invalid email")
+        if not errs:
+            errs.append("missing phone or email")
     if legacy is not None and (
         legacy in seen_enqs
         or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
@@ -243,7 +250,7 @@ def classify_intake_row(
     ):
         dups.append(f"duplicate enquiry no {format_enquiry_number(legacy)}")
     return {
-        "phone_norm": phone_n,
+        "phone_norm": phone_n if phone_ok else "",
         "legacy_enq": legacy,
         "email_invalid": email_bad,
         "dups": dups,
@@ -365,12 +372,13 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
 def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
     name = str(raw.get("name") or "").strip()
     phone = str(raw.get("phone") or "").strip()
-    if not phone:
-        raise HTTPException(400, "Phone is required")
-    phone_n = norm_phone(phone)
-    if not is_valid_phone(phone):
-        raise HTTPException(400, "Invalid phone number")
-    if db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+    email_v = str(raw.get("email") or "").strip()
+    phone_ok = is_valid_phone(phone)
+    email_ok = bool(email_v) and is_valid_email(email_v)
+    if not phone_ok and not email_ok:
+        raise HTTPException(400, "A valid phone or email is required")
+    phone_n = norm_phone(phone) if phone_ok else ""
+    if phone_ok and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
         raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
 
     legacy = raw.get("legacy_enq")
@@ -387,7 +395,6 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
         ):
             raise HTTPException(400, f"Enquiry number {enquiry_number} already exists")
 
-    email_v = str(raw.get("email") or "").strip()
     company = str(raw.get("company") or "").strip()
     city = str(raw.get("city") or "").strip()
     cars = str(raw.get("cars") or "").strip()
@@ -541,7 +548,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "enquiry no", "received date", "name", "company/organisation (optional)",
             "contact no", "city", "no. of cars", "lead source", "product/type", "email",
         ],
-        "note": "Only the phone number is required. Other columns may be blank. A duplicate phone, or a duplicate enquiry number when one is filled in, is held for review. Unmapped product names still import as-is.",
+        "note": "A valid phone or a valid email is enough. Other columns may be blank. A duplicate phone, or a duplicate enquiry number when one is filled in, is held for review. Unmapped product names still import as-is.",
     }
 
 
