@@ -88,6 +88,22 @@ function previewLeadValue(pricePerCar: any, cars: any) {
   return { price_per_car: p, base_value: base, gst_amount: gst, lead_value: Math.round(base + gst) };
 }
 
+const ODD_CAR_PRODUCTS = ['puzzle parking', 'pit puzzle parking', 'car elevator', 'car elevation', 'shuttle parking', 'asrs parking'];
+
+function allowsOddCars(productName: string) {
+  return ODD_CAR_PRODUCTS.includes(String(productName || '').trim().toLowerCase());
+}
+
+function carCountError(raw: string, productName: string) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const cars = Number(text);
+  if (!Number.isInteger(cars)) return 'Number of cars must be a whole number starting at 2';
+  if (cars < 2) return 'Number of cars starts at 2';
+  if (cars % 2 === 1 && !allowsOddCars(productName)) return 'Number of cars must be even for this product. Odd numbers are only for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS';
+  return '';
+}
+
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
   const res = await api.get(path, { responseType: 'blob', params });
   const ctype = String(res.headers?.['content-type'] ?? '');
@@ -2082,7 +2098,7 @@ export function LeadDetail({ id }: { id: string }) {
   const notInterestedLocked = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', l.status_id));
   const leadLocked = convertedLocked || notInterestedLocked;
   const selectedProduct = masters?.products?.find((p: any) => p.id === productId);
-  const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, cars);
+  const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, String(cars || '').trim() || '2');
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
   const canUpdateProgress = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
   const canEditPricing = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id));
@@ -2146,10 +2162,13 @@ export function LeadDetail({ id }: { id: string }) {
   const savePricing = async () => {
     if (!canEditPricing || leadLocked) return;
     setPricingBusy(true); setErr(''); setOkMsg('');
+    const productName = selectedProduct?.name || '';
+    const problem = carCountError(cars, productName);
+    if (problem) { setErr(problem); setPricingBusy(false); return; }
     try {
       const { data } = await api.put(`/leads/${id}`, {
         product_id: productId || null,
-        quantity_raw: cars,
+        quantity_raw: String(cars || '').trim() || '2',
         lead_value: 1,
         price_per_car: 1,
         gst_amount: 1,
@@ -2287,7 +2306,8 @@ export function LeadDetail({ id }: { id: string }) {
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">Number of Cars</label>
-            <input className="input mt-1" type="number" min="1" step="1" disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} placeholder="e.g. 10" />
+            <input className="input mt-1" type="number" min="2" step={allowsOddCars(selectedProduct?.name || '') ? 1 : 2} disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} placeholder="2" />
+            <p className="text-[11px] text-graphite-500 mt-1">Starts at 2. Even numbers only, except Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Blank saves as 2.</p>
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">Price / Car</label>

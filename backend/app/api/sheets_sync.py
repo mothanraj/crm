@@ -33,7 +33,7 @@ from app.services.lead_service import (
     format_enquiry_number, next_enquiry_number, remember_assignment,
 )
 from app.services.normalize import (
-    PRODUCT_ALIASES, canonical_source, is_valid_email, norm_key, parse_excel_date, parse_quantity,
+    PRODUCT_ALIASES, canonical_source, norm_key, normalize_car_count, parse_excel_date,
 )
 from app.services.pricing import apply_pricing_to_lead
 
@@ -206,12 +206,6 @@ async def ingest_rows(
                                error=",".join(classified["errs"]), reason="INVALID"))
             errors.append({"row": r.row_id, "reason": "INVALID", "error": ",".join(classified["errs"])})
             continue
-        if email_v and not is_valid_email(email_v):
-            batch.invalid += 1
-            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
-                               error="invalid email", reason="INVALID"))
-            errors.append({"row": r.row_id, "reason": "INVALID", "error": "invalid email"})
-            continue
         named = (r.employee or "").strip()
         chosen = employee_by_name(db, named) if named else None
         if named and chosen is None:
@@ -225,7 +219,13 @@ async def ingest_rows(
             seen_enqs.add(legacy)
         src = _norm_source(db, r.source or "")
         prod = _norm_product(db, r.product or "")
-        cars = (r.cars or "").strip()
+        count, car_error = normalize_car_count((r.cars or "").strip() or str(r.quantity or "").strip(), r.product or "")
+        if car_error:
+            batch.invalid += 1
+            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
+                               error=car_error, reason="INVALID"))
+            errors.append({"row": r.row_id, "reason": "INVALID", "error": car_error})
+            continue
         enquiry_number = format_enquiry_number(int(legacy)) if legacy is not None else next_enquiry_number(db)
         try:
             with db.begin_nested():
@@ -242,8 +242,8 @@ async def ingest_rows(
                     city=(r.city or "").strip(),
                     product_raw=(r.product or "").strip(),
                     requirement=(r.requirement or "").strip(),
-                    quantity_raw=cars or str(r.quantity or "").strip(),
-                    quantity_num=parse_quantity(cars or r.quantity),
+                    quantity_raw=str(count),
+                    quantity_num=count,
                     priority=(r.priority or "").strip(),
                     first_contact_notes=(r.remarks or "").strip(),
                     source_id=src.id if src else None,
@@ -265,7 +265,7 @@ async def ingest_rows(
                     new_by_emp.setdefault(chosen.id, []).append(lead.id)
                     assigned_name = chosen.name
                 else:
-                    emp = auto_assign(db, lead, None)
+                    emp = auto_assign(db, lead, None, ignore_limit=True)
                     assigned_name = emp.name if emp else ""
                     if emp:
                         new_by_emp.setdefault(emp.id, []).append(lead.id)
@@ -313,7 +313,7 @@ async def next_employee(
     """Name of the next free employee. Does not create a lead."""
     raw = await request.body()
     _verify_signature(raw, x_sheets_timestamp, x_sheets_signature)
-    chosen = choose_next_employee(db)
+    chosen = choose_next_employee(db, ignore_limit=True)
     return {"employee": chosen.name if chosen else ""}
 
 

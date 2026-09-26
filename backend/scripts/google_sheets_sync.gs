@@ -1,8 +1,8 @@
 /** Google Sheets -> CRM.
  *
  * Column N header must be Employee.
- * A valid phone (and a valid email, when one is typed) writes the next
- * employee into that column. Ticking SEND (column M) posts the row, and the
+ * A phone number or an email is enough. When either one is valid, the next
+ * employee is written into column N. Ticking SEND (column M) posts the row.
  * CRM creates the lead for the employee named in column N.
  *
  * Script properties: WEBHOOK_URL = https://<host>/api/sheets/rows
@@ -117,14 +117,41 @@ function rowIsEmpty_(sh, row, m) {
   return true;
 }
 
+function carProblem_(raw, productName) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const cleaned = text.replace(/,/g, '');
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  if (!match || Number(match[0]) !== parseInt(match[0], 10)) return 'NOT SENT - number of cars must be a whole number starting at 2';
+  const cars = parseInt(match[0], 10);
+  if (cars < 2) return 'NOT SENT - number of cars starts at 2';
+  const product = String(productName || '').trim().toLowerCase();
+  const oddOk = {
+    'puzzle parking': true, 'puzzle parking system': true, 'puzzle': true,
+    'pit puzzle parking': true, 'pit puzzle': true,
+    'car elevator': true, 'car elevation': true, 'car lift': true, 'car lift parking': true,
+    'shuttle parking': true, 'shuttle': true, 'shuttle parking system': true,
+    'asrs parking': true, 'asrs': true
+  };
+  if (cars % 2 === 1 && !oddOk[product]) return 'NOT SENT - number of cars must be even for this product';
+  return '';
+}
+
 function rowProblem_(sh, row, m) {
   if (rowIsEmpty_(sh, row, m)) return 'NOT SENT - empty row';
   const phoneValue = m.phone > 0 ? sh.getRange(row, m.phone).getValue() : '';
-  const digits = phoneDigits_(phoneValue);
-  if (!/^\d{8,15}$/.test(digits)) return 'NOT SENT - missing/invalid phone';
   const emailValue = m.email > 0 ? sh.getRange(row, m.email).getValue() : '';
-  if (!emailOk_(emailValue)) return 'NOT SENT - invalid email';
-  return '';
+  const phoneOk = /^[6-9]\d{9}$/.test(phoneDigits_(phoneValue));
+  const emailPresent = String(emailValue || '').trim() !== '';
+  const emailValid = emailPresent && emailOk_(emailValue);
+  if (String(phoneText_(phoneValue)).trim() !== '' && !phoneOk) return 'NOT SENT - phone must be a 10-digit Indian number';
+  if (!phoneOk && !emailValid) {
+    if (emailPresent) return 'NOT SENT - invalid email';
+    return 'NOT SENT - phone or email is required';
+  }
+  const carsRaw = m.cars > 0 ? sh.getRange(row, m.cars).getValue() : '';
+  const productName = m.product > 0 ? sh.getRange(row, m.product).getValue() : '';
+  return carProblem_(carsRaw, productName);
 }
 
 function signedPost_(url, payload) {
@@ -190,6 +217,7 @@ function sendRowToBackend_(sh, row, m) {
 
   if (m.syncStatus > 0) sh.getRange(row, m.syncStatus).setValue('SENDING...');
   const empCol = employeeCol_(m);
+  if (m.cars > 0 && String(get(m.cars) || '').trim() === '') sh.getRange(row, m.cars).setValue(2);
 
   const payload = JSON.stringify({
     sheet_id: CONFIG.SHEET_NAME,
@@ -203,7 +231,7 @@ function sendRowToBackend_(sh, row, m) {
       phone: String(phoneText_(get(m.phone))),
       email: get(m.email),
       city: get(m.city),
-      cars: String(get(m.cars)),
+      cars: String(get(m.cars) || '2'),
       source: get(m.source),
       product: get(m.product),
       requirement: get(m.requirement),

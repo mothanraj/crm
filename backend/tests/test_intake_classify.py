@@ -90,7 +90,7 @@ def test_phone_alone_is_enough():
 def test_invalid_missing_name_phone_enq_email():
     out = classify_intake_row(_db(), name="", phone="123", enq="", email="bad")
     assert out["reason"] == "INVALID"
-    assert out["errs"] == ["missing/invalid phone (123)", "invalid email"]
+    assert out["errs"] == ["missing/invalid phone (123)"]
 
 
 def test_email_alone_is_enough():
@@ -100,10 +100,10 @@ def test_email_alone_is_enough():
     assert out["errs"] == []
 
 
-def test_invalid_phone_is_ok_when_email_is_valid():
+def test_invalid_phone_is_rejected_even_with_email():
     out = classify_intake_row(_db(), name="", phone="123", enq="", email="lead@example.com")
-    assert out["reason"] == "OK"
-    assert out["errs"] == []
+    assert out["reason"] == "INVALID"
+    assert out["errs"] == ["missing/invalid phone (123)"]
 
 
 def test_duplicate_wins_over_invalid():
