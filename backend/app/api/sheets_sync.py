@@ -28,9 +28,12 @@ from app.models import (
     LeadStatusHistory, Product, ProductAlias, User,
 )
 from app.services import live
-from app.services.lead_service import auto_assign, format_enquiry_number, next_enquiry_number
+from app.services.lead_service import (
+    assign, auto_assign, choose_next_employee, employee_by_name,
+    format_enquiry_number, next_enquiry_number, remember_assignment,
+)
 from app.services.normalize import (
-    PRODUCT_ALIASES, canonical_source, norm_key, parse_excel_date, parse_quantity,
+    PRODUCT_ALIASES, canonical_source, is_valid_email, norm_key, parse_excel_date, parse_quantity,
 )
 from app.services.pricing import apply_pricing_to_lead
 
@@ -58,6 +61,7 @@ class SheetsRow(BaseModel):
     alternate_contact: str = ""
     source: str = ""
     product: str = ""
+    employee: str = ""
 
 
 class SheetsPush(BaseModel):
@@ -147,6 +151,7 @@ async def ingest_rows(
     db.flush()
 
     inserted: list[str] = []
+    assigned_names: list[str] = []
     errors: list[dict] = []
     seen_keys: set[str] = set()
     seen_phones: set[str] = set()
@@ -201,6 +206,20 @@ async def ingest_rows(
                                error=",".join(classified["errs"]), reason="INVALID"))
             errors.append({"row": r.row_id, "reason": "INVALID", "error": ",".join(classified["errs"])})
             continue
+        if email_v and not is_valid_email(email_v):
+            batch.invalid += 1
+            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
+                               error="invalid email", reason="INVALID"))
+            errors.append({"row": r.row_id, "reason": "INVALID", "error": "invalid email"})
+            continue
+        named = (r.employee or "").strip()
+        chosen = employee_by_name(db, named) if named else None
+        if named and chosen is None:
+            batch.invalid += 1
+            db.add(ImportError(batch_id=batch.id, row_number=i, raw=raw_rec,
+                               error=f"unknown employee ({named})", reason="INVALID"))
+            errors.append({"row": r.row_id, "reason": "INVALID", "error": f"unknown employee ({named})"})
+            continue
         seen_phones.add(phone_n)
         if legacy is not None:
             seen_enqs.add(legacy)
@@ -240,9 +259,16 @@ async def ingest_rows(
                     lead_id=lead.id, old_status_id=None, new_status_id=st.id,
                     changed_by=None, reason=f"sheets sync {body.sheet_id}",
                 ))
-                emp = auto_assign(db, lead, None)
-                if emp:
-                    new_by_emp.setdefault(emp.id, []).append(lead.id)
+                if chosen:
+                    assign(db, lead, chosen)
+                    remember_assignment(db, chosen)
+                    new_by_emp.setdefault(chosen.id, []).append(lead.id)
+                    assigned_name = chosen.name
+                else:
+                    emp = auto_assign(db, lead, None)
+                    assigned_name = emp.name if emp else ""
+                    if emp:
+                        new_by_emp.setdefault(emp.id, []).append(lead.id)
                 db.add(ImportBatch(file_name=f"{PENDING_PREFIX}{body.sheet_id}",
                                    sheet_name=key, total_rows=1, duplicates=0,
                                    invalid=0, imported=1, status="SYNCED"))
@@ -254,6 +280,7 @@ async def ingest_rows(
             errors.append({"row": r.row_id, "reason": "DUPLICATE", "error": "could not save row (duplicate or constraint)"})
             continue
         inserted.append(lead.enquiry_number)
+        assigned_names.append(assigned_name)
 
     batch.imported = len(inserted)
     batch.status = "DONE"
@@ -271,8 +298,23 @@ async def ingest_rows(
         # enquiry must stay checked and show the duplicate or invalid reason.
         raise HTTPException(409, "; ".join(str(item.get("error") or "rejected") for item in errors)[:300])
     return {"batch_id": str(batch.id), "inserted": len(inserted),
-            "enquiry_numbers": inserted, "duplicates": batch.duplicates,
+            "enquiry_numbers": inserted, "employees": assigned_names,
+            "duplicates": batch.duplicates,
             "invalid": batch.invalid, "errors": errors}
+
+
+@router.post("/next-employee")
+async def next_employee(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_sheets_timestamp: str = Header(default=""),
+    x_sheets_signature: str = Header(default=""),
+):
+    """Name of the next free employee. Does not create a lead."""
+    raw = await request.body()
+    _verify_signature(raw, x_sheets_timestamp, x_sheets_signature)
+    chosen = choose_next_employee(db)
+    return {"employee": chosen.name if chosen else ""}
 
 
 @router.get("/batches/{bid}/errors")

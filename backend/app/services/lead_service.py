@@ -102,36 +102,65 @@ def free_employees(db: Session) -> list[User]:
     return [u for u in eligible_employees(db) if loads.get(u.id, 0) < limit]
 
 
+def choose_next_employee(db: Session) -> User | None:
+    """Next employee in the round-robin who is still under the open-lead limit.
+
+    Does not assign a lead and does not move the rotation pointer.
+    """
+    free = free_employees(db)
+    if not free:
+        return None
+    all_emps = eligible_employees(db)
+    st = db.query(AssignmentState).first()
+    all_ids = [u.id for u in all_emps]
+    free_ids = {u.id for u in free}
+    last_id = st.last_employee_id if st else None
+    try:
+        start = all_ids.index(last_id) + 1 if last_id in all_ids else 0
+    except ValueError:
+        start = 0
+    for i in range(len(all_ids)):
+        cand_id = all_ids[(start + i) % len(all_ids)]
+        if cand_id in free_ids:
+            return next(u for u in free if u.id == cand_id)
+    return None
+
+
+def employee_by_name(db: Session, name: str) -> User | None:
+    target = (name or "").strip().lower()
+    if not target:
+        return None
+    for user in eligible_employees(db):
+        if (user.name or "").strip().lower() == target:
+            return user
+    return None
+
+
 def auto_assign(db: Session, lead: Lead, by: User | None = None) -> User | None:
     """Round-robin among employees under OPEN_LEAD_LIMIT; otherwise leave pending."""
     if lead.primary_employee_id:
         return None
-    free = free_employees(db)
-    if not free:
-        return None  # all at capacity (or none exist); stays pending
-    all_emps = eligible_employees(db)
+    chosen = choose_next_employee(db)
+    if not chosen:
+        return None
     st = db.query(AssignmentState).with_for_update().first()
     if not st:
         st = AssignmentState()
         db.add(st)
         db.flush()
-    all_ids = [u.id for u in all_emps]
-    free_ids = {u.id for u in free}
-    try:
-        start = all_ids.index(st.last_employee_id) + 1 if st.last_employee_id in all_ids else 0
-    except ValueError:
-        start = 0
-    chosen = None
-    for i in range(len(all_ids)):
-        cand_id = all_ids[(start + i) % len(all_ids)]
-        if cand_id in free_ids:
-            chosen = next(u for u in free if u.id == cand_id)
-            break
-    if not chosen:
-        return None
     st.last_employee_id = chosen.id
     assign(db, lead, chosen, role="PRIMARY", by=by)
     return chosen
+
+
+def remember_assignment(db: Session, emp: User) -> None:
+    """Move the round-robin pointer to this employee after a named sheet assignment."""
+    st = db.query(AssignmentState).with_for_update().first()
+    if not st:
+        st = AssignmentState()
+        db.add(st)
+        db.flush()
+    st.last_employee_id = emp.id
 
 
 def validate_assignee(emp: User | None) -> User:

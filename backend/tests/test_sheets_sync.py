@@ -21,6 +21,15 @@ def test_sheets_payload_shape():
     assert parsed.rows[0].name == "A"
 
 
+def test_sheets_payload_accepts_employee():
+    import json
+    parsed = SheetsPush.model_validate_json(json.dumps({
+        "sheet_id": "Leads",
+        "rows": [{"row_id": 2, "phone": "9840098400", "employee": "Aasin"}],
+    }).encode())
+    assert parsed.rows[0].employee == "Aasin"
+
+
 def test_sheets_payload_rejects_empty():
     import json
     parsed = SheetsPush.model_validate_json(json.dumps({"sheet_id": "x", "rows": []}).encode())
