@@ -153,5 +153,6 @@ class QuoteFormIn(BaseModel):
     payment_terms: str = ""
     delivery_period: str = ""
     post_warranty: str = ""
+    introduction: str = ""
     quotation_date: Optional[date] = None
     extra_lines: list[QuoteLineIn] = []

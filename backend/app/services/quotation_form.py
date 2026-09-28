@@ -46,6 +46,11 @@ DEFAULT_POST_WARRANTY = (
     "1. After the warranty period AMC is applicable.\n"
     "2. 3 - 4% of the Total cost per unit/year will be approximately charged for AMC."
 )
+DEFAULT_INTRODUCTION = (
+    "E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike "
+    "Parking System, Design & Manufacturing Company in Association with International Tycoons "
+    "from Japan, Germany & Korea, also a Group Company of MECHCI since 1995."
+)
 
 
 def normalize_delivery_period(text: str | None) -> str:
@@ -272,7 +277,7 @@ def _draw_letterhead_page(canvas, _doc):
     #   GURUKRIBA ………… centred over the E+star emblem (left half of logo)
     #   Sree Laal SidthBabaji … centred over the ESTAR wordmark (right half)
     canvas.setFillColor(colors.HexColor("#1e293b"))
-    canvas.setFont("Helvetica", 7)
+    canvas.setFont("Times-Roman", 8)
     canvas.drawCentredString(logo_x + logo_w * 0.22, logo_y + logo_h + 4, "GURUKRIBA")
     canvas.drawCentredString(logo_x + logo_w * 0.72, logo_y + logo_h + 4, "Sree Laal SidthBabaji")
     if logo:
@@ -286,12 +291,13 @@ def _draw_letterhead_page(canvas, _doc):
             mask="auto",
         )
     if FOOTER_BANNER.exists():
-        fw = page_w - 20 * mm
-        fh = 20 * mm
+        # Address banner from the quotation Word file: 171.4 mm wide, 24.8 mm tall.
+        fw = 171.4 * mm
+        fh = 24.8 * mm
         canvas.drawImage(
             str(FOOTER_BANNER),
-            10 * mm,
-            6 * mm,
+            (page_w - fw) / 2,
+            4 * mm,
             width=fw,
             height=fh,
             preserveAspectRatio=True,
@@ -313,14 +319,14 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         author="ESTAR Engineers Pvt Ltd",
     )
 
-    body = ParagraphStyle("body", fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#1e293b"), spaceAfter=2)
-    bold = ParagraphStyle("bold", parent=body, fontName="Helvetica-Bold")
-    small = ParagraphStyle("small", fontName="Helvetica", fontSize=9, leading=13, textColor=colors.HexColor("#334155"), spaceAfter=2)
-    small_bold = ParagraphStyle("small_bold", parent=small, fontName="Helvetica-Bold")
-    section = ParagraphStyle("section", parent=bold, spaceBefore=10, spaceAfter=4)
-    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
-    cell_left = ParagraphStyle("cell_l", fontName="Helvetica", fontSize=9, leading=12, alignment=0)
-    head = ParagraphStyle("head", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11, leading=13, textColor=colors.HexColor("#1e293b"), spaceAfter=2)
+    bold = ParagraphStyle("bold", parent=body, fontName="Times-Bold")
+    small = ParagraphStyle("small", fontName="Times-Roman", fontSize=10.5, leading=13, textColor=colors.HexColor("#334155"), spaceAfter=2)
+    small_bold = ParagraphStyle("small_bold", parent=small, fontName="Times-Bold")
+    section = ParagraphStyle("section", parent=bold, fontSize=11, leading=13, spaceBefore=10, spaceAfter=4)
+    cell = ParagraphStyle("cell", fontName="Times-Roman", fontSize=11, leading=13, alignment=1)
+    cell_left = ParagraphStyle("cell_l", fontName="Times-Roman", fontSize=11, leading=13, alignment=0)
+    head = ParagraphStyle("head", parent=cell, fontName="Times-Bold", textColor=colors.white)
 
     quote_date = data.get("quotation_date") or date.today().isoformat()
     if hasattr(quote_date, "isoformat"):
@@ -336,7 +342,6 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     payment_terms = (data.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
     delivery_period = normalize_delivery_period(data.get("delivery_period"))
     post_warranty = (data.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
-    just = ParagraphStyle("just", parent=small, alignment=4)
     unit_cost = float(data.get("unit_cost") or 0)
     units = float(data.get("units") or 0)
     extra_lines = data.get("extra_lines") or []
@@ -374,12 +379,12 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     story.append(Spacer(1, 10))
     story.append(Paragraph(f"<b>Sub: - {subject}</b>", body))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(
-        "E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike "
-        "Parking System, Design &amp; Manufacturing Company in Association with International Tycoons "
-        "from Japan, Germany &amp; Korea, also a Group Company of MECHCI since 1995.",
-        just,
-    ))
+    intro = data.get("introduction")
+    if intro is None:
+        intro = DEFAULT_INTRODUCTION
+    intro = str(intro).strip()
+    if intro:
+        story.extend(_multiline_paras(intro, ParagraphStyle("intro", parent=body, alignment=4)))
     story.append(Spacer(1, 14))
 
     line_rows = [[
@@ -484,7 +489,7 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     else:
         story.append(Spacer(1, 16))
     story.append(Paragraph("<b>JAYARAMAN K</b>", bold))
-    story.append(Paragraph("<b>Director</b>", small))
+    story.append(Paragraph("<b>Director</b>", ParagraphStyle("director", parent=bold, fontSize=9.5, leading=12)))
     story.append(Spacer(1, 20))
     story.append(Paragraph("<b>BANKING DETAILS:</b>", section))
     for line in [
