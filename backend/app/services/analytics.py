@@ -13,11 +13,11 @@ max, and median. Dates use ``enquiry_date`` (a date column, no timezone shift).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from uuid import UUID
 
-from sqlalchemy import Integer, String, and_, case, cast, exists, func, or_
+from sqlalchemy import Date, Integer, String, and_, case, cast, exists, func, or_
 from sqlalchemy.orm import Session
 
 from app.models import Lead, LeadActivity, LeadSource, LeadStatus, Product, User
@@ -661,21 +661,25 @@ def _cars_sort_key(name: str):
 
 
 COMPARE_OPTIONS = {
+    "leads": {"label": "No. of Leads", "measures": ("leads",), "default": "leads"},
     "lead_value": {
         "label": "Lead Value",
         "measures": ("leads", "lead_value"),
         "default": "leads",
     },
+    "quotations": {"label": "No. of Quotations", "measures": ("quotations",), "default": "quotations"},
     "quotation_value": {
-        "label": "Quotation Value",
+        "label": "Quotation",
         "measures": ("quotations", "quotation_value"),
         "default": "quotations",
     },
     "progress": {"label": "Progress", "measures": ("leads",), "default": "leads"},
     "category": {"label": "Category", "measures": ("leads",), "default": "leads"},
     "product": {"label": "Product", "measures": ("leads",), "default": "leads"},
+    "source": {"label": "Source", "measures": ("leads",), "default": "leads"},
     "cars": {"label": "Cars", "measures": ("leads",), "default": "leads"},
 }
+DIMENSION_COMPARE = {"progress", "category", "product", "source", "cars"}
 
 MEASURE_LABELS = {
     "leads": "No. of Leads",
@@ -699,10 +703,16 @@ def _period_label(months: list[int]) -> str:
 
 
 def _progress_names(db: Session) -> list[str]:
-    names = [name for (name,) in db.query(LeadStatus.name).order_by(LeadStatus.sort_order, LeadStatus.name).all()]
+    from app.services.normalize import CANONICAL_STATUSES
+
+    stored = [name for (name,) in db.query(LeadStatus.name).order_by(LeadStatus.sort_order, LeadStatus.name).all()]
+    names = [name for name, *_rest in CANONICAL_STATUSES]
+    for name in stored:
+        if name not in names:
+            names.append(name)
     if "Assigned" not in names:
         if "New Lead" in names:
-            names.insert(names.index("New Lead"), "Assigned")
+            names.insert(names.index("New Lead") + 1, "Assigned")
         else:
             names.insert(0, "Assigned")
     return names
@@ -724,7 +734,29 @@ def _category_names(db: Session) -> list[str]:
     return names
 
 
+def _source_names(db: Session) -> list[str]:
+    from app.services.normalize import CANONICAL_SOURCES
+
+    stored = [
+        name for (name,) in (
+            db.query(func.distinct(source_expr()))
+            .select_from(Lead)
+            .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+            .filter(Lead.is_active.is_(True))
+            .all()
+        )
+        if name
+    ]
+    names = [name for name in CANONICAL_SOURCES if name]
+    for name in stored:
+        if name not in names:
+            names.append(name)
+    return names or ["Unspecified"]
+
+
 def _product_names(db: Session) -> list[str]:
+    from app.services.pricing import CANONICAL_PRODUCTS
+
     stored = [
         name for (name,) in (
             db.query(func.distinct(product_expr()))
@@ -735,10 +767,16 @@ def _product_names(db: Session) -> list[str]:
         )
         if name
     ]
+    names = list(CANONICAL_PRODUCTS)
+    for name in stored:
+        if name not in names and name != "Unmapped":
+            names.append(name)
     for (name,) in db.query(Product.name).filter(Product.is_active.is_(True)).order_by(Product.name):
-        if name not in stored:
-            stored.append(name)
-    return stored or ["Unmapped"]
+        if name not in names:
+            names.append(name)
+    if "Unmapped" not in names:
+        names.append("Unmapped")
+    return names
 
 
 def _comparison_catalog(db: Session, kind: str, f: LeadFilters, found: list[str]) -> list[str]:
@@ -753,6 +791,10 @@ def _comparison_catalog(db: Session, kind: str, f: LeadFilters, found: list[str]
         if f.categories:
             names = [name for name in names if name in f.categories] or list(f.categories)
         return names
+    if kind == "source":
+        if f.source_ids or f.source_unspecified:
+            return list(dict.fromkeys(found)) or _source_names(db)
+        return _source_names(db)
     if kind == "cars":
         if f.cars:
             return sorted(set(f.cars), key=_cars_sort_key)
@@ -775,6 +817,186 @@ def _comparison_catalog(db: Session, kind: str, f: LeadFilters, found: list[str]
     return _product_names(db)
 
 
+def _lead_day():
+    """Enquiry date. When that is blank, the day the lead was added in India."""
+    added = cast(func.timezone("Asia/Kolkata", Lead.created_at), Date)
+    return func.coalesce(Lead.enquiry_date, added)
+
+
+def _dated_leads(db: Session, f: LeadFilters):
+    """Same lead filters, but the year and month follow the enquiry date or the added day."""
+    day = _lead_day()
+    bare = replace(f, years=[], months=[], from_date=None, to_date=None)
+    q = apply_filters(_base(db), bare)
+    if f.years:
+        q = q.filter(func.extract("year", day).in_(list(f.years)))
+    chosen_months = sorted({m for m in f.months if 1 <= m <= 12})
+    if chosen_months:
+        q = q.filter(func.extract("month", day).in_(chosen_months))
+    if f.from_date:
+        q = q.filter(day >= f.from_date)
+    if f.to_date:
+        q = q.filter(day <= f.to_date)
+    return q, day
+
+
+def _shift_year(day: date, years: int) -> date:
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:
+        return day.replace(year=day.year + years, day=28)
+
+
+def _add_months(day: date, months: int) -> date:
+    month_index = day.month - 1 + months
+    year = day.year + month_index // 12
+    month = month_index % 12 + 1
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    last_day = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return date(year, month, min(day.day, last_day))
+
+
+def _previous_span(start: date, end: date) -> tuple[date, date]:
+    length = (end - start).days
+    previous_end = start - timedelta(days=1)
+    return previous_end - timedelta(days=length), previous_end
+
+
+RANGE_PRESETS = {
+    "24h_prev": "Compare last 24 hours to previous period",
+    "24h_wow": "Compare last 24 hours week over week",
+    "7d_prev": "Compare last 7 days to previous period",
+    "7d_yoy": "Compare last 7 days year over year",
+    "28d_prev": "Compare last 28 days to previous period",
+    "28d_yoy": "Compare last 28 days year over year",
+    "3m_prev": "Compare last 3 months to previous period",
+    "3m_yoy": "Compare last 3 months year over year",
+    "6m_prev": "Compare last 6 months to previous period",
+    "custom": "Custom",
+}
+
+
+def range_windows(preset: str, today: date) -> tuple[tuple[date, date], tuple[date, date]]:
+    """Current window and the window it is compared with. Dates are inclusive."""
+    if preset == "24h_prev":
+        current = (today, today)
+        previous = (today - timedelta(days=1), today - timedelta(days=1))
+    elif preset == "24h_wow":
+        current = (today, today)
+        previous = (today - timedelta(days=7), today - timedelta(days=7))
+    elif preset == "7d_prev":
+        current = (today - timedelta(days=6), today)
+        previous = _previous_span(*current)
+    elif preset == "7d_yoy":
+        current = (today - timedelta(days=6), today)
+        previous = (_shift_year(current[0], -1), _shift_year(current[1], -1))
+    elif preset == "28d_prev":
+        current = (today - timedelta(days=27), today)
+        previous = _previous_span(*current)
+    elif preset == "28d_yoy":
+        current = (today - timedelta(days=27), today)
+        previous = (_shift_year(current[0], -1), _shift_year(current[1], -1))
+    elif preset == "3m_prev":
+        current = (_add_months(today, -3) + timedelta(days=1), today)
+        previous = _previous_span(*current)
+    elif preset == "3m_yoy":
+        current = (_add_months(today, -3) + timedelta(days=1), today)
+        previous = (_shift_year(current[0], -1), _shift_year(current[1], -1))
+    elif preset == "6m_prev":
+        current = (_add_months(today, -6) + timedelta(days=1), today)
+        previous = _previous_span(*current)
+    else:
+        raise ValueError(preset)
+    return current, previous
+
+
+def _dimension_expr(kind: str):
+    return {
+        "progress": status_expr,
+        "category": category_expr,
+        "product": product_expr,
+        "source": source_expr,
+        "cars": cars_expr,
+    }[kind]()
+
+
+def build_range_comparison(
+    db: Session,
+    f: LeadFilters,
+    compare_by: str,
+    measure: str,
+    current_start: date,
+    current_end: date,
+    previous_start: date,
+    previous_end: date,
+    item: str | None = None,
+) -> dict:
+    """This date range against the range it is compared with. One lead is counted once."""
+    if compare_by not in COMPARE_OPTIONS:
+        raise ValueError(compare_by)
+    chosen = measure if measure in COMPARE_OPTIONS[compare_by]["measures"] else COMPARE_OPTIONS[compare_by]["default"]
+    bare = replace(f, years=[], months=[], from_date=None, to_date=None)
+    chosen_item = (item or "").strip()
+
+    def daily(start: date, end: date) -> dict[date, int]:
+        lead_day = _lead_day()
+        q = apply_filters(_base(db), bare).filter(lead_day >= start, lead_day <= end)
+        if chosen_item and compare_by in DIMENSION_COMPARE:
+            q = q.filter(_dimension_expr(compare_by) == chosen_item)
+        rows = (
+            q.with_entities(lead_day.label("day"), *_measure_cells())
+            .group_by(lead_day)
+            .all()
+        )
+        found: dict[date, int] = {}
+        for row in rows:
+            if row.day is None:
+                continue
+            stamp = row.day if type(row.day) is date else row.day.date()
+            found[stamp] = found.get(stamp, 0) + _picked(row, chosen)
+        return found
+
+    def days_between(start: date, end: date) -> list[date]:
+        out = []
+        cursor = start
+        while cursor <= end:
+            out.append(cursor)
+            cursor += timedelta(days=1)
+        return out
+
+    current_found = daily(current_start, current_end)
+    previous_found = daily(previous_start, previous_end)
+    current_days = days_between(current_start, current_end)
+    previous_days = days_between(previous_start, previous_end)
+    series = []
+    for index in range(max(len(current_days), len(previous_days))):
+        current_day = current_days[index] if index < len(current_days) else None
+        previous_day = previous_days[index] if index < len(previous_days) else None
+        series.append({
+            "day": index + 1,
+            "current_date": current_day.isoformat() if current_day else None,
+            "previous_date": previous_day.isoformat() if previous_day else None,
+            "current": current_found.get(current_day, 0) if current_day else 0,
+            "previous": previous_found.get(previous_day, 0) if previous_day else 0,
+        })
+    current_total = sum(current_found.values())
+    previous_total = sum(previous_found.values())
+    return {
+        "compare_by": compare_by,
+        "compare_label": COMPARE_OPTIONS[compare_by]["label"],
+        "item": chosen_item or None,
+        "measure": chosen,
+        "measure_label": MEASURE_LABELS.get(chosen, "Count"),
+        "money": chosen in MONEY_MEASURES,
+        "current": {"from": current_start.isoformat(), "to": current_end.isoformat()},
+        "previous": {"from": previous_start.isoformat(), "to": previous_end.isoformat()},
+        "current_total": current_total,
+        "previous_total": previous_total,
+        "change": percent_change(current_total, previous_total),
+        "series": series,
+    }
+
+
 def _measure_cells():
     return (
         func.count(Lead.id).label("leads"),
@@ -794,11 +1016,34 @@ def _picked(row, measure: str) -> int:
     return _int(row.leads)
 
 
+def _comparison_chart(month_rows, years, details, month_found, kind) -> dict:
+    """Lead measures use months. Category, product, source, and progress use one row per type."""
+    del month_found
+    if not kind:
+        lines = [{"key": str(year), "name": str(year)} for year in years]
+        points = []
+        for row in month_rows:
+            point = {"name": str(row["name"])[:3]}
+            for year in years:
+                point[str(year)] = int(row["values"].get(str(year), 0) or 0)
+            points.append(point)
+        return {"lines": lines, "points": points}
+    lines = [{"key": str(year), "name": str(year)} for year in years]
+    points = []
+    for item in details:
+        point = {"name": item["name"]}
+        for year in years:
+            point[str(year)] = int(item["values"].get(str(year), 0) or 0)
+        points.append(point)
+    return {"lines": lines, "points": points}
+
+
 def build_comparison(db: Session, f: LeadFilters, compare_by: str, measure: str | None = None) -> dict:
     """Month-by-year matrix, plus a dimension breakdown when compare-by is not a value.
 
     Every figure is the current lead. History, assignments, and quotation revisions
     are not joined, so one lead stays one lead. Quotation NULL is missing, not zero.
+    A lead with no enquiry date is counted on the day it was added.
     """
     spec = COMPARE_OPTIONS.get(compare_by)
     if spec is None:
@@ -806,12 +1051,11 @@ def build_comparison(db: Session, f: LeadFilters, compare_by: str, measure: str 
     chosen = measure if measure in spec["measures"] else spec["default"]
     years = sorted(set(f.years))
     months = sorted({m for m in f.months if 1 <= m <= 12}) or list(range(1, 13))
-    year_no = func.extract("year", Lead.enquiry_date)
-    month_no = func.extract("month", Lead.enquiry_date)
+    grid_q, day = _dated_leads(db, f)
+    year_no = func.extract("year", day)
+    month_no = func.extract("month", day)
     grid_rows = (
-        apply_filters(_base(db), f)
-        .filter(Lead.enquiry_date.isnot(None))
-        .with_entities(year_no.label("year"), month_no.label("month"), *_measure_cells())
+        grid_q.with_entities(year_no.label("year"), month_no.label("month"), *_measure_cells())
         .group_by(year_no, month_no)
         .all()
     )
@@ -830,32 +1074,61 @@ def build_comparison(db: Session, f: LeadFilters, compare_by: str, measure: str 
         for key, value in values.items():
             selected[key] += value
         month_rows.append({"month": number, "name": MONTH_NAMES[number - 1], "values": values})
-    kind = None if compare_by in {"lead_value", "quotation_value"} else compare_by
+    kind = compare_by if compare_by in DIMENSION_COMPARE else None
     details: list[dict] = []
+    month_found: dict[tuple[str, int, int], int] = {}
     if kind:
-        expr = {"progress": status_expr, "category": category_expr, "product": product_expr, "cars": cars_expr}[kind]()
+        expr = {
+            "progress": status_expr,
+            "category": category_expr,
+            "product": product_expr,
+            "source": source_expr,
+            "cars": cars_expr,
+        }[kind]()
         label = expr.label("name")
+        grouped_q, grouped_day = _dated_leads(db, f)
+        grouped_year = func.extract("year", grouped_day)
+        grouped_month = func.extract("month", grouped_day)
         grouped = (
-            apply_filters(_base(db), f)
-            .filter(Lead.enquiry_date.isnot(None))
-            .with_entities(label, year_no.label("year"), *_measure_cells())
-            .group_by(label, year_no)
+            grouped_q.with_entities(label, grouped_year.label("year"), grouped_month.label("month"), *_measure_cells())
+            .group_by(label, grouped_year, grouped_month)
             .all()
         )
         found: dict[str, dict[str, int]] = {}
         for row in grouped:
             if not row.name or row.year is None:
                 continue
-            found.setdefault(str(row.name), {})[str(int(row.year))] = _picked(row, chosen)
+            value = _picked(row, chosen)
+            year_key = str(int(row.year))
+            bucket = found.setdefault(str(row.name), {})
+            bucket[year_key] = bucket.get(year_key, 0) + value
+            if row.month is not None:
+                month_found[(str(row.name), int(row.year), int(row.month))] = value
         catalog = _comparison_catalog(db, kind, f, list(found))
         for name in catalog:
             values = {key: found.get(name, {}).get(key, 0) for key in year_keys}
             details.append({"name": name, "values": values})
-        if kind == "product":
-            details.sort(key=lambda item: (-sum(item["values"].values()), item["name"].lower()))
-        elif kind == "cars":
+        if kind == "cars":
             details.sort(key=lambda item: _cars_sort_key(item["name"]))
-    kpi = _query_kpi(db, f)
+    by_month = []
+    if kind:
+        for number in months:
+            by_month.append({
+                "month": number,
+                "name": MONTH_NAMES[number - 1],
+                "items": [
+                    {
+                        "name": item["name"],
+                        "values": {
+                            key: int(month_found.get((item["name"], int(key), number), 0) or 0)
+                            for key in year_keys
+                        },
+                    }
+                    for item in details
+                ],
+            })
+    kpi_q, _kpi_day = _dated_leads(db, f)
+    kpi = _pack_kpi(kpi_q.with_entities(*_kpi_columns()).one())
     return {
         "compare_by": compare_by,
         "compare_label": spec["label"],
@@ -867,10 +1140,12 @@ def build_comparison(db: Session, f: LeadFilters, compare_by: str, measure: str 
         "period_label": _period_label(months),
         "selected_total": selected,
         "details": details,
+        "by_month": by_month,
         "detail_label": COMPARE_OPTIONS[kind]["label"] if kind else None,
+        "chart": _comparison_chart(month_rows, years, details, month_found, kind),
         "kpi": kpi,
         "rules": {
-            "date_field": "enquiry_date",
+            "date_field": "enquiry_date, or the day the lead was added when the enquiry date is blank",
             "state": "current progress, category, product, cars, lead value, and quotation value",
             "quotation": "leads.quotation_value. NULL is missing and is not counted as a quotation. 0 is a saved zero.",
             "lead_value": "sum of leads.lead_value. NULL is left out of the total.",

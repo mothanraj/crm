@@ -10,6 +10,7 @@ import csv
 from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -25,10 +26,13 @@ from app.db.session import get_db
 from app.models import User
 from app.services.analytics import (
     COMPARE_OPTIONS,
+    RANGE_PRESETS,
     LeadFilters,
     available_years,
     build_comparison,
     build_period_comparison,
+    build_range_comparison,
+    range_windows,
     year_month_matrix,
     build_summary,
     iter_export_rows,
@@ -245,6 +249,23 @@ def analytics_comparison(
     previous_to: str | None = None,
 ):
     _require(u)
+    aliases = {"lead": "leads", "quotation": "quotations"}
+    compare_by = aliases.get(compare_by, compare_by)
+    year_measure = {
+        "leads": "leads",
+        "lead_value": "lead_value",
+        "quotations": "quotations",
+        "quotation_value": "quotation_value",
+        "category": "leads",
+        "product": "leads",
+        "source": "leads",
+        "progress": "leads",
+    }
+    if compare_by in year_measure:
+        try:
+            return build_comparison(db, filters, compare_by, year_measure[compare_by])
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid compare by") from exc
     kind = {"lead": "lead", "quotation": "quotation", "lead_value": "lead", "quotation_value": "quotation"}.get(compare_by)
     if kind and any([current_from, current_to, previous_from, previous_to, compare_by in {"lead", "quotation"}]):
         today = date.today()
@@ -281,6 +302,120 @@ def analytics_comparison(
         return build_comparison(db, filters, compare_by, measure)
     except ValueError as exc:
         raise HTTPException(400, "Invalid compare by") from exc
+
+
+def _comparison_payload(db: Session, filters: LeadFilters, compare_by: str, measure: str | None):
+    aliases = {"lead": "leads", "quotation": "quotations"}
+    compare_by = aliases.get(compare_by, compare_by)
+    year_measure = {
+        "leads": "leads",
+        "lead_value": "lead_value",
+        "quotations": "quotations",
+        "quotation_value": "quotation_value",
+        "category": "leads",
+        "product": "leads",
+        "source": "leads",
+        "progress": "leads",
+    }
+    if compare_by in year_measure:
+        try:
+            return build_comparison(db, filters, compare_by, year_measure[compare_by])
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid compare by") from exc
+    if compare_by not in COMPARE_OPTIONS:
+        raise HTTPException(400, "Invalid compare by")
+    try:
+        return build_comparison(db, filters, compare_by, measure)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid compare by") from exc
+
+
+@router.get("/comparison/pdf")
+def analytics_comparison_pdf(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    filters: LeadFilters = Depends(_common),
+    compare_by: str = "leads",
+    measure: str | None = None,
+    item: str | None = None,
+):
+    _require(u)
+    from app.services.report_pdf import build_comparison_pdf
+
+    payload = _comparison_payload(db, filters, compare_by, measure)
+    chosen = (item or "").strip()
+    details = payload.get("details") or []
+    if details and not any(row.get("name") == chosen for row in details):
+        label = str(payload.get("detail_label") or "item").lower()
+        raise HTTPException(400, f"Choose one {label}")
+    content = build_comparison_pdf(payload, chosen or None)
+    stamp = datetime.now().strftime("%Y%m%d")
+    slug = chosen or str(payload.get("compare_by") or "comparison")
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in slug).strip("-") or "comparison"
+    filename = f"comparison-{safe}-{stamp}.pdf"
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/range-comparison")
+def analytics_range_comparison(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    filters: LeadFilters = Depends(_common),
+    compare_by: str = "leads",
+    preset: str = "",
+    item: str | None = None,
+    current_from: str | None = None,
+    current_to: str | None = None,
+    previous_from: str | None = None,
+    previous_to: str | None = None,
+):
+    _require(u)
+    aliases = {"lead": "leads", "quotation": "quotations"}
+    compare_by = aliases.get(compare_by, compare_by)
+    year_measure = {
+        "leads": "leads",
+        "lead_value": "lead_value",
+        "quotations": "quotations",
+        "quotation_value": "quotation_value",
+        "category": "leads",
+        "product": "leads",
+        "source": "leads",
+        "progress": "leads",
+    }
+    if preset not in RANGE_PRESETS:
+        raise HTTPException(400, "Choose a comparison range")
+    if preset == "custom":
+        current_start = _parse_date(current_from, "current start")
+        current_end = _parse_date(current_to, "current end")
+        previous_start = _parse_date(previous_from, "previous start")
+        previous_end = _parse_date(previous_to, "previous end")
+        if not all([current_start, current_end, previous_start, previous_end]):
+            raise HTTPException(400, "Custom comparison needs a start and end date on both ranges")
+    else:
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        try:
+            (current_start, current_end), (previous_start, previous_end) = range_windows(preset, today)
+        except ValueError as exc:
+            raise HTTPException(400, "Choose a comparison range") from exc
+    if current_start > current_end or previous_start > previous_end:
+        raise HTTPException(400, "A comparison range starts after it ends")
+    if (current_end - current_start).days > 1100 or (previous_end - previous_start).days > 1100:
+        raise HTTPException(400, "Choose a range of 3 years or less")
+    measure = year_measure.get(compare_by)
+    try:
+        payload = build_range_comparison(
+            db, filters, compare_by, measure or "leads",
+            current_start, current_end, previous_start, previous_end, item,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid compare by") from exc
+    payload["preset"] = preset
+    payload["preset_label"] = RANGE_PRESETS[preset]
+    return payload
 
 
 @router.get("/rows")

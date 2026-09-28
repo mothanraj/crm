@@ -252,6 +252,109 @@ def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return d
 
 
+PERIOD_PROGRESS = [
+    "In Followup",
+    "Meeting",
+    "Site Visit",
+    "Quotation sent",
+    "Converted",
+    "Not Interested",
+]
+_PROGRESS_ALIASES = {"Not Interested/Spam": "Not Interested"}
+
+
+def _employee_period_payload(
+    db: Session,
+    u: User,
+    mode: str,
+    month: str | None,
+    week: str | None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    if not _is_employee(u):
+        raise HTTPException(403, "This report is for your own assigned work")
+    if from_date or to_date:
+        start = _parse_date(from_date, "from date")
+        end = _parse_date(to_date, "to date")
+        if not start or not end:
+            raise HTTPException(400, "Choose a from date and a to date")
+        if start > end:
+            raise HTTPException(400, "From date must be on or before to date")
+        resolved = "week"
+    else:
+        start, end, resolved = _resolve_range(mode, month, None, None, week)
+    if not start or not end:
+        raise HTTPException(400, "Choose a month or a week")
+    local_day = func.date(func.timezone("Asia/Kolkata", LeadActivity.activity_at))
+    rows = (
+        db.query(LeadActivity.outcome, LeadActivity.customer_review, LeadActivity.lead_id)
+        .filter(
+            LeadActivity.employee_id == u.id,
+            LeadActivity.activity_type == "Work Progress",
+            LeadActivity.activity_at.isnot(None),
+            local_day >= start,
+            local_day <= end,
+        )
+        .all()
+    )
+    progress = {name: 0 for name in PERIOD_PROGRESS}
+    category_leads = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+    for outcome, review, lead_id in rows:
+        label = _PROGRESS_ALIASES.get((outcome or "").strip(), (outcome or "").strip())
+        if label in progress:
+            progress[label] += 1
+        cat = (review or "").strip()
+        cat = CUSTOMER_REVIEW_ALIASES.get(cat, cat)
+        if cat in category_leads and lead_id:
+            category_leads[cat].add(lead_id)
+    return {
+        "employee": u.name or "Employee",
+        "mode": resolved,
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "progress": [{"label": name, "count": progress[name]} for name in PERIOD_PROGRESS],
+        "category": [{"label": name, "count": len(category_leads[name])} for name in CUSTOMER_REVIEW_ORDER],
+    }
+
+
+@router.get("/dashboard/period-report")
+def period_report(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("month"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    """Work this employee logged in a month or week: every progress and category."""
+    return _employee_period_payload(db, u, mode, month, week, from_date, to_date)
+
+
+@router.get("/dashboard/period-report/pdf")
+def period_report_pdf(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("month"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    from app.services.report_pdf import build_employee_period_pdf
+
+    payload = _employee_period_payload(db, u, mode, month, week, from_date, to_date)
+    content = build_employee_period_pdf(payload)
+    stamp = payload["from"] if payload["mode"] == "week" else payload["from"][:7]
+    filename = f"my-report-{payload['mode']}-{stamp}.pdf"
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _as_rupee(v) -> int:
     try:
         return int(round(float(v or 0)))

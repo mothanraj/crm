@@ -648,7 +648,6 @@ export function EmployeeDashboard() {
     );
   }
   if (!d) return <Spinner />;
-  const f = d.funnel || {};
   const statusName = (sid?: string) => masters?.statuses?.find((s: any) => s.id === sid)?.name ?? 'Assigned';
   const overduePending = pending.filter((l: any) => l.sla_state === 'OVERDUE').slice(0, 5);
   const recent = todos.slice(0, 5);
@@ -665,7 +664,6 @@ export function EmployeeDashboard() {
     return sum + (Number(row.count) || 0);
   }, 0);
   const progressTiles = [
-    { label: 'Assigned', bg: 'bg-[#0e7490]' },
     { label: 'In Followup', bg: 'bg-[#c0392b]' },
     { label: 'Meeting', bg: 'bg-[#0284c7]' },
     { label: 'Site Visit', bg: 'bg-[#65A30D]' },
@@ -681,11 +679,9 @@ export function EmployeeDashboard() {
   ];
   const tiles = [
     { label: 'My assigned leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
-    { label: 'Needs first contact', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
+    { label: 'Pending', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
     { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
     { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#2F9E44]', hint: 'First contact recorded' },
-    { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#0e7490]', hint: 'My pipeline' },
-    { label: 'Converted', value: f.converted ?? 0, bg: 'bg-[#65A30D]', hint: 'My wins' },
   ];
   return (
     <div className="space-y-5">
@@ -695,7 +691,7 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {tiles.map((t) => (
           <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
             <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
@@ -705,23 +701,23 @@ export function EmployeeDashboard() {
         ))}
       </div>
       <div>
-        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-          {progressTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount(t.label, '')}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div>
         <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {categoryTiles.map((t) => (
             <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
               <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
               <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount('', t.label)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {progressTiles.map((t) => (
+            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount(t.label, '')}</div>
             </div>
           ))}
         </div>
@@ -811,6 +807,247 @@ export function EmployeeDashboard() {
   );
 }
 
+const REPORT_PROGRESS_BG: Record<string, string> = {
+  'In Followup': 'bg-[#c0392b]',
+  Meeting: 'bg-[#0284c7]',
+  'Site Visit': 'bg-[#65A30D]',
+  'Quotation sent': 'bg-[#2F9E44]',
+  Converted: 'bg-[#3F6212]',
+  'Not Interested': 'bg-[#7b241c]',
+};
+const REPORT_CATEGORY_BG: Record<string, string> = {
+  'A+ (Immediate)': 'bg-[#7c3aed]',
+  'A (3-6 months)': 'bg-[#d97706]',
+  'B (1 year)': 'bg-[#0284c7]',
+  'C (Planning Stage)': 'bg-[#475569]',
+};
+
+const REPORT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function reportYears() {
+  const end = new Date().getFullYear() + 5;
+  const years: number[] = [];
+  for (let year = end; year >= 1990; year -= 1) years.push(year);
+  return years;
+}
+
+function mondayOnOrBefore(d: Date) {
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  return monday;
+}
+
+function reportYmd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function dateInYear(iso: string, year: number) {
+  const [, monthText, dayText] = iso.split('-');
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const last = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
+}
+
+function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: {
+  title: string;
+  controls: any;
+  data: any;
+  loading: boolean;
+  error: string;
+  onPdf: () => void;
+  pdfBusy: boolean;
+}) {
+  return (
+    <Card title={title} action={(
+      <button type="button" className="btn-secondary" disabled={pdfBusy || loading} onClick={onPdf}>
+        {pdfBusy ? 'Creating PDF…' : 'Download PDF'}
+      </button>
+    )}>
+      <div className="mb-4">{controls}</div>
+      {error ? <p className="text-sm text-red-700">{error}</p> : loading && !data ? <Spinner /> : (
+        <>
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {(data?.progress || []).map((row: any) => (
+              <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
+                <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mt-4 mb-2">Category</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {(data?.category || []).map((row: any) => (
+              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#475569]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
+                <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+              </div>
+            ))}
+          </div>
+          {data?.from && <p className="text-xs text-graphite-500 mt-3">Work logged from {data.from} to {data.to}.</p>}
+        </>
+      )}
+    </Card>
+  );
+}
+
+export function EmployeeReport() {
+  const years = useMemo(reportYears, []);
+  const today = new Date();
+  const [monthYear, setMonthYear] = useState(today.getFullYear());
+  const [monthIndex, setMonthIndex] = useState(today.getMonth() + 1);
+  const [weekYear, setWeekYear] = useState(today.getFullYear());
+  const [weekFrom, setWeekFrom] = useState(() => reportYmd(mondayOnOrBefore(today)));
+  const [weekTo, setWeekTo] = useState(() => {
+    const start = mondayOnOrBefore(today);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return reportYmd(end);
+  });
+  const month = `${monthYear}-${String(monthIndex).padStart(2, '0')}`;
+  const [monthData, setMonthData] = useState<any>(null);
+  const [weekData, setWeekData] = useState<any>(null);
+  const [monthErr, setMonthErr] = useState('');
+  const [weekErr, setWeekErr] = useState('');
+  const [monthLoading, setMonthLoading] = useState(true);
+  const [weekLoading, setWeekLoading] = useState(true);
+  const [pdfBusy, setPdfBusy] = useState<'month' | 'week' | ''>('');
+  const [pdfErr, setPdfErr] = useState('');
+
+  async function downloadPdf(mode: 'month' | 'week') {
+    setPdfBusy(mode);
+    setPdfErr('');
+    try {
+      const params = mode === 'month' ? { mode, month } : { mode, from_date: weekFrom, to_date: weekTo };
+      const filename = mode === 'month' ? `my-report-${month}.pdf` : `my-report-${weekFrom}-to-${weekTo}.pdf`;
+      await downloadReport('/dashboard/period-report/pdf', filename, params);
+    } catch (e: any) {
+      setPdfErr(e?.message || 'Could not download the PDF');
+    } finally {
+      setPdfBusy('');
+    }
+  }
+
+  useEffect(() => {
+    if (!month) return;
+    const ctrl = new AbortController();
+    setMonthLoading(true);
+    setMonthErr('');
+    api.get('/dashboard/period-report', { params: { mode: 'month', month }, signal: ctrl.signal })
+      .then((r) => setMonthData(r.data))
+      .catch((e: any) => { if (!ctrl.signal.aborted) setMonthErr(e?.response?.data?.detail || 'Could not load the monthly report'); })
+      .finally(() => { if (!ctrl.signal.aborted) setMonthLoading(false); });
+    return () => ctrl.abort();
+  }, [month]);
+
+  useEffect(() => {
+    if (!weekFrom || !weekTo || weekFrom > weekTo) {
+      setWeekLoading(false);
+      setWeekErr('From date must be on or before to date');
+      return;
+    }
+    const ctrl = new AbortController();
+    setWeekLoading(true);
+    setWeekErr('');
+    api.get('/dashboard/period-report', { params: { mode: 'week', from_date: weekFrom, to_date: weekTo }, signal: ctrl.signal })
+      .then((r) => setWeekData(r.data))
+      .catch((e: any) => { if (!ctrl.signal.aborted) setWeekErr(e?.response?.data?.detail || 'Could not load the weekly report'); })
+      .finally(() => { if (!ctrl.signal.aborted) setWeekLoading(false); });
+    return () => ctrl.abort();
+  }, [weekFrom, weekTo]);
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="My reports"
+        subtitle="How many site visits, follow-ups and other progress you logged, and the category, for a month or a week."
+      />
+      {pdfErr && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{pdfErr}</div>}
+      <ReportBlock
+        title="Monthly"
+        data={monthData}
+        loading={monthLoading}
+        error={monthErr}
+        pdfBusy={pdfBusy === 'month'}
+        onPdf={() => { void downloadPdf('month'); }}
+        controls={(
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm block w-[140px]">Year
+              <select className="input mt-1" value={monthYear} onChange={(e) => setMonthYear(Number(e.target.value))}>
+                {years.map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+            </label>
+            <label className="text-sm block w-[180px]">Month
+              <select className="input mt-1" value={monthIndex} onChange={(e) => setMonthIndex(Number(e.target.value))}>
+                {REPORT_MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
+              </select>
+            </label>
+          </div>
+        )}
+      />
+      <ReportBlock
+        title="Weekly"
+        data={weekData}
+        loading={weekLoading}
+        error={weekErr}
+        pdfBusy={pdfBusy === 'week'}
+        onPdf={() => { void downloadPdf('week'); }}
+        controls={(
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm block w-[140px]">Year
+              <select
+                className="input mt-1"
+                value={weekYear}
+                onChange={(e) => {
+                  const year = Number(e.target.value);
+                  setWeekYear(year);
+                  setWeekFrom((currentFrom) => {
+                    const nextFrom = dateInYear(currentFrom, year);
+                    setWeekTo((currentTo) => {
+                      const nextTo = dateInYear(currentTo, year);
+                      return nextTo < nextFrom ? nextFrom : nextTo;
+                    });
+                    return nextFrom;
+                  });
+                }}
+              >
+                {years.map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+            </label>
+            <label className="text-sm block w-[180px]">From date
+              <input
+                type="date"
+                className="input mt-1"
+                value={weekFrom}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (!value) return;
+                  setWeekFrom(value);
+                  setWeekYear(Number(value.slice(0, 4)));
+                  setWeekTo((current) => (current < value ? value : current));
+                }}
+              />
+            </label>
+            <label className="text-sm block w-[180px]">To date
+              <input
+                type="date"
+                className="input mt-1"
+                value={weekTo}
+                min={weekFrom}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (!value) return;
+                  setWeekTo(value < weekFrom ? weekFrom : value);
+                }}
+              />
+            </label>
+          </div>
+        )}
+      />
+    </div>
+  );
+}
+
 /* ================= QUOTATION FORM (employee) — Word-like letter ================= */
 function inrIndian(n: number) {
   const v = Math.round(Math.abs(n || 0));
@@ -841,7 +1078,9 @@ function quoteDocField({
     ? 'bg-transparent border-0 border-b border-transparent px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug cursor-default'
     : 'bg-transparent border-0 border-b border-dashed border-sky-400/80 outline-none focus:border-brand-600 focus:bg-amber-50/40 px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug';
   if (multiline) {
-    return <textarea {...rest} readOnly={readOnly} className={`${base} resize-y min-h-[52px] ${className || ''}`} />;
+    const text = String(rest.value ?? '');
+    const rows = Math.max(2, text.split(/\r\n|\n|\r/).length);
+    return <textarea {...rest} readOnly={readOnly} rows={rows} className={`${base} whitespace-pre-wrap resize-y overflow-hidden ${className || ''}`} />;
   }
   return <input {...rest} readOnly={readOnly} className={`${base} ${className || ''}`} />;
 }
@@ -1159,6 +1398,7 @@ function QuotationFormModal({
 
               <div className="mb-1 font-bold">To</div>
               <QuoteField readOnly={!editing}
+                multiline
                 value={form.to_name}
                 onChange={(e: any) => set({ to_name: e.target.value })}
                 placeholder="Company / Customer name"
