@@ -918,7 +918,9 @@ export function EmployeeReport() {
     setPdfBusy(mode);
     setPdfErr('');
     try {
-      const params = mode === 'month' ? { mode, month } : { mode, from_date: weekFrom, to_date: weekTo };
+      const params: Record<string, string> = { mode };
+      if (mode === 'month') params.month = month;
+      else { params.from_date = weekFrom; params.to_date = weekTo; }
       const filename = mode === 'month' ? `my-report-${month}.pdf` : `my-report-${weekFrom}-to-${weekTo}.pdf`;
       await downloadReport('/dashboard/period-report/pdf', filename, params);
     } catch (e: any) {
