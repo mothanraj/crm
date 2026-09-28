@@ -1,47 +1,40 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../services/api';
 import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, Spinner } from '../components/ui';
 
-const COUNT_COLOR = '#1971C2';
-const VALUE_COLOR = '#65A30D';
-const COUNT_SHADES = ['#1971C2', '#0e7490', '#7c3aed', '#0369a1', '#1d4ed8', '#0891b2'];
-const VALUE_SHADES = ['#65A30D', '#3F6212', '#E8890C', '#15803d', '#84cc16', '#a16207'];
 const COMPARE = [
-  ['lead', 'Lead'],
-  ['quotation', 'Quotation'],
+  ['leads', 'No. of leads'],
+  ['lead_value', 'Lead value'],
+  ['quotations', 'No. of quotations'],
+  ['quotation_value', 'Quotation'],
+  ['category', 'Category'],
+  ['product', 'Product'],
+  ['source', 'Source'],
+  ['progress', 'Progress'],
 ] as const;
-const PERIODS: [string, string][] = [
-  ['last_24_previous', 'Compare last 24 hours to previous period'],
-  ['last_24_wow', 'Compare last 24 hours week over week'],
-  ['last_7_previous', 'Compare last 7 days to previous period'],
-  ['last_7_yoy', 'Compare last 7 days year over year'],
-  ['last_28_previous', 'Compare last 28 days to previous period'],
-  ['last_28_yoy', 'Compare last 28 days year over year'],
-  ['last_3m_previous', 'Compare last 3 months to previous period'],
-  ['last_3m_yoy', 'Compare last 3 months year over year'],
-  ['last_6m_previous', 'Compare last 6 months to previous period'],
-  ['custom', 'Custom'],
-];
-const PROGRESS_OPTIONS = [
-  'Assigned',
-  'New Lead',
-  'Site Visit',
-  'Meeting',
-  'In Followup',
-  'Converted',
-  'Not Interested',
-  'Quotation sent',
-];
-const FILTER_KEYS = ['employee', 'source', 'product', 'category', 'progress', 'city', 'cars', 'customer', 'enquiry'];
-const CUSTOM_DEFAULT = {
-  current_from: '2026-06-24',
-  current_to: '2026-09-23',
-  previous_from: '2026-01-24',
-  previous_to: '2026-06-23',
+const COMPARE_IDS = new Set<string>(COMPARE.map(([value]) => value));
+const LINE_COLORS = ['#1971C2', '#65A30D', '#7c3aed', '#E8890C', '#0e7490', '#c0392b', '#0369a1', '#3F6212', '#db2777', '#0891b2', '#1d4ed8', '#a16207'];
+const PICK_LABELS: Record<string, string> = {
+  category: 'Category',
+  product: 'Product',
+  source: 'Source',
+  progress: 'Progress',
 };
+const RANGE_OPTIONS = [
+  ['24h_prev', 'Compare last 24 hours to previous period'],
+  ['24h_wow', 'Compare last 24 hours week over week'],
+  ['7d_prev', 'Compare last 7 days to previous period'],
+  ['7d_yoy', 'Compare last 7 days year over year'],
+  ['28d_prev', 'Compare last 28 days to previous period'],
+  ['28d_yoy', 'Compare last 28 days year over year'],
+  ['3m_prev', 'Compare last 3 months to previous period'],
+  ['3m_yoy', 'Compare last 3 months year over year'],
+  ['6m_prev', 'Compare last 6 months to previous period'],
+  ['custom', 'Custom'],
+] as const;
 
 function inr(n: number | null | undefined) {
   if (n == null || Number.isNaN(Number(n))) return '—';
@@ -51,106 +44,53 @@ function num(n: number | null | undefined) {
   if (n == null || Number.isNaN(Number(n))) return '—';
   return Number(n).toLocaleString('en-IN');
 }
-function prettyDate(iso?: string | null) {
-  if (!iso) return '—';
-  const [year, month, day] = iso.split('-');
-  if (!year || !month || !day) return iso;
-  return `${day}-${month}-${year}`;
+function isoDate(day: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
 }
-function ymd(d: Date) {
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${month}-${day}`;
+function defaultCustomRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 27);
+  const previousEnd = new Date(start);
+  previousEnd.setDate(start.getDate() - 1);
+  const previousStart = new Date(previousEnd);
+  previousStart.setDate(previousEnd.getDate() - 27);
+  return { cf: isoDate(start), ct: isoDate(end), pf: isoDate(previousStart), pt: isoDate(previousEnd) };
 }
-function shiftDays(d: Date, n: number) {
-  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  next.setDate(next.getDate() + n);
-  return next;
+function prettyDate(value?: string | null) {
+  if (!value) return '—';
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
-function shiftMonths(d: Date, n: number) {
-  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  next.setMonth(next.getMonth() + n);
-  return next;
-}
-function shiftYears(d: Date, n: number) {
-  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  next.setFullYear(next.getFullYear() + n);
-  return next;
-}
-function periodRange(preset: string, today = new Date()) {
-  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const pack = (currentFrom: Date, currentTo: Date, previousFrom: Date, previousTo: Date) => ({
-    current_from: ymd(currentFrom),
-    current_to: ymd(currentTo),
-    previous_from: ymd(previousFrom),
-    previous_to: ymd(previousTo),
-  });
-  if (preset === 'last_24_previous') return pack(end, end, shiftDays(end, -1), shiftDays(end, -1));
-  if (preset === 'last_24_wow') {
-    const previous = shiftDays(end, -7);
-    return pack(end, end, previous, previous);
-  }
-  const days: Record<string, [number, 'previous' | 'yoy']> = {
-    last_7_previous: [7, 'previous'],
-    last_7_yoy: [7, 'yoy'],
-    last_28_previous: [28, 'previous'],
-    last_28_yoy: [28, 'yoy'],
-  };
-  if (preset in days) {
-    const [count, mode] = days[preset];
-    const start = shiftDays(end, -(count - 1));
-    if (mode === 'yoy') return pack(start, end, shiftYears(start, -1), shiftYears(end, -1));
-    const previousTo = shiftDays(start, -1);
-    return pack(start, end, shiftDays(previousTo, -(count - 1)), previousTo);
-  }
-  const months: Record<string, [number, 'previous' | 'yoy']> = {
-    last_3m_previous: [3, 'previous'],
-    last_3m_yoy: [3, 'yoy'],
-    last_6m_previous: [6, 'previous'],
-  };
-  if (preset in months) {
-    const [count, mode] = months[preset];
-    const start = shiftMonths(end, -count);
-    if (mode === 'yoy') return pack(start, end, shiftYears(start, -1), shiftYears(end, -1));
-    const previousTo = shiftDays(start, -1);
-    return pack(start, end, shiftMonths(previousTo, -count), previousTo);
-  }
-  return periodRange('last_3m_previous', today);
-}
-
-function changeText(value: number | null | undefined) {
-  if (value == null || Number.isNaN(Number(value))) return '—';
-  const rounded = Number(value);
-  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString('en-IN')}%`;
-}
-
 export function Analytics() {
   const [params, setParams] = useSearchParams();
   const paramsRef = useRef(params);
   paramsRef.current = params;
-  const [meta, setMeta] = useState<any>(null);
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [customer, setCustomer] = useState(params.get('customer') || '');
-  const [enquiry, setEnquiry] = useState(params.get('enquiry') || '');
+  const [downloading, setDownloading] = useState(false);
   const [refreshed, setRefreshed] = useState('');
   const [tick, setTick] = useState(0);
-  const [compareOpen, setCompareOpen] = useState(false);
   const [yearsOpen, setYearsOpen] = useState(false);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeData, setRangeData] = useState<any>(null);
+  const [rangeError, setRangeError] = useState('');
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [draftRange, setDraftRange] = useState(params.get('range') || '7d_prev');
+  const [draftError, setDraftError] = useState('');
+  const [draftDates, setDraftDates] = useState({
+    cf: params.get('cf') || '',
+    ct: params.get('ct') || '',
+    pf: params.get('pf') || '',
+    pt: params.get('pt') || '',
+  });
 
-  const requestedCompare = params.get('compare') || 'lead';
-  const compareBy = requestedCompare === 'quotation' || requestedCompare === 'quotation_value' ? 'quotation' : 'lead';
-  const period = PERIODS.some(([id]) => id === params.get('period')) ? (params.get('period') as string) : 'last_28_previous';
-  const customSeed = CUSTOM_DEFAULT;
-  const activeRange = period === 'custom'
-    ? {
-        current_from: params.get('current_from') || customSeed.current_from,
-        current_to: params.get('current_to') || customSeed.current_to,
-        previous_from: params.get('previous_from') || customSeed.previous_from,
-        previous_to: params.get('previous_to') || customSeed.previous_to,
-      }
-    : periodRange(period);
+  const requestedCompare = params.get('compare') || 'leads';
+  const compareAlias = requestedCompare === 'lead' ? 'leads' : requestedCompare === 'quotation' ? 'quotations' : requestedCompare;
+  const compareBy = COMPARE_IDS.has(compareAlias) ? compareAlias : 'leads';
 
   function update(mutate: (next: URLSearchParams) => void) {
     const next = new URLSearchParams(paramsRef.current);
@@ -163,28 +103,6 @@ export function Analytics() {
       else next.set(key, value);
     });
   }
-  function selectPeriod(value: string) {
-    update((next) => {
-      next.set('period', value);
-      next.delete('month');
-      next.delete('from_date');
-      next.delete('to_date');
-      next.delete('measure');
-      if (value === 'custom') {
-        const seed = CUSTOM_DEFAULT;
-        if (!next.get('current_from')) next.set('current_from', seed.current_from);
-        if (!next.get('current_to')) next.set('current_to', seed.current_to);
-        if (!next.get('previous_from')) next.set('previous_from', seed.previous_from);
-        if (!next.get('previous_to')) next.set('previous_to', seed.previous_to);
-      } else {
-        next.delete('current_from');
-        next.delete('current_to');
-        next.delete('previous_from');
-        next.delete('previous_to');
-      }
-    });
-  }
-
   function toggleYear(value: string) {
     update((next) => {
       const current = next.getAll('year');
@@ -194,53 +112,22 @@ export function Analytics() {
     });
   }
 
-  useEffect(() => { setCustomer(params.get('customer') || ''); }, [params]);
-  useEffect(() => { setEnquiry(params.get('enquiry') || ''); }, [params]);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const current = paramsRef.current.get('customer') || '';
-      if (customer === current) return;
-      update((next) => { if (customer) next.set('customer', customer); else next.delete('customer'); });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [customer]);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const current = paramsRef.current.get('enquiry') || '';
-      if (enquiry === current) return;
-      update((next) => { if (enquiry) next.set('enquiry', enquiry); else next.delete('enquiry'); });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [enquiry]);
+  useEffect(() => subscribeLeadUpdates(() => setTick((value) => value + 1)), []);
 
+  const yearKey = params.getAll('year').filter((value) => value !== '').join(',');
   const query = useMemo(() => {
-    const years = params.getAll('year').filter((value) => value !== '');
-    const next: Record<string, string | string[]> = {
-      compare_by: compareBy,
-      current_from: activeRange.current_from,
-      current_to: activeRange.current_to,
-      previous_from: activeRange.previous_from,
-      previous_to: activeRange.previous_to,
-    };
+    const years = yearKey ? yearKey.split(',') : [];
+    const next: Record<string, string | string[]> = { compare_by: compareBy };
     if (years.length === 1) next.year = years[0];
     else if (years.length > 1) next.year = years;
-    FILTER_KEYS.forEach((key) => {
-      const values = params.getAll(key).filter((value) => value !== '');
-      if (values.length === 1) next[key] = values[0];
-      else if (values.length > 1) next[key] = values;
-    });
     return next;
-  }, [params, compareBy, activeRange.current_from, activeRange.current_to, activeRange.previous_from, activeRange.previous_to]);
+  }, [yearKey, compareBy]);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     setError('');
-    Promise.all([
-      api.get('/analytics/meta', { signal: ctrl.signal, timeout: 30000 }),
-      api.get('/analytics/comparison', { params: query, paramsSerializer: { indexes: null }, signal: ctrl.signal, timeout: 60000 }),
-    ]).then(([metaRes, comparisonRes]) => {
-      setMeta(metaRes.data);
+    api.get('/analytics/comparison', { params: query, paramsSerializer: { indexes: null }, signal: ctrl.signal, timeout: 60000 }).then((comparisonRes) => {
       setData(comparisonRes.data);
       setRefreshed(new Date().toLocaleTimeString());
     }).catch((err) => {
@@ -250,52 +137,195 @@ export function Analytics() {
     return () => ctrl.abort();
   }, [query, tick]);
 
-  useEffect(() => subscribeLeadUpdates(() => setTick((value) => value + 1)), []);
+  const picked = params.get('item') || '';
+  const rangePreset = params.get('range') || '';
+  const rangeDates = [params.get('cf') || '', params.get('ct') || '', params.get('pf') || '', params.get('pt') || ''].join('|');
+  useEffect(() => {
+    if (!rangePreset) {
+      setRangeData(null);
+      setRangeError('');
+      setRangeLoading(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    setRangeLoading(true);
+    setRangeError('');
+    const [cf, ct, pf, pt] = rangeDates.split('|');
+    const next: Record<string, string> = { compare_by: compareBy, preset: rangePreset };
+    if (picked) next.item = picked;
+    if (rangePreset === 'custom') {
+      next.current_from = cf;
+      next.current_to = ct;
+      next.previous_from = pf;
+      next.previous_to = pt;
+    }
+    api.get('/analytics/range-comparison', { params: next, signal: ctrl.signal, timeout: 60000 }).then((res) => {
+      setRangeData(res.data);
+    }).catch((err) => {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') return;
+      setRangeData(null);
+      setRangeError(err?.response?.data?.detail || 'Could not load this comparison');
+    }).finally(() => { if (!ctrl.signal.aborted) setRangeLoading(false); });
+    return () => ctrl.abort();
+  }, [rangePreset, rangeDates, compareBy, picked, tick]);
 
   const kpi = data?.kpi;
-  const series = (data?.series || []).map((row: any) => ({
-    ...row,
-    label: row.current_date ? prettyDate(row.current_date) : (row.previous_date ? prettyDate(row.previous_date) : `Day ${row.day}`),
-  }));
-  const countLabel = data?.count_label || (compareBy === 'quotation' ? 'No. of Quotations' : 'No. of Leads');
-  const valueLabel = data?.value_label || (compareBy === 'quotation' ? 'Quotation Value' : 'Lead Value');
-  const yearComparison = data?.year_comparison;
-  const compareYears: number[] = yearComparison?.years || [];
-  const yearRows = (yearComparison?.months || []).map((row: any) => {
-    const point: Record<string, string | number> = { name: String(row.name || '').slice(0, 3) };
+  const compareYears: Array<number | string> = data?.years || [];
+  const breakdown: any[] = data?.compare_by === compareBy ? (data?.details || []) : [];
+  const pickLabel = PICK_LABELS[compareBy] || '';
+  const focus = pickLabel ? breakdown.find((row) => row.name === picked) : null;
+  const chartLines: { key: string; name: string }[] = compareYears.map((year) => ({ key: String(year), name: String(year) }));
+  const chartPoints = (data?.months || []).map((month: any) => {
+    const point: Record<string, string | number> = { name: String(month.name || '').slice(0, 3) };
+    const match = focus ? (data?.by_month || []).find((row: any) => row.month === month.month) : null;
+    const item = match ? (match.items || []).find((row: any) => row.name === focus.name) : null;
     compareYears.forEach((year) => {
-      point[`count_${year}`] = Number(row.counts?.[String(year)] || 0);
-      point[`value_${year}`] = Number(row.values?.[String(year)] || 0);
+      point[String(year)] = Number((focus ? item?.values : month.values)?.[String(year)] || 0);
     });
     return point;
   });
+  const money = Boolean(data?.money);
+  const formatCell = (value: number) => (money ? inr(value) : num(value));
   const selectedYears = params.getAll('year');
   const yearChoices = useMemo(() => {
     const end = new Date().getFullYear() + 15;
     const years: number[] = [];
-    for (let year = end; year >= 1990; year -= 1) years.push(year);
+    for (let year = 1900; year <= end; year += 1) years.push(year);
     return years;
+  }, []);
+  useEffect(() => {
+    if (paramsRef.current.getAll('year').length > 0) return;
+    update((next) => {
+      if (next.getAll('year').length > 0) return;
+      next.append('year', '2026');
+      next.append('year', '2025');
+    });
   }, []);
 
   function selectCompare(value: string) {
     update((next) => {
       next.set('compare', value);
       next.delete('measure');
+      next.delete('item');
     });
   }
 
-  function reset() {
-    setCustomer('');
-    setEnquiry('');
-    setParams(new URLSearchParams(), { replace: true });
+  function openRange() {
+    const current = paramsRef.current.get('range') || '7d_prev';
+    setDraftRange(current);
+    setDraftDates({
+      cf: paramsRef.current.get('cf') || '',
+      ct: paramsRef.current.get('ct') || '',
+      pf: paramsRef.current.get('pf') || '',
+      pt: paramsRef.current.get('pt') || '',
+    });
+    setYearsOpen(false);
+    setRangeOpen((open) => !open);
+  }
+
+  function chooseRange(value: string) {
+    setDraftRange(value);
+    if (value === 'custom') {
+      setDraftDates((current) => (current.cf && current.ct && current.pf && current.pt ? current : defaultCustomRange()));
+    }
+  }
+
+  function applyRange() {
+    if (draftRange === 'custom' && (!draftDates.cf || !draftDates.ct || !draftDates.pf || !draftDates.pt || draftDates.cf > draftDates.ct || draftDates.pf > draftDates.pt)) {
+      setDraftError('Each range needs a start date on or before its end date');
+      return;
+    }
+    update((next) => {
+      next.set('range', draftRange);
+      if (draftRange === 'custom') {
+        next.set('cf', draftDates.cf);
+        next.set('ct', draftDates.ct);
+        next.set('pf', draftDates.pf);
+        next.set('pt', draftDates.pt);
+      } else {
+        next.delete('cf');
+        next.delete('ct');
+        next.delete('pf');
+        next.delete('pt');
+      }
+    });
+    setDraftError('');
+    setRangeError('');
+    setRangeOpen(false);
+  }
+
+  function clearRange() {
+    update((next) => {
+      next.delete('range');
+      next.delete('cf');
+      next.delete('ct');
+      next.delete('pf');
+      next.delete('pt');
+    });
+    setRangeData(null);
+    setRangeOpen(false);
+  }
+
+  async function downloadPdf() {
+    if (pickLabel && !focus) return;
+    setDownloading(true);
+    setError('');
+    try {
+      const pdfParams: Record<string, string | string[]> = { compare_by: compareBy };
+      const years = yearKey ? yearKey.split(',') : [];
+      if (years.length === 1) pdfParams.year = years[0];
+      else if (years.length > 1) pdfParams.year = years;
+      if (focus) pdfParams.item = focus.name;
+      const res = await api.get('/analytics/comparison/pdf', {
+        responseType: 'blob',
+        params: pdfParams,
+        paramsSerializer: { indexes: null },
+        timeout: 60000,
+      });
+      const ctype = String(res.headers?.['content-type'] ?? '');
+      if (ctype.includes('application/json')) {
+        const text = await (res.data as Blob).text();
+        let detail = 'Download failed';
+        try { detail = JSON.parse(text)?.detail || detail; } catch { /* keep default */ }
+        throw new Error(detail);
+      }
+      const slug = String(focus?.name || compareBy).replace(/[^\w.-]+/g, '-');
+      const url = URL.createObjectURL(res.data);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `comparison-${slug}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    } catch (err: any) {
+      let detail = err?.message || 'Could not download the PDF';
+      const blob = err?.response?.data;
+      if (blob instanceof Blob) {
+        try {
+          const text = await blob.text();
+          detail = JSON.parse(text)?.detail || detail;
+        } catch { /* keep default */ }
+      }
+      setError(String(detail));
+    } finally {
+      setDownloading(false);
+    }
   }
 
   return (
     <div>
       <PageHeader
         title="Lead comparison"
-        subtitle="Compare a period with the one before it. Lead shows the number of leads and lead value. Quotation shows the number of quotations and quotation value."
-        actions={<button type="button" className="btn-primary" onClick={reset}>Reset filters</button>}
+        subtitle="Compare the same months across years. January stays January. Only the year changes."
+        actions={(
+          <button type="button" className="btn-primary" disabled={downloading || Boolean(pickLabel && !focus)} onClick={downloadPdf}>
+            {downloading ? 'Downloading…' : 'Download PDF'}
+          </button>
+        )}
       />
       {refreshed && <p className="text-xs text-graphite-500 -mt-4 mb-4">Last updated {refreshed}. New and updated leads refresh this page automatically.</p>}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{String(error)}</div>}
@@ -307,107 +337,74 @@ export function Analytics() {
               {COMPARE.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-          <button type="button" className="btn-secondary" onClick={() => setCompareOpen((open) => !open)}>
-            Compare
-          </button>
-          <button type="button" className="btn-secondary" onClick={() => setYearsOpen((open) => !open)}>
-            Select years
-          </button>
-        </div>
-        {compareOpen && (
-          <div className="mb-4 max-w-xl rounded-lg border border-graphite-200 bg-white p-3 space-y-2">
-            {PERIODS.map(([value, label]) => (
-              <label key={value} className="flex items-center gap-2 text-sm text-graphite-800">
-                <input type="radio" name="compare-period" checked={period === value} onChange={() => selectPeriod(value)} />
-                <span>{label}</span>
-              </label>
-            ))}
-            {period === 'custom' && (
-              <div className="pt-2 space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="text-sm">Start date
-                    <input type="date" className="input mt-1" value={activeRange.current_from} onChange={(e) => setOne('current_from', e.target.value)} />
-                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
+          {pickLabel && (
+            <label className="text-sm w-full max-w-xs">{pickLabel}
+              <select className="input mt-1" value={picked} onChange={(e) => setOne('item', e.target.value)}>
+                <option value="">Choose one</option>
+                {breakdown.map((row) => <option key={row.name} value={row.name}>{row.name}</option>)}
+              </select>
+            </label>
+          )}
+          <div className="relative text-sm w-full max-w-xs">
+            <span className="block">Years</span>
+            <button type="button" className="input mt-1 text-left" onClick={() => { setRangeOpen(false); setYearsOpen((open) => !open); }}>
+              Select years
+            </button>
+            {yearsOpen && (
+              <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-graphite-200 bg-white shadow-lg">
+                {yearChoices.map((year) => (
+                  <label key={year} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-graphite-50">
+                    <input type="checkbox" checked={selectedYears.includes(String(year))} onChange={() => toggleYear(String(year))} />
+                    {year}
                   </label>
-                  <label className="text-sm">End date
-                    <input type="date" className="input mt-1" value={activeRange.current_to} onChange={(e) => setOne('current_to', e.target.value)} />
-                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
-                  </label>
-                </div>
-                <div className="text-sm font-semibold text-graphite-600">vs.</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="text-sm">Start date
-                    <input type="date" className="input mt-1" value={activeRange.previous_from} onChange={(e) => setOne('previous_from', e.target.value)} />
-                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
-                  </label>
-                  <label className="text-sm">End date
-                    <input type="date" className="input mt-1" value={activeRange.previous_to} onChange={(e) => setOne('previous_to', e.target.value)} />
-                    <span className="block text-[11px] text-graphite-400 mt-1">YYYY-MM-DD</span>
-                  </label>
-                </div>
+                ))}
               </div>
             )}
           </div>
-        )}
-        {yearsOpen && (
-          <div className="mb-4 max-h-56 overflow-auto flex flex-wrap gap-2">
-            {yearChoices.map((year) => (
-              <label key={year} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${selectedYears.includes(String(year)) ? 'border-brand-400 bg-brand-50' : 'border-graphite-200 bg-white'}`}>
-                <input type="checkbox" checked={selectedYears.includes(String(year))} onChange={() => toggleYear(String(year))} />
-                {year}
-              </label>
-            ))}
+          <div className="relative text-sm w-full max-w-xs">
+            <span className="block">Compare</span>
+            <button type="button" className="input mt-1 text-left" onClick={openRange}>
+              Compare
+            </button>
+            {rangeOpen && (
+              <div className="absolute z-30 mt-1 w-[22rem] max-h-[28rem] overflow-auto rounded-lg border border-graphite-200 bg-white p-3 shadow-lg">
+                <div className="space-y-1.5">
+                  {RANGE_OPTIONS.map(([value, label]) => (
+                    <label key={value} className="flex items-start gap-2 text-sm text-graphite-800">
+                      <input className="mt-1" type="radio" name="range" checked={draftRange === value} onChange={() => chooseRange(value)} />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+                {draftRange === 'custom' && (
+                  <div className="mt-3 space-y-2 border-t border-graphite-100 pt-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs">Start date
+                        <input className="input mt-1" type="date" value={draftDates.cf} onChange={(e) => setDraftDates((current) => ({ ...current, cf: e.target.value }))} />
+                      </label>
+                      <label className="text-xs">End date
+                        <input className="input mt-1" type="date" value={draftDates.ct} onChange={(e) => setDraftDates((current) => ({ ...current, ct: e.target.value }))} />
+                      </label>
+                    </div>
+                    <p className="text-xs text-graphite-500">vs.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs">Start date
+                        <input className="input mt-1" type="date" value={draftDates.pf} onChange={(e) => setDraftDates((current) => ({ ...current, pf: e.target.value }))} />
+                      </label>
+                      <label className="text-xs">End date
+                        <input className="input mt-1" type="date" value={draftDates.pt} onChange={(e) => setDraftDates((current) => ({ ...current, pt: e.target.value }))} />
+                      </label>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 flex justify-end gap-2">
+                  <button type="button" className="btn-secondary" onClick={() => { setDraftError(''); setRangeOpen(false); }}>Cancel</button>
+                  <button type="button" className="btn-primary" onClick={applyRange}>Apply</button>
+                </div>
+                {draftError && <p className="mt-2 text-xs text-red-700">{draftError}</p>}
+              </div>
+            )}
           </div>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-          <label className="text-sm">Employee
-            <select className="input mt-1" value={params.get('employee') || ''} onChange={(e) => setOne('employee', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.employees || []).map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Source
-            <select className="input mt-1" value={params.get('source') || ''} onChange={(e) => setOne('source', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.sources || []).map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Product
-            <select className="input mt-1" value={params.get('product') || ''} onChange={(e) => setOne('product', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.products || []).map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Category
-            <select className="input mt-1" value={params.get('category') || ''} onChange={(e) => setOne('category', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.categories || []).map((name: string) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Progress
-            <select className="input mt-1" value={params.get('progress') || ''} onChange={(e) => setOne('progress', e.target.value)}>
-              <option value="">All</option>
-              {PROGRESS_OPTIONS.map((name) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">City
-            <select className="input mt-1" value={params.get('city') || ''} onChange={(e) => setOne('city', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.cities || []).map((name: string) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Cars
-            <select className="input mt-1" value={params.get('cars') || ''} onChange={(e) => setOne('cars', e.target.value)}>
-              <option value="">All</option>
-              {(meta?.cars || []).map((name: string) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Customer
-            <input className="input mt-1" value={customer} placeholder="Search customer name" onChange={(e) => setCustomer(e.target.value)} />
-          </label>
-          <label className="text-sm">Enquiry
-            <input className="input mt-1" value={enquiry} placeholder="Search enquiry number" onChange={(e) => setEnquiry(e.target.value)} />
-          </label>
         </div>
       </Card>
 
@@ -433,125 +430,143 @@ export function Analytics() {
               ))}
             </div>
             {Number(kpi?.undated) > 0 && (
-              <p className="text-xs text-graphite-500 mt-3">{num(kpi.undated)} leads have no enquiry date, so they are left out of this comparison.</p>
+              <p className="text-xs text-graphite-500 mt-3">{num(kpi.undated)} leads have no enquiry date. Those are counted on the day they were added.</p>
             )}
           </Card>
 
-          <Card title="Year comparison">
-            {compareYears.length === 0 ? <EmptyState title="No enquiry years for this selection" /> : (
+          <Card title={data?.compare_label || 'Comparison'}>
+            {compareYears.length === 0 ? <EmptyState title="No enquiry years for this selection" hint="Choose one or more years." /> : (
               <>
-                <div className="h-80 mb-4">
-                  <ResponsiveContainer>
-                    <LineChart data={yearRows}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis yAxisId="count" tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <YAxis yAxisId="value" orientation="right" tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(value: any, name: any) => [String(name).includes('value') || String(name).includes('Value') ? inr(Number(value)) : num(Number(value)), name]} />
-                      <Legend />
-                      {compareYears.map((year, index) => (
-                        <Line key={`count-${year}`} yAxisId="count" type="monotone" dataKey={`count_${year}`} name={`${year} ${countLabel}`} stroke={COUNT_SHADES[index % COUNT_SHADES.length]} strokeWidth={2} dot={false} />
-                      ))}
-                      {compareYears.map((year, index) => (
-                        <Line key={`value-${year}`} yAxisId="value" type="monotone" dataKey={`value_${year}`} name={`${year} ${valueLabel}`} stroke={VALUE_SHADES[index % VALUE_SHADES.length]} strokeWidth={2} dot={false} />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[640px]">
-                    <thead>
-                      <tr>
-                        <th className="th text-left">Month</th>
-                        {compareYears.map((year) => (
-                          <th key={year} className="th text-right" colSpan={2}>{year}</th>
+                <p className="text-xs text-graphite-500 mb-3">
+                  {pickLabel && !focus
+                    ? `Choose one ${pickLabel.toLowerCase()}. Only that one is compared across the selected years.`
+                    : focus
+                      ? `${focus.name}. Twelve months, with the count for each selected year on the right.`
+                      : 'Twelve months. The count for each selected year is on the right.'}
+                </p>
+                {pickLabel && !focus ? <EmptyState title={`Choose one ${pickLabel.toLowerCase()}`} hint="The comparison shows only the one you pick." /> : chartPoints.length === 0 ? <EmptyState title="No records for the selected years" /> : (
+                  <div className="h-80 mb-4">
+                    <ResponsiveContainer>
+                      <LineChart data={chartPoints}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} allowDecimals={money} />
+                        <Tooltip formatter={(value: any, name: any) => [formatCell(Number(value)), name]} />
+                        <Legend />
+                        {chartLines.map((line, index) => (
+                          <Line key={line.key} type="monotone" dataKey={line.key} name={line.name} stroke={LINE_COLORS[index % LINE_COLORS.length]} strokeWidth={2} dot={false} />
                         ))}
-                      </tr>
-                      <tr>
-                        <th className="th" />
-                        {compareYears.map((year) => (
-                          <Fragment key={year}>
-                            <th className="th text-right">{countLabel}</th>
-                            <th className="th text-right">{valueLabel}</th>
-                          </Fragment>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(yearComparison?.months || []).map((row: any) => (
-                        <tr key={row.month}>
-                          <td className="td font-medium">{row.name}</td>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {pickLabel && focus ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[480px]">
+                      <thead>
+                        <tr>
+                          <th className="th text-left">Month</th>
                           {compareYears.map((year) => (
-                            <Fragment key={`${row.month}-${year}`}>
-                              <td className="td text-right tabular-nums">{num(row.counts?.[String(year)])}</td>
-                              <td className="td text-right tabular-nums">{inr(row.values?.[String(year)])}</td>
-                            </Fragment>
+                            <th key={year} className="th text-right">{year}</th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {(data?.months || []).map((month: any) => {
+                          const match = (data?.by_month || []).find((row: any) => row.month === month.month);
+                          const item = (match?.items || []).find((row: any) => row.name === focus.name);
+                          return (
+                            <tr key={month.month}>
+                              <td className="td font-medium">{month.name}</td>
+                              {compareYears.map((year) => (
+                                <td key={`${month.month}-${year}`} className="td text-right tabular-nums">{formatCell(Number(item?.values?.[String(year)] || 0))}</td>
+                              ))}
+                            </tr>
+                          );
+                        })}
+                        <tr>
+                          <td className="td font-semibold">Total</td>
+                          {compareYears.map((year) => (
+                            <td key={`total-${year}`} className="td text-right tabular-nums font-semibold">{formatCell(Number(focus.values?.[String(year)] || 0))}</td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                ) : pickLabel ? null : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[480px]">
+                      <thead>
+                        <tr>
+                          <th className="th text-left">Month</th>
+                          {compareYears.map((year) => (
+                            <th key={year} className="th text-right">{year}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(data?.months || []).map((row: any) => (
+                          <tr key={row.month}>
+                            <td className="td font-medium">{row.name}</td>
+                            {compareYears.map((year) => (
+                              <td key={`${row.month}-${year}`} className="td text-right tabular-nums">{formatCell(Number(row.values?.[String(year)] || 0))}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             )}
           </Card>
-
-          <Card title={`${data?.compare_label || 'Lead'} comparison`}>
-            <div className="overflow-x-auto mb-4">
-              <table className="w-full text-sm min-w-[520px]">
-                <thead>
-                  <tr>
-                    <th className="th text-left"> </th>
-                    <th className="th text-right">Selected period</th>
-                    <th className="th text-right">Compared period</th>
-                    <th className="th text-right">Change</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td className="td font-medium" style={{ color: COUNT_COLOR }}>{countLabel}</td>
-                    <td className="td text-right tabular-nums">{num(data?.totals?.count)}</td>
-                    <td className="td text-right tabular-nums">{num(data?.totals?.previous_count)}</td>
-                    <td className="td text-right tabular-nums">{changeText(data?.count_change)}</td>
-                  </tr>
-                  <tr>
-                    <td className="td font-medium" style={{ color: VALUE_COLOR }}>{valueLabel}</td>
-                    <td className="td text-right tabular-nums">{inr(data?.totals?.value)}</td>
-                    <td className="td text-right tabular-nums">{inr(data?.totals?.previous_value)}</td>
-                    <td className="td text-right tabular-nums">{changeText(data?.value_change)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            {series.length === 0 ? <EmptyState title="No records for the selected period" /> : (
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <LineChart data={series}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={28} />
-                    <YAxis yAxisId="count" tick={{ fontSize: 11 }} allowDecimals={false} />
-                    <YAxis yAxisId="value" orientation="right" tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      formatter={(value: any, name: any) => [
-                        String(name).includes('Value') ? inr(Number(value)) : num(Number(value)),
-                        name,
-                      ]}
-                      labelFormatter={(_label: any, payload: any) => {
-                        const row = payload?.[0]?.payload;
-                        if (!row) return '';
-                        return `Day ${row.day}: ${prettyDate(row.current_date)} vs ${prettyDate(row.previous_date)}`;
-                      }}
-                    />
-                    <Legend />
-                    <Line yAxisId="count" type="monotone" dataKey="count" name={countLabel} stroke={COUNT_COLOR} strokeWidth={2} dot={false} />
-                    <Line yAxisId="count" type="monotone" dataKey="previous_count" name={`${countLabel} (previous)`} stroke={COUNT_COLOR} strokeWidth={2} strokeDasharray="6 4" dot={false} />
-                    <Line yAxisId="value" type="monotone" dataKey="value" name={valueLabel} stroke={VALUE_COLOR} strokeWidth={2} dot={false} />
-                    <Line yAxisId="value" type="monotone" dataKey="previous_value" name={`${valueLabel} (previous)`} stroke={VALUE_COLOR} strokeWidth={2} strokeDasharray="6 4" dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </Card>
+          {(rangePreset || rangeLoading || rangeError) && (
+            <Card title="Period comparison" action={<button type="button" className="text-xs text-graphite-500 hover:text-graphite-800" onClick={clearRange}>Remove</button>}>
+              {rangeLoading && !rangeData ? <Spinner /> : rangeError ? (
+                <p className="text-sm text-red-700">{rangeError}</p>
+              ) : rangeData ? (
+                <>
+                  <p className="text-sm text-graphite-700">{rangeData.preset_label}{rangeData.item ? ` · ${rangeData.item}` : ''}</p>
+                  <p className="text-xs text-graphite-500 mt-1 mb-3">
+                    {prettyDate(rangeData.current?.from)} – {prettyDate(rangeData.current?.to)}
+                    {' vs '}
+                    {prettyDate(rangeData.previous?.from)} – {prettyDate(rangeData.previous?.to)}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                    {[
+                      ['This period', rangeData.money ? inr(rangeData.current_total) : num(rangeData.current_total)],
+                      ['Compared period', rangeData.money ? inr(rangeData.previous_total) : num(rangeData.previous_total)],
+                      ['Change', rangeData.change == null ? '—' : `${rangeData.change > 0 ? '+' : ''}${rangeData.change}%`],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-xl border border-graphite-200 px-3 py-3">
+                        <div className="text-[11px] uppercase tracking-wide text-graphite-500">{label}</div>
+                        <div className="text-lg font-semibold text-graphite-900 mt-1">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {(rangeData.series || []).length > 0 && (
+                    <div className="h-80">
+                      <ResponsiveContainer>
+                        <LineChart data={(rangeData.series || []).map((row: any) => ({
+                          name: prettyDate(row.current_date),
+                          current: Number(row.current || 0),
+                          previous: Number(row.previous || 0),
+                        }))}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} minTickGap={24} />
+                          <YAxis tick={{ fontSize: 11 }} allowDecimals={Boolean(rangeData.money)} />
+                          <Tooltip formatter={(value: any, name: any) => [rangeData.money ? inr(Number(value)) : num(Number(value)), name === 'current' ? 'This period' : 'Compared period']} />
+                          <Legend formatter={(value) => (value === 'current' ? 'This period' : 'Compared period')} />
+                          <Line type="monotone" dataKey="current" name="current" stroke={LINE_COLORS[0]} strokeWidth={2} dot={false} />
+                          <Line type="monotone" dataKey="previous" name="previous" stroke={LINE_COLORS[1]} strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </Card>
+          )}
         </div>
       )}
     </div>

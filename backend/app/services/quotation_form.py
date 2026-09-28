@@ -244,6 +244,21 @@ def _multiline_paras(text: str, style) -> list:
     return paras or [Paragraph("", style)]
 
 
+def _address_lines(text, style) -> list:
+    """Keep each typed line on its own row. Blank lines stay as a gap."""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = raw.split("\n")
+    if not any(line.strip() for line in lines):
+        return [Paragraph("—", style)]
+    out = []
+    for line in lines:
+        if line.strip():
+            out.append(Paragraph(escape(line.rstrip()), style))
+        else:
+            out.append(Spacer(1, 10))
+    return out
+
+
 def _draw_letterhead_page(canvas, _doc):
     """Real EEPL letterhead: GURUKRIBA / Sree Laal above logo + footer banner."""
     canvas.saveState()
@@ -316,8 +331,6 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         quote_date_disp = str(quote_date)
 
     ref = escape(str(data.get("quotation_number") or "—"))
-    to_name = escape(str(data.get("to_name") or "—"))
-    to_address = escape(str(data.get("to_address") or "—").replace("\n", "<br/>"))
     subject = escape(str(data.get("subject") or "Offer for Parking System"))
     desc = escape(str(data.get("product_description") or "Design, Manufacture, Supply and Erection of Parking System"))
     payment_terms = (data.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
@@ -354,8 +367,8 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     story.append(Spacer(1, 14))
     story.append(Paragraph("<b>To</b>", bold))
     story.append(Spacer(1, 4))
-    story.append(Paragraph(to_name, bold))
-    story.append(Paragraph(to_address, small_bold))
+    story.extend(_address_lines(data.get("to_name"), bold))
+    story.extend(_address_lines(data.get("to_address"), small_bold))
     story.append(Spacer(1, 14))
     story.append(Paragraph("<b>Dear Sir,</b>", bold))
     story.append(Spacer(1, 10))

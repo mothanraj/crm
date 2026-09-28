@@ -111,6 +111,170 @@ def _page_header_fn(logo, logo_iw, logo_ih, title: str, generated: str, width, h
     return page_header
 
 
+def build_comparison_pdf(payload: dict, item: str | None = None) -> bytes:
+    """Year-by-month comparison. One category, product, source, or progress when item is set."""
+    title = "Lead Comparison"
+    years = [str(year) for year in (payload.get("years") or [])]
+    wide = len(years) > 4
+    page = landscape(A4) if wide else A4
+    width, height = page
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=page, leftMargin=36, rightMargin=36,
+        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
+    left = ParagraphStyle("left", parent=cell, alignment=0)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=14, textColor=NAVY,
+        spaceAfter=4, alignment=1,
+    )
+    meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=10, leading=14, alignment=1, textColor=colors.HexColor("#334155"))
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    money = bool(payload.get("money"))
+    label = str(payload.get("compare_label") or "Comparison")
+    focus = None
+    if item:
+        focus = next((row for row in (payload.get("details") or []) if row.get("name") == item), None)
+    subject = f"{label} · {focus.get('name')}" if focus else label
+    year_text = " vs ".join(years) if years else "All years"
+
+    def fmt(value) -> str:
+        if money:
+            return _inr(value)
+        try:
+            return f"{int(value or 0):,}"
+        except (TypeError, ValueError):
+            return "0"
+
+    story = [
+        Paragraph(title, heading),
+        Paragraph(escape(subject), meta),
+        Paragraph(escape(year_text), meta),
+        Spacer(1, 10),
+    ]
+    head = [Paragraph("Month", header)] + [Paragraph(escape(year), header) for year in years]
+    body = [head]
+    months = payload.get("months") or []
+    by_month = {row.get("month"): row for row in (payload.get("by_month") or [])}
+    for month in months:
+        if focus:
+            match = by_month.get(month.get("month")) or {}
+            found = next((row for row in (match.get("items") or []) if row.get("name") == focus.get("name")), {})
+            values = found.get("values") or {}
+        else:
+            values = month.get("values") or {}
+        body.append([
+            Paragraph(escape(str(month.get("name") or "")), left),
+            *[Paragraph(fmt(values.get(year, 0)), cell) for year in years],
+        ])
+    totals = (focus or {}).get("values") if focus else (payload.get("selected_total") or {})
+    body.append([
+        Paragraph("Total", left),
+        *[Paragraph(fmt((totals or {}).get(year, 0)), cell) for year in years],
+    ])
+    usable = width - 72
+    name_w = min(150, usable * 0.34)
+    rest = (usable - name_w) / max(len(years), 1)
+    table = Table(body, colWidths=[name_w, *([rest] * len(years))], hAlign="CENTER", repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#edf4fa")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#dce6ef")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(table)
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
+
+
+def build_employee_period_pdf(payload: dict) -> bytes:
+    """One employee's progress and category counts for a month or a week."""
+    title = "Employee Work Report"
+    buffer = BytesIO()
+    width, height = A4
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, leftMargin=36, rightMargin=36,
+        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=10, leading=13, alignment=1)
+    left = ParagraphStyle("left", parent=cell, alignment=0)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=14, textColor=NAVY,
+        spaceAfter=6, alignment=1,
+    )
+    subhead = ParagraphStyle(
+        "subhead", fontName="Helvetica-Bold", fontSize=12, textColor=NAVY,
+        spaceBefore=14, spaceAfter=8, alignment=0,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=10, leading=14, alignment=1, textColor=colors.HexColor("#334155"))
+
+    def pretty(iso: str) -> str:
+        try:
+            return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d %b %Y")
+        except ValueError:
+            return str(iso or "—")
+
+    mode = "Weekly" if payload.get("mode") == "week" else "Monthly"
+    story = [
+        Paragraph(title, heading),
+        Paragraph(escape(str(payload.get("employee") or "Employee")), meta),
+        Paragraph(
+            escape(f"{mode}  ·  {pretty(payload.get('from'))} to {pretty(payload.get('to'))}"),
+            meta,
+        ),
+        Spacer(1, 8),
+    ]
+
+    def count_table(section: str, rows: list) -> None:
+        story.append(Paragraph(section, subhead))
+        body = [[Paragraph(h, header) for h in ("Name", "Count")]]
+        for row in rows or []:
+            body.append([
+                Paragraph(escape(str(row.get("label") or "—")), left),
+                Paragraph(str(int(row.get("count") or 0)), cell),
+            ])
+        if len(body) == 1:
+            body.append([Paragraph("No data", left), Paragraph("0", cell)])
+        table = Table(body, colWidths=[(width - 72) * 0.72, (width - 72) * 0.28], hAlign="CENTER")
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf4fa")]),
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(table)
+
+    count_table("Progress", payload.get("progress") or [])
+    count_table("Category", payload.get("category") or [])
+    story.append(Spacer(1, 14))
+    story.append(Paragraph(
+        "Progress is each time that step was logged. Category is the number of customers.",
+        meta,
+    ))
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
+
+
 def build_report_pdf(payload: dict, report_type: str) -> bytes:
     if report_type == "lead_value":
         return build_lead_value_pdf(payload)

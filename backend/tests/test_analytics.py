@@ -215,7 +215,68 @@ def test_comparison_counts_each_lead_once():
 
         full = build_comparison(db, LeadFilters(), "cars", "leads")
         full_summary = build_summary(db, LeadFilters())
-        assert sum(full["selected_total"].values()) == full_summary["kpi"]["leads"] - full_summary["kpi"]["undated"]
+        assert sum(full["selected_total"].values()) == full_summary["kpi"]["leads"]
         assert full_summary["kpi"]["leads_with_quote"] >= full_summary["kpi"]["zero_quotes"]
     finally:
         db.close()
+
+
+def test_range_windows_match_the_selected_period():
+    from app.services.analytics import range_windows
+
+    today = date(2026, 9, 28)
+    current, previous = range_windows("7d_prev", today)
+    assert current == (date(2026, 9, 22), date(2026, 9, 28))
+    assert previous == (date(2026, 9, 15), date(2026, 9, 21))
+    current, previous = range_windows("7d_yoy", today)
+    assert previous == (date(2025, 9, 22), date(2025, 9, 28))
+    current, previous = range_windows("24h_wow", today)
+    assert current == (today, today)
+    assert previous == (date(2026, 9, 21), date(2026, 9, 21))
+    current, previous = range_windows("3m_prev", today)
+    assert current == (date(2026, 6, 29), date(2026, 9, 28))
+    assert previous[1] == date(2026, 6, 28)
+
+
+def test_range_comparison_lines_up_each_day():
+    from app.db.session import SessionLocal
+    from app.services.analytics import build_range_comparison
+
+    db = SessionLocal()
+    try:
+        payload = build_range_comparison(
+            db,
+            LeadFilters(),
+            "leads",
+            "leads",
+            date(2026, 9, 1),
+            date(2026, 9, 7),
+            date(2025, 9, 1),
+            date(2025, 9, 7),
+            None,
+        )
+        assert len(payload["series"]) == 7
+        assert sum(row["current"] for row in payload["series"]) == payload["current_total"]
+        assert sum(row["previous"] for row in payload["series"]) == payload["previous_total"]
+    finally:
+        db.close()
+
+
+def test_comparison_pdf_starts_with_pdf_header():
+    from app.services.report_pdf import build_comparison_pdf
+
+    content = build_comparison_pdf({
+        "compare_label": "Category",
+        "money": False,
+        "years": [2025, 2026],
+        "months": [{"month": 9, "name": "September", "values": {"2025": 0, "2026": 2}}],
+        "selected_total": {"2025": 0, "2026": 2},
+        "details": [{"name": "A (3-6 months)", "values": {"2025": 0, "2026": 2}}],
+        "by_month": [{
+            "month": 9,
+            "name": "September",
+            "items": [{"name": "A (3-6 months)", "values": {"2025": 0, "2026": 2}}],
+        }],
+    }, "A (3-6 months)")
+    assert content.startswith(b"%PDF")
+    assert len(content) > 1000
