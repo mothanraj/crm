@@ -113,16 +113,17 @@ export function Comparison() {
   }, [year, months, category, workAction]);
 
   const current = data?.current;
+  const previous = data?.previous;
   const tiles = current ? [
-    { label: 'Total Leads', value: current.leads || 0, bg: 'bg-[#1e3a5f]' },
-    { label: 'Total Lead Value', value: inr(current.lead_value), bg: 'bg-[#3F6212]', isText: true },
-    { label: 'In Followup', value: actionCount(current, 'In Followup'), bg: 'bg-[#c0392b]' },
-    { label: 'Meeting', value: actionCount(current, 'Meeting'), bg: 'bg-[#0284c7]' },
-    { label: 'Site Visit', value: actionCount(current, 'Site Visit'), bg: 'bg-[#65A30D]' },
-    { label: 'Quotation Sent', value: actionCount(current, 'Quotation sent'), bg: 'bg-[#2F9E44]' },
-    { label: 'Not Interested', value: actionCount(current, 'Not Interested'), bg: 'bg-[#7b241c]' },
-    { label: 'Assigned', value: actionCount(current, 'Assigned'), bg: 'bg-[#0e7490]' },
-    { label: 'New Lead', value: actionCount(current, 'New Lead'), bg: 'bg-[#1c2833]' },
+    { label: 'Total Leads', value: current.leads || 0, previous: previous?.leads || 0, bg: 'bg-[#1e3a5f]' },
+    { label: 'Total Lead Value', value: inr(current.lead_value), previous: inr(previous?.lead_value), bg: 'bg-[#3F6212]', isText: true },
+    { label: 'In Followup', value: actionCount(current, 'In Followup'), previous: actionCount(previous, 'In Followup'), bg: 'bg-[#c0392b]' },
+    { label: 'Meeting', value: actionCount(current, 'Meeting'), previous: actionCount(previous, 'Meeting'), bg: 'bg-[#0284c7]' },
+    { label: 'Site Visit', value: actionCount(current, 'Site Visit'), previous: actionCount(previous, 'Site Visit'), bg: 'bg-[#65A30D]' },
+    { label: 'Quotation Sent', value: actionCount(current, 'Quotation sent'), previous: actionCount(previous, 'Quotation sent'), bg: 'bg-[#2F9E44]' },
+    { label: 'Not Interested', value: actionCount(current, 'Not Interested'), previous: actionCount(previous, 'Not Interested'), bg: 'bg-[#7b241c]' },
+    { label: 'Assigned', value: actionCount(current, 'Assigned'), previous: actionCount(previous, 'Assigned'), bg: 'bg-[#0e7490]' },
+    { label: 'New Lead', value: actionCount(current, 'New Lead'), previous: actionCount(previous, 'New Lead'), bg: 'bg-[#1c2833]' },
   ] : [];
   const sourceRows = current?.by_source || [];
   const productRows = current?.by_product || [];
@@ -157,7 +158,7 @@ export function Comparison() {
             <label className="text-xs font-medium text-graphite-600">Category</label>
             <select className="input mt-1" value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">All categories</option>
-              {(data?.categories || ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (plan stage)']).map((name: string) => (
+              {(data?.categories || ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)']).map((name: string) => (
                 <option key={name} value={name}>{name}</option>
               ))}
             </select>
@@ -189,7 +190,8 @@ export function Comparison() {
                 {tiles.map((tile) => (
                   <div key={tile.label} className={`${tile.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
                     <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{tile.label}</div>
-                    <div className={`${tile.isText ? 'text-sm sm:text-base' : 'text-2xl'} font-bold mt-1 tabular-nums break-all`}>{tile.value}</div>
+                  <div className={`${tile.isText ? 'text-sm sm:text-base leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{tile.value}</div>
+                  <div className="text-[10px] opacity-80 mt-1">vs {tile.previous}</div>
                   </div>
                 ))}
               </div>

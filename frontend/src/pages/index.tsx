@@ -5,7 +5,6 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
-import { subscribeLeadUpdates } from '../services/live';
 import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Comparison } from './comparison';
@@ -299,7 +298,7 @@ export function Dashboard() {
               ) : (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
                   <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                  <div className={`${(t as any).isText ? 'text-sm sm:text-base' : 'text-2xl'} font-bold mt-1 tabular-nums break-all`}>{t.value}</div>
+                  <div className={`${(t as any).isText ? 'text-sm sm:text-base leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
                 </div>
               )
             ))}
@@ -599,7 +598,6 @@ export function EmployeeDashboard() {
     Promise.allSettled([dashP, notesP, queueP]).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
-  useEffect(() => subscribeLeadUpdates(() => load()), []);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(t);
@@ -1697,9 +1695,7 @@ export function Leads() {
   const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string; quotationValue?: string }>>>({});
   const [quoteFormLead, setQuoteFormLead] = useState<any>(null);
   const size = 15;
-  const [liveSeq, setLiveSeq] = useState(0);
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
-  useEffect(() => subscribeLeadUpdates(() => setLiveSeq((s) => s + 1)), []);
   useEffect(() => {
     const ctrl = new AbortController();
     const t = setTimeout(() => {
@@ -1721,7 +1717,7 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, sla, sort, page, liveSeq]);
+  }, [search, status, source, sla, sort, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const statusLabel = (lead: any) => {
@@ -1998,7 +1994,7 @@ export function Leads() {
                     <td className="td align-top text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       {canEditProductCars(l) ? (
                         <input
-                          className="input text-xs text-center"
+                          className="input text-xs text-center w-full max-w-[5.5rem]"
                           type="number"
                           min="2"
                           step={allowsOddCars(prodName(l, nameOf)) ? 1 : 2}
@@ -2014,7 +2010,7 @@ export function Leads() {
                     <td className="td align-top" onClick={(e) => e.stopPropagation()}>
                       {canEditProductCars(l) ? (
                         <select
-                          className="input text-xs"
+                          className="input text-xs w-full max-w-[12rem]"
                           disabled={savingId === l.id}
                           value={l.product_id || ''}
                           onChange={(e) => saveProductCars(l, e.target.value, l.quantity_raw || '')}
@@ -2049,7 +2045,7 @@ export function Leads() {
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
-                          <option value="">Select category…</option>
+                          <option value="">Select progress…</option>
                           {actionOptions.map((option) => {
                             const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
                             return <option key={option} value={match?.id || l.status_id}>{option}</option>;
@@ -2061,7 +2057,7 @@ export function Leads() {
                           <input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value.replace(/[^\d]/g, '') } }))} />
                         </label>
                       )}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} /></label>}</div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select progress…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} /></label>}</div>)}
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
@@ -2157,8 +2153,6 @@ export function EmployeeLeads() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [liveSeq, setLiveSeq] = useState(0);
-  useEffect(() => subscribeLeadUpdates(() => setLiveSeq((n) => n + 1)), []);
   useEffect(() => {
     api.get('/masters').then((r) => {
       setMasters(r.data);
@@ -2181,7 +2175,7 @@ export function EmployeeLeads() {
       .then((r) => { setItems(r.data.items || []); setTotal(r.data.total ?? 0); })
       .catch(() => setError('Failed to load assigned customers'))
       .finally(() => setLoading(false));
-  }, [empId, liveSeq]);
+  }, [empId]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
@@ -2960,7 +2954,6 @@ export function ImportPage() {
                 {mode === 'review' && (
                   <td className="td text-right whitespace-nowrap space-x-1">
                     <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => openEdit(r)}>Correct</button>
-                    <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
                     <button type="button" className="btn-primary !px-2 !py-1 text-xs" disabled={busy} onClick={() => promote(r.id)}>Add to leads</button>
                     <button type="button" className="btn-secondary !px-2 !py-1 text-xs" disabled={busy} onClick={() => dismiss(r.id)}>Delete</button>
                   </td>

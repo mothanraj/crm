@@ -206,22 +206,29 @@ def norm_key(s: str) -> str:
 
 
 def parse_excel_date(v):
-    """Accept Excel serials (int/float) + common text formats. Returns date|None."""
+    """Accept Excel serials, real date cells, and common text formats. Returns date|None."""
     if v is None or v == "":
         return None
+    from datetime import datetime as dt
+    from datetime import timedelta
+    if isinstance(v, dt):
+        return v.date()
+    if isinstance(v, date):
+        return v
     if isinstance(v, (int, float)):
-        from datetime import datetime as dt
         base = date(1899, 12, 30)
         try:
-            from datetime import timedelta
             return base + timedelta(days=int(v))
         except Exception:
             return None
     s = str(v).strip()
+    if "T" in s:
+        s = s.split("T", 1)[0]
+    elif " " in s:
+        s = s.split(" ", 1)[0]
     for fmt in ("%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%y", "%d-%m-%y", "%Y-%m-%d",
                 "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%d.%m.%Y "):
         try:
-            from datetime import datetime as dt
             return dt.strptime(s, fmt).date()
         except Exception:
             continue

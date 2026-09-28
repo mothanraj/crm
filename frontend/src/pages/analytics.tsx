@@ -188,19 +188,23 @@ export function Analytics() {
   const formatCell = (value: number) => (money ? inr(value) : num(value));
   const selectedYears = params.getAll('year');
   const yearChoices = useMemo(() => {
-    const end = new Date().getFullYear() + 15;
-    const years: number[] = [];
-    for (let year = 1900; year <= end; year += 1) years.push(year);
-    return years;
-  }, []);
+    const end = new Date().getFullYear() + 1;
+    const years = new Set<number>();
+    for (let year = end; year >= 2018; year -= 1) years.add(year);
+    selectedYears.forEach((value) => {
+      const year = Number(value);
+      if (year) years.add(year);
+    });
+    return [...years].sort((a, b) => b - a);
+  }, [selectedYears]);
   useEffect(() => {
-    if (paramsRef.current.getAll('year').length > 0) return;
+    const years = (data?.years || []).map((year: number | string) => String(year));
+    if (!years.length || paramsRef.current.getAll('year').length > 0) return;
     update((next) => {
       if (next.getAll('year').length > 0) return;
-      next.append('year', '2026');
-      next.append('year', '2025');
+      years.forEach((year: string) => next.append('year', year));
     });
-  }, []);
+  }, [data]);
 
   function selectCompare(value: string) {
     update((next) => {
@@ -330,7 +334,7 @@ export function Analytics() {
       {refreshed && <p className="text-xs text-graphite-500 -mt-4 mb-4">Last updated {refreshed}. New and updated leads refresh this page automatically.</p>}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{String(error)}</div>}
 
-      <Card title="Comparison">
+      <Card title="Comparison" className={yearsOpen || rangeOpen ? 'relative z-30' : ''}>
         <div className="flex flex-wrap items-end gap-3 mb-4">
           <label className="text-sm w-full max-w-xs">Compare by
             <select className="input mt-1" value={compareBy} onChange={(e) => selectCompare(e.target.value)}>
@@ -348,7 +352,7 @@ export function Analytics() {
           <div className="relative text-sm w-full max-w-xs">
             <span className="block">Years</span>
             <button type="button" className="input mt-1 text-left" onClick={() => { setRangeOpen(false); setYearsOpen((open) => !open); }}>
-              Select years
+              {selectedYears.length ? selectedYears.join(', ') : 'All years with leads'}
             </button>
             {yearsOpen && (
               <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-graphite-200 bg-white shadow-lg">
@@ -363,8 +367,8 @@ export function Analytics() {
           </div>
           <div className="relative text-sm w-full max-w-xs">
             <span className="block">Compare</span>
-            <button type="button" className="input mt-1 text-left" onClick={openRange}>
-              Compare
+            <button type="button" className="input mt-1 text-left truncate" onClick={openRange}>
+              {RANGE_OPTIONS.find(([value]) => value === rangePreset)?.[1] || 'Choose a period'}
             </button>
             {rangeOpen && (
               <div className="absolute z-30 mt-1 w-[22rem] max-h-[28rem] overflow-auto rounded-lg border border-graphite-200 bg-white p-3 shadow-lg">

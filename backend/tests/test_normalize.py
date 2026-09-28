@@ -14,8 +14,12 @@ def test_phone():
 
 
 def test_date_serial():
+    from datetime import date, datetime
     d = parse_excel_date(46186)
     assert d is not None and d.year == 2026
+    assert parse_excel_date(datetime(2025, 8, 12)) == date(2025, 8, 12)
+    assert parse_excel_date("2025-08-12 00:00:00") == date(2025, 8, 12)
+    assert parse_excel_date("2024-10-07") == date(2024, 10, 7)
 
 
 def test_status_merge():
