@@ -742,7 +742,7 @@ def _next_revision(current: str | None) -> str:
 
 def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None) -> dict:
     from app.services.quotation_form import (
-        DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY,
+        DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY, DEFAULT_INTRODUCTION,
         normalize_delivery_period,
         build_quotation_number, calc_form_totals, clean_extra_lines,
     )
@@ -767,6 +767,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     payment_terms = (notes.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
     delivery_period = normalize_delivery_period(notes.get("delivery_period"))
     post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
+    introduction = notes["introduction"] if "introduction" in notes else DEFAULT_INTRODUCTION
     extra_lines = clean_extra_lines(notes.get("extra_lines") or [])
     revision = (quote.revision if quote else "R0") or "R0"
     if quote and quote.quotation_number:
@@ -787,6 +788,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         "payment_terms": payment_terms,
         "delivery_period": delivery_period,
         "post_warranty": post_warranty,
+        "introduction": introduction,
         "unit_cost": int(round(unit_cost)) if unit_cost else 0,
         "units": units,
         "extra_lines": extra_lines,
@@ -825,7 +827,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
     import json
     from datetime import date as date_cls
 
-    from app.services.quotation_form import calc_form_totals, build_quotation_number, clean_extra_lines
+    from app.services.quotation_form import calc_form_totals, build_quotation_number, clean_extra_lines, DEFAULT_INTRODUCTION
 
     _require_lead_write(u)
     lead = _owned_lead(db, lid, u)
@@ -847,6 +849,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         "payment_terms": (body.payment_terms or "").strip(),
         "delivery_period": (body.delivery_period or "").strip(),
         "post_warranty": (body.post_warranty or "").strip(),
+        "introduction": body.introduction if body.introduction is not None else "",
         "units": float(body.units),
         "extra_lines": extra_lines,
         "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
@@ -866,6 +869,8 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
             old_snap["quotation_date"] = quote.quotation_date.isoformat()
         if not old_snap.get("extra_lines"):
             old_snap["extra_lines"] = []
+        if "introduction" not in old and (snap.get("introduction") or "").strip() == DEFAULT_INTRODUCTION.strip():
+            old_snap["introduction"] = snap["introduction"]
         changed = any(old_snap.get(k) != snap[k] for k in snap)
         if already_issued and changed:
             quote.revision = _next_revision(quote.revision)

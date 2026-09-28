@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -676,7 +676,7 @@ export function EmployeeDashboard() {
     { label: 'C (Planning Stage)', bg: 'bg-[#475569]' },
   ];
   const tiles = [
-    { label: 'My assigned leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
+    { label: 'Total leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
     { label: 'Pending', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
     { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
     { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#2F9E44]', hint: 'First contact recorded' },
@@ -1063,26 +1063,69 @@ function inrIndian(n: number) {
   return `${n < 0 ? '-' : ''}${parts.join(',')},${last3}`;
 }
 
+function arrowStep(value: string, key: string, step = 1, min = 0) {
+  if (key !== 'ArrowUp' && key !== 'ArrowDown') return null;
+  const raw = String(value ?? '').replace(/,/g, '').trim();
+  if (!raw) return String(min);
+  const current = Number(raw);
+  const base = Number.isFinite(current) ? current : min;
+  const next = Math.max(min, base + (key === 'ArrowUp' ? step : -step));
+  const rounded = Math.round(next * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
 function quoteDocField({
   multiline,
   className,
   readOnly,
+  onKeyDown,
+  onChange,
   ...rest
 }: {
   multiline?: boolean;
   className?: string;
   readOnly?: boolean;
+  onKeyDown?: (e: any) => void;
+  onChange?: (e: any) => void;
   [key: string]: any;
 }) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  const value = rest.value;
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, multiline]);
   const base = readOnly
     ? 'bg-transparent border-0 border-b border-transparent px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug cursor-default'
     : 'bg-transparent border-0 border-b border-dashed border-sky-400/80 outline-none focus:border-brand-600 focus:bg-amber-50/40 px-0.5 py-0.5 w-full min-w-0 text-[15px] leading-snug';
+  const handleKeyDown = (e: any) => {
+    onKeyDown?.(e);
+    if (e.defaultPrevented || multiline || readOnly) return;
+    const numeric = rest.inputMode === 'numeric' || rest.type === 'number';
+    if (!numeric) return;
+    const step = Number(rest.step) > 0 ? Number(rest.step) : 1;
+    const min = rest.min === undefined || rest.min === '' ? 0 : Number(rest.min);
+    const next = arrowStep(String(rest.value ?? ''), e.key, step, Number.isFinite(min) ? min : 0);
+    if (next == null) return;
+    e.preventDefault();
+    onChange?.({ target: { value: next } });
+  };
   if (multiline) {
-    const text = String(rest.value ?? '');
-    const rows = Math.max(2, text.split(/\r\n|\n|\r/).length);
-    return <textarea {...rest} readOnly={readOnly} rows={rows} className={`${base} whitespace-pre-wrap resize-y overflow-hidden ${className || ''}`} />;
+    return (
+      <textarea
+        {...rest}
+        ref={box}
+        readOnly={readOnly}
+        rows={2}
+        onChange={onChange}
+        onKeyDown={handleKeyDown}
+        className={`${base} whitespace-pre-wrap resize-none overflow-hidden ${className || ''}`}
+      />
+    );
   }
-  return <input {...rest} readOnly={readOnly} className={`${base} ${className || ''}`} />;
+  return <input {...rest} readOnly={readOnly} onChange={onChange} onKeyDown={handleKeyDown} className={`${base} ${className || ''}`} />;
 }
 
 function QuoteField(props: any) {
@@ -1106,10 +1149,13 @@ function QuotationFormModal({
     '1. 2 - 3 Months from the date of receipt of Advance payment along with PO or on-site readiness condition.';
   const defaultWarranty =
     '1. After the warranty period AMC is applicable.\n2. 3 - 4% of the Total cost per unit/year will be approximately charged for AMC.';
+  const defaultIntroduction =
+    'E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike Parking System, Design & Manufacturing Company in Association with International Tycoons from Japan, Germany & Korea, also a Group Company of MECHCI since 1995.';
   const [form, setForm] = useState({
     to_name: '',
     to_address: '',
     subject: '',
+    introduction: defaultIntroduction,
     product_description: 'Design, Manufacture, Supply and Erection of Parking System',
     payment_terms: defaultPayment,
     delivery_period: defaultDelivery,
@@ -1142,6 +1188,7 @@ function QuotationFormModal({
           to_name: d.to_name || '',
           to_address: d.to_address || '',
           subject: d.subject || '',
+          introduction: d.introduction != null && d.introduction !== undefined ? d.introduction : defaultIntroduction,
           product_description: d.product_description || 'Design, Manufacture, Supply and Erection of Parking System',
           payment_terms: d.payment_terms || defaultPayment,
           delivery_period: (() => {
@@ -1215,6 +1262,7 @@ function QuotationFormModal({
     to_name: form.to_name.trim(),
     to_address: form.to_address.trim(),
     subject: form.subject.trim(),
+    introduction: form.introduction,
     product_description: form.product_description.trim(),
     payment_terms: form.payment_terms.trim(),
     delivery_period: form.delivery_period.trim(),
@@ -1246,6 +1294,7 @@ function QuotationFormModal({
       payment_terms: data.payment_terms || cur.payment_terms,
       delivery_period: data.delivery_period || cur.delivery_period,
       post_warranty: data.post_warranty || cur.post_warranty,
+      introduction: data.introduction != null ? data.introduction : cur.introduction,
     }));
     onSaved(lead.id, {
       quotation_number: data.quotation_number,
@@ -1424,11 +1473,13 @@ function QuotationFormModal({
                 />
               </div>
 
-              <p className="mb-6 text-[13.5px] leading-relaxed text-slate-700 text-justify">
-                E STAR Engineers Private Limited is a high-end Automated Multilevel Car/Auto/Bike
-                Parking System, Design &amp; Manufacturing Company in Association with International Tycoons
-                from Japan, Germany &amp; Korea, also a Group Company of MECHCI since 1995.
-              </p>
+              <QuoteField readOnly={!editing}
+                multiline
+                value={form.introduction}
+                onChange={(e: any) => set({ introduction: e.target.value })}
+                placeholder="Paragraph after the subject"
+                className="mb-6 text-justify leading-relaxed"
+              />
 
               <table className="w-full border-collapse text-[13px] mb-6" style={{ fontFamily: 'Helvetica, Arial, sans-serif' }}>
                 <thead>
@@ -2003,6 +2054,13 @@ export function Leads() {
                           placeholder="2"
                           title="Starts at 2. Odd or even for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Even only for Two Post, Four Post, Pit Stack, and Tower."
                           onChange={(e) => setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: e.target.value } : item))}
+                          onKeyDown={(e) => {
+                            const step = allowsOddCars(prodName(l, nameOf)) ? 1 : 2;
+                            const next = arrowStep(e.currentTarget.value, e.key, step, 2);
+                            if (next == null) return;
+                            e.preventDefault();
+                            setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: next } : item));
+                          }}
                           onBlur={(e) => saveProductCars(l, l.product_id || '', e.target.value)}
                         />
                       ) : (l.quantity_raw || '—')}
@@ -2054,10 +2112,14 @@ export function Leads() {
                       ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">                      {l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {inr(entry.quotation_value)}</span>}</div>) : nameOf('statuses', l.status_id)}</div>)}
                       {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && nameOf('statuses', draftFor(l).progress) === 'Quotation sent' && (
                         <label className="block text-xs text-graphite-600 mt-2">Quotation value
-                          <input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value.replace(/[^\d]/g, '') } }))} />
+                          <input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value.replace(/[^\d]/g, '') } }))} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, 1, 0); if (next == null) return; e.preventDefault(); setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: next } })); }} />
                         </label>
                       )}
+<<<<<<< HEAD
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select progress…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} /></label>}</div>)}
+=======
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select category…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, 1, 0); if (next == null) return; e.preventDefault(); setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: next } : item) })); }} /></label>}</div>)}
+>>>>>>> 9250f3d468633e354d1bf3768ceca038bb38de61
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
@@ -2543,7 +2605,7 @@ export function LeadDetail({ id }: { id: string }) {
             </div>
             <div>
               <label className="text-xs font-medium text-graphite-600">No. of Cars</label>
-              <input className="input mt-1" type="number" min="1" step="1" value={details.quantity_raw} onChange={(e) => setDetails((cur) => ({ ...cur, quantity_raw: e.target.value }))} />
+              <input className="input mt-1" type="number" min="1" step="1" value={details.quantity_raw} onChange={(e) => setDetails((cur) => ({ ...cur, quantity_raw: e.target.value }))} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, 1, 1); if (next == null) return; e.preventDefault(); setDetails((cur) => ({ ...cur, quantity_raw: next })); }} />
             </div>
             <div>
               <label className="text-xs font-medium text-graphite-600">Lead Source</label>
@@ -2586,7 +2648,7 @@ export function LeadDetail({ id }: { id: string }) {
           </div>
           <div>
             <label className="text-xs font-medium text-graphite-600">Number of Cars</label>
-            <input className="input mt-1" type="number" min="2" step={allowsOddCars(selectedProduct?.name || '') ? 1 : 2} disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} placeholder="2" />
+            <input className="input mt-1" type="number" min="2" step={allowsOddCars(selectedProduct?.name || '') ? 1 : 2} disabled={!canEditPricing} value={cars} onChange={(e) => setCars(e.target.value)} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, allowsOddCars(selectedProduct?.name || '') ? 1 : 2, 2); if (next == null) return; e.preventDefault(); setCars(next); }} placeholder="2" />
             <p className="text-[11px] text-graphite-500 mt-1">Starts at 2. Blank saves as 2. Odd or even: Puzzle Parking, Pit Puzzle Parking, Car Elevator, Shuttle Parking, ASRS Parking. Even only: Two Post, Four Post, Pit Stack, Tower.</p>
           </div>
           <div>
