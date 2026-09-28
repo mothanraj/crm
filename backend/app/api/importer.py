@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 
 import openpyxl
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -370,6 +370,19 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
         log.error("assignment email dispatch failed: %s", exc)
 
 
+def _email_assignments_later(groups: dict[str, list[str]]) -> None:
+    """Send assignment mail after the import response, on its own database session."""
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        parsed = {UUID(emp_id): [UUID(lid) for lid in lids] for emp_id, lids in (groups or {}).items()}
+        _send_assignment_batches(db, parsed)
+    except Exception as exc:
+        log.error("assignment email after import failed: %s", exc)
+    finally:
+        db.close()
+
+
 def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = False) -> Lead:
     name = str(raw.get("name") or "").strip()
     phone = str(raw.get("phone") or "").strip()
@@ -440,7 +453,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
                 lead_id=lead.id, old_status_id=None, new_status_id=st.id,
                 changed_by=admin.id, reason="import review promote",
             ))
-            auto_assign(db, lead, admin)
+            auto_assign(db, lead, admin, ignore_limit=True)
     except IntegrityError:
         raise HTTPException(400, "Enquiry number already exists")
     return lead
@@ -565,7 +578,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
 
 
 @router.post("/{bid}/confirm")
-def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
+def confirm(bid: UUID, background: BackgroundTasks, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
     batch = db.get(ImportBatch, bid)
     rows = PENDING.get(str(bid), [])
     if not batch or not rows:
@@ -650,7 +663,7 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
                     lead_id=lead.id, old_status_id=None, new_status_id=st.id,
                     changed_by=admin.id, reason="excel import",
                 ))
-                emp = auto_assign(db, lead, admin)
+                emp = auto_assign(db, lead, admin, ignore_limit=True)
                 if emp:
                     new_by_emp.setdefault(emp.id, []).append(lead.id)
         except IntegrityError:
@@ -670,9 +683,12 @@ def confirm(bid: UUID, db: Session = Depends(get_db), admin: User = Depends(admi
     db.commit()
     if ok:
         live.bump()
-    # One batched email per employee with all newly assigned customers.
-    _send_assignment_batches(db, new_by_emp)
     errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
+    if new_by_emp:
+        background.add_task(
+            _email_assignments_later,
+            {str(emp_id): [str(lid) for lid in lids] for emp_id, lids in new_by_emp.items()},
+        )
     return {
         "batch_id": str(bid),
         "total": batch.total_rows,
