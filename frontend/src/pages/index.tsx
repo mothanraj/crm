@@ -2574,7 +2574,13 @@ export function ImportPage() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'duplicates' | 'invalid' | 'ready'>('duplicates');
   const [importMasters, setImportMasters] = useState<any>(null);
-  const errMsg = (e: any) => e?.response?.data?.detail || 'Upload failed. Is the backend running?';
+  const errMsg = (e: any) => {
+    if (e?.code === 'ECONNABORTED') return 'The import took too long for the page to wait. Refresh Leads — the rows may already be saved.';
+    const detail = e?.response?.data?.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (!e?.response) return 'Upload failed. Is the backend running?';
+    return 'Upload failed. Is the backend running?';
+  };
 
   const loadBatches = () => api.get('/import/batches').then((r) => setBatches(r.data || [])).catch(() => {});
   useEffect(() => {
@@ -2598,7 +2604,7 @@ export function ImportPage() {
       const fd = new FormData();
       fd.append('file', file);
       if (withSheet) fd.append('sheet', withSheet);
-      const { data } = await api.post('/import/excel', fd);
+      const { data } = await api.post('/import/excel', fd, { timeout: 180000 });
       if (data.batch_id) {
         setRes(data);
         setTab(data.duplicates ? 'duplicates' : 'invalid');
@@ -2615,7 +2621,7 @@ export function ImportPage() {
     if (!res?.batch_id || confirming) return;
     setConfirming(true); setError(''); setOkMsg('');
     try {
-      const { data } = await api.post(`/import/${res.batch_id}/confirm`);
+      const { data } = await api.post(`/import/${res.batch_id}/confirm`, null, { timeout: 180000 });
       setDone(data);
       setErrors(data.errors || []);
       setRes(null);
