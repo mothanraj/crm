@@ -249,6 +249,11 @@ def _multiline_paras(text: str, style) -> list:
     return paras or [Paragraph("", style)]
 
 
+def _twip(n: float) -> float:
+    """Word spacing uses twips. 20 twips = 1 point."""
+    return float(n) / 20.0
+
+
 def _address_lines(text, style) -> list:
     """Keep each typed line on its own row. Blank lines stay as a gap."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -260,7 +265,7 @@ def _address_lines(text, style) -> list:
         if line.strip():
             out.append(Paragraph(escape(line.rstrip()), style))
         else:
-            out.append(Spacer(1, 10))
+            out.append(Spacer(1, _twip(80)))
     return out
 
 
@@ -307,26 +312,57 @@ def _draw_letterhead_page(canvas, _doc):
 
 
 def build_quotation_form_pdf(data: dict) -> bytes:
-    """Build quotation PDF matching the actual EEPL Word/PDF letterhead."""
-    from reportlab.platypus import Image, PageBreak
+    """Build quotation PDF matching the EEPL Word letterhead and paragraph gaps."""
+    from reportlab.platypus import Image, KeepTogether, PageBreak
 
     buffer = BytesIO()
     width, _height = A4
+    # Logo ends near 32 mm; footer banner needs about 29 mm.
     doc = SimpleDocTemplate(
         buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=38 * mm, bottomMargin=32 * mm,
+        topMargin=36 * mm, bottomMargin=30 * mm,
         title=data.get("quotation_number") or "Quotation",
         author="ESTAR Engineers Pvt Ltd",
     )
 
-    body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11, leading=13, textColor=colors.HexColor("#1e293b"), spaceAfter=2)
+    # Readable letter spacing (Times New Roman). Only the empty gap after
+    # Customer Scope is kept small by letting page-1 content breathe downward.
+    body = ParagraphStyle(
+        "body", fontName="Times-Roman", fontSize=11, leading=15,
+        textColor=colors.HexColor("#1e293b"), spaceAfter=2,
+    )
     bold = ParagraphStyle("bold", parent=body, fontName="Times-Bold")
-    small = ParagraphStyle("small", fontName="Times-Roman", fontSize=10.5, leading=13, textColor=colors.HexColor("#334155"), spaceAfter=2)
-    small_bold = ParagraphStyle("small_bold", parent=small, fontName="Times-Bold")
-    section = ParagraphStyle("section", parent=bold, fontSize=11, leading=13, spaceBefore=10, spaceAfter=4)
-    cell = ParagraphStyle("cell", fontName="Times-Roman", fontSize=11, leading=13, alignment=1)
-    cell_left = ParagraphStyle("cell_l", fontName="Times-Roman", fontSize=11, leading=13, alignment=0)
+    to_label = ParagraphStyle("to_label", parent=bold, leading=16, spaceAfter=2)
+    addr = ParagraphStyle(
+        "addr", fontName="Times-Bold", fontSize=10.5, leading=14,
+        textColor=colors.HexColor("#1e293b"), spaceAfter=1,
+    )
+    small = ParagraphStyle(
+        "small", fontName="Times-Roman", fontSize=10.5, leading=14,
+        textColor=colors.HexColor("#334155"), spaceAfter=2,
+    )
+    term_item = ParagraphStyle("term_item", parent=small, spaceAfter=3)
+    page2_item = ParagraphStyle("page2_item", parent=small, spaceAfter=4)
+    section = ParagraphStyle(
+        "section", parent=bold, fontSize=11, leading=15,
+        spaceBefore=12, spaceAfter=6,
+    )
+    scope_section = ParagraphStyle(
+        "scope_section", parent=section, spaceBefore=12, spaceAfter=6,
+    )
+    page2_section = ParagraphStyle(
+        "page2_section", parent=section, spaceBefore=14, spaceAfter=6,
+    )
+    first_page2 = ParagraphStyle(
+        "first_page2", parent=bold, fontSize=11, leading=15,
+        spaceBefore=0, spaceAfter=6,
+    )
+    cell = ParagraphStyle("cell", fontName="Times-Roman", fontSize=11, leading=14, alignment=1)
+    cell_left = ParagraphStyle("cell_l", fontName="Times-Roman", fontSize=11, leading=14, alignment=0)
     head = ParagraphStyle("head", parent=cell, fontName="Times-Bold", textColor=colors.white)
+    dear = ParagraphStyle("dear", parent=bold, spaceAfter=8)
+    subject_style = ParagraphStyle("subject", parent=bold, spaceBefore=2, spaceAfter=10)
+    intro_style = ParagraphStyle("intro", parent=body, alignment=4, leading=15, spaceAfter=2)
 
     quote_date = data.get("quotation_date") or date.today().isoformat()
     if hasattr(quote_date, "isoformat"):
@@ -346,12 +382,10 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     units = float(data.get("units") or 0)
     extra_lines = data.get("extra_lines") or []
     totals = calc_form_totals(unit_cost, units, extra_lines)
-    amount = totals["amount_excl"]
     gst = totals["gst"]
     grand = totals["grand_total"]
 
     story = []
-    # REF left · Date flush right (same as sent quotes)
     ref_date = Table(
         [[
             Paragraph(f"<b>REF:</b> {ref}", body),
@@ -370,21 +404,20 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     ]))
     story.append(ref_date)
     story.append(Spacer(1, 14))
-    story.append(Paragraph("<b>To</b>", bold))
+    story.append(Paragraph("<b>To</b>", to_label))
     story.append(Spacer(1, 4))
-    story.extend(_address_lines(data.get("to_name"), bold))
-    story.extend(_address_lines(data.get("to_address"), small_bold))
+    story.extend(_address_lines(data.get("to_name"), addr))
+    story.extend(_address_lines(data.get("to_address"), addr))
     story.append(Spacer(1, 14))
-    story.append(Paragraph("<b>Dear Sir,</b>", bold))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph(f"<b>Sub: - {subject}</b>", body))
-    story.append(Spacer(1, 10))
+    story.append(Paragraph("<b>Dear Sir,</b>", dear))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(f"<b>Sub: - {subject}</b>", subject_style))
     intro = data.get("introduction")
     if intro is None:
         intro = DEFAULT_INTRODUCTION
     intro = str(intro).strip()
     if intro:
-        story.extend(_multiline_paras(intro, ParagraphStyle("intro", parent=body, alignment=4)))
+        story.extend(_multiline_paras(intro, intro_style))
     story.append(Spacer(1, 14))
 
     line_rows = [[
@@ -437,61 +470,71 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         ],
     ]
     usable = width - 36 * mm
-    table = Table(rows, colWidths=[usable * 0.08, usable * 0.42, usable * 0.18, usable * 0.14, usable * 0.18])
+    table = Table(
+        rows,
+        colWidths=[usable * 0.08, usable * 0.42, usable * 0.18, usable * 0.14, usable * 0.18],
+    )
+    # Comfortable row height; page-1 Terms + Customer Scope stay together.
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e2e8f0")),
     ]))
     story.append(table)
-    story.append(Spacer(1, 16))
+    story.append(Spacer(1, 14))
 
-    story.append(Paragraph("<b>General Terms &amp; Conditions:</b>", section))
-    for line in [
-        "1. GST and Other Taxes as extra applicable.",
-        "2. This offer is valid for 15 days only.",
-        "3. One-year Warranty and Maintenance on the installed system.",
-    ]:
-        story.append(Paragraph(escape(line), small))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("<b>Customer Scope:</b>", section))
-    for line in [
-        "1. Approval from the Competent Authority. Site Clearance if required.",
-        "2. Civil Foundations, Civil Works and Cladding are Additional",
-        "3. 3 Phase Power Supply. Stabilized Power & dedicated Earth for installation and operation to be provided by the Client.",
-        "4. The Client must provide an appropriate storage area at the site.",
-    ]:
-        story.append(Paragraph(escape(line), small))
+    page1_tail = [
+        Paragraph("<b>General Terms &amp; Conditions:</b>", section),
+        *[Paragraph(escape(line), term_item) for line in [
+            "1. GST and Other Taxes as extra applicable.",
+            "2. This offer is valid for 15 days only.",
+            "3. One-year Warranty and Maintenance on the installed system.",
+        ]],
+        Paragraph("<b>Customer Scope:</b>", scope_section),
+        *[Paragraph(escape(line), term_item) for line in [
+            "1. Approval from the Competent Authority. Site Clearance if required.",
+            "2. Civil Foundations, Civil Works and Cladding are Additional",
+            "3. 3 Phase Power Supply. Stabilized Power & dedicated Earth for installation and operation to be provided by the Client.",
+            "4. The Client must provide an appropriate storage area at the site.",
+        ]],
+        # Small gap only — Payment Terms begin on the next page (same as the Word file).
+        Spacer(1, 6),
+    ]
+    story.append(KeepTogether(page1_tail))
 
-    # ——— Page 2: Payment / Delivery / Post Warranty / Sign / Banking ———
     story.append(PageBreak())
-    story.append(Paragraph("<b>Payment Terms:</b>", section))
-    story.extend(_multiline_paras(payment_terms, small))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Delivery Period:</b>", section))
-    story.extend(_multiline_paras(delivery_period, small))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Post Warranty:</b>", section))
-    story.extend(_multiline_paras(post_warranty, small))
+    story.append(Paragraph("<b>Payment Terms:</b>", first_page2))
+    story.extend(_multiline_paras(payment_terms, page2_item))
+    story.append(Paragraph("<b>Delivery Period:</b>", page2_section))
+    story.extend(_multiline_paras(delivery_period, page2_item))
+    story.append(Paragraph("<b>Post Warranty:</b>", page2_section))
+    story.extend(_multiline_paras(post_warranty, page2_item))
 
-    story.append(Spacer(1, 22))
-    story.append(Paragraph("Regards,", body))
-    story.append(Spacer(1, 4))
-    story.append(Paragraph("For, <b>ESTAR ENGINEERS PRIVATE LIMITED</b>", body))
-    story.append(Spacer(1, 8))
-    # Original order: signature sits between company line and printed name
+    story.append(Spacer(1, 18))
+    story.append(Paragraph("Regards,", ParagraphStyle("regards", parent=body, spaceAfter=6)))
+    story.append(Paragraph(
+        "For, <b>ESTAR ENGINEERS PRIVATE LIMITED</b>",
+        ParagraphStyle("for_co", parent=body, spaceAfter=6),
+    ))
     if SIGNATURE_IMG.exists():
         story.append(Image(str(SIGNATURE_IMG), width=22 * mm, height=24 * mm, kind="proportional", hAlign="LEFT"))
-        story.append(Spacer(1, 4))
+        story.append(Spacer(1, 6))
     else:
         story.append(Spacer(1, 16))
-    story.append(Paragraph("<b>JAYARAMAN K</b>", bold))
-    story.append(Paragraph("<b>Director</b>", ParagraphStyle("director", parent=bold, fontSize=9.5, leading=12)))
-    story.append(Spacer(1, 20))
-    story.append(Paragraph("<b>BANKING DETAILS:</b>", section))
+    story.append(Paragraph("<b>JAYARAMAN K</b>", ParagraphStyle("sign_name", parent=bold, spaceAfter=2)))
+    story.append(Paragraph(
+        "<b>Director</b>",
+        ParagraphStyle("director", parent=bold, fontSize=9.5, leading=12, spaceAfter=14),
+    ))
+    story.append(Paragraph("<b>BANKING DETAILS:</b>", ParagraphStyle(
+        "bank_head", parent=bold, leading=16, spaceAfter=4,
+    )))
+    bank_line = ParagraphStyle("bank_line", parent=small, leading=16, spaceAfter=2)
     for line in [
         "Account Name: E STAR ENGINEERS PRIVATE LIMITED",
         "Account Number: 8428210000009812",
@@ -499,7 +542,7 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         "Branch Name: Chennai",
         "Any RTGS/NEFT to our IFSC code: DBSS0IN0428",
     ]:
-        story.append(Paragraph(escape(line), small))
+        story.append(Paragraph(escape(line), bank_line))
 
     doc.build(story, onFirstPage=_draw_letterhead_page, onLaterPages=_draw_letterhead_page)
     return buffer.getvalue()
