@@ -230,7 +230,13 @@ class ImportBatch(Base):
     duplicates: Mapped[int] = mapped_column(Integer, default=0)
     invalid: Mapped[int] = mapped_column(Integer, default=0)
     skipped: Mapped[int] = mapped_column(Integer, default=0)
+    assigned_count: Mapped[int] = mapped_column(Integer, default=0)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(Text, default="PREVIEW")
+    # Full classified preview kept in Postgres so confirm works on Render
+    # after process restart (in-memory PENDING alone is not enough).
+    preview_rows: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = _ts()
 

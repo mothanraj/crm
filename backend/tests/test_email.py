@@ -9,6 +9,7 @@ from app.services.email_service import (
 
 def _lead(n: int) -> dict:
     return {
+        "lead_id": f"lead-{n}",
         "enquiry_number": f"ENQ-00000{n}",
         "legacy_enq": 100 + n,
         "enquiry_date": "2026-09-10",
@@ -55,14 +56,28 @@ def test_assignment_empty_sends_nothing():
     assert send_assignment_email("hari@example.com", "hari", []) is False
 
 
-def test_assignment_dedupes_same_enquiry():
-    leads = [_lead(1), _lead(1), _lead(2)]
-    unique = dedupe_assignment_items(leads)
+def test_assignment_dedupes_same_lead_id():
+    a = _lead(1)
+    dup = dict(a)
+    b = _lead(2)
+    unique = dedupe_assignment_items([a, dup, b])
     assert [x["enquiry_number"] for x in unique] == ["ENQ-000001", "ENQ-000002"]
-    subject, html = build_assignment_email("hari", leads)
+    subject, html = build_assignment_email("hari", [a, dup, b])
     assert "2" in subject
-    assert "Customer1" in html and html.count("<h3>Customer1") == 1
+    assert html.count("<h3>1. Customer1") == 1
     assert "Customer2" in html
+
+
+def test_assignment_keeps_distinct_leads_with_same_enquiry_text():
+    """Two real leads must both appear even if enquiry labels match."""
+    a = _lead(1)
+    b = _lead(2)
+    b["enquiry_number"] = a["enquiry_number"]
+    unique = dedupe_assignment_items([a, b])
+    assert len(unique) == 2
+    _, html = build_assignment_email("hari", [a, b])
+    assert "Customer1" in html and "Customer2" in html
+    assert html.count("<h3>") == 2
 
 
 def test_assignment_chunk_label_for_large_batches():

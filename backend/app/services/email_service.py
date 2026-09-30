@@ -4,6 +4,8 @@ Failures only log — email must never break imports, assigns, or sweeps.
 
 Logic (Sep 2026):
 - Employee: one batched email on assignment with full customer details.
+  Every distinct lead appears once (keyed by lead id). Large lists are
+  split into parts so Brevo accepts the HTML.
 - Admin: one daily email listing customers past the 3-day due with no
   talk/status update, including assigned date.
 """
@@ -19,7 +21,7 @@ log = logging.getLogger(__name__)
 
 BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
 # Keep each message small enough for Brevo. Large Excel imports are split.
-ASSIGNMENT_EMAIL_CHUNK = 40
+ASSIGNMENT_EMAIL_CHUNK = 25
 
 
 def emails_enabled() -> bool:
@@ -27,11 +29,13 @@ def emails_enabled() -> bool:
 
 
 def dedupe_assignment_items(leads: list[dict]) -> list[dict]:
-    """Keep the first card for each enquiry / lead id. Drop empty rows."""
+    """Keep each lead once. Prefer lead_id so identical enquiry text cannot collapse rows."""
     seen: set[str] = set()
     out: list[dict] = []
     for item in leads or []:
-        key = str(item.get("enquiry_number") or item.get("lead_id") or "").strip()
+        lead_id = str(item.get("lead_id") or "").strip()
+        enquiry = str(item.get("enquiry_number") or "").strip()
+        key = lead_id or enquiry
         if not key or key in seen:
             continue
         seen.add(key)
@@ -62,7 +66,7 @@ def send_email(to_email: str, to_name: str, subject: str, html: str) -> bool:
             timeout=60.0,
         )
         if resp.status_code in (200, 201):
-            log.info("email sent '%s' to %s", subject, to_email)
+            log.info("email sent '%s' to %s (%s bytes html)", subject, to_email, len(html))
             return True
         log.error("Brevo rejected email '%s' to %s: %s %s", subject, to_email,
                   resp.status_code, resp.text[:300])
@@ -76,7 +80,7 @@ def _is_direct_call(item: dict) -> bool:
     return str(item.get("source") or "").strip().lower() == "direct call"
 
 
-def _lead_card(item: dict) -> str:
+def _lead_card(index: int, item: dict) -> str:
     """Full customer details card for one assigned lead."""
     if _is_direct_call(item):
         due = (
@@ -86,7 +90,7 @@ def _lead_card(item: dict) -> str:
     else:
         due = f"<li><b>Due date (contact within 3 days):</b> {item.get('deadline_str') or '—'}</li>"
     return f"""<hr>
-<h3>{item.get('customer_name') or '—'} ({item.get('enquiry_number') or '—'})</h3>
+<h3>{index}. {item.get('customer_name') or '—'} ({item.get('enquiry_number') or '—'})</h3>
 <ul>
 <li><b>Enquiry number:</b> {item.get('enquiry_number') or '—'}{(' / Excel #' + str(item.get('legacy_enq'))) if item.get('legacy_enq') is not None else ''}</li>
 <li><b>Enquiry date:</b> {item.get('enquiry_date') or '—'}</li>
@@ -113,15 +117,17 @@ def build_assignment_email(
 ) -> tuple[str, str]:
     """(subject, html) for the batched assignment email to the employee.
 
-    leads: [{enquiry_number, legacy_enq, enquiry_date, assigned_date_str,
-      customer_name, contact_number, alternate_contact, email, company_name,
-      city, source, product, quantity_raw, deadline_str, lead_url}]
-    Direct Call rows ask for an update within 24 hours. Other sources stay at 3 days.
+    Each lead appears exactly once. When the assignment is split across
+    several emails, batch/batches label the part (e.g. part 1/3).
     """
     leads = dedupe_assignment_items(leads)
     n = len(leads)
     total_n = total if total is not None else n
-    enqs = ", ".join(str(x.get("enquiry_number") or "") for x in leads[:5] if x.get("enquiry_number"))
+    enqs = ", ".join(
+        str(x.get("enquiry_number") or "") for x in leads if x.get("enquiry_number")
+    )
+    if len(enqs) > 180:
+        enqs = enqs[:177] + "…"
     part = f" · part {batch}/{batches}" if batches > 1 else ""
     count_label = f"{n} of {total_n}" if batches > 1 else str(n)
     direct = [x for x in leads if _is_direct_call(x)]
@@ -132,7 +138,8 @@ def build_assignment_email(
         )
         intro = (
             f"{count_label} Direct Call customer(s) have been assigned to you{part}. "
-            "This is urgent. Please update the work progress in the CRM within 24 hours."
+            "This is urgent. Please update the work progress in the CRM within 24 hours. "
+            f"Every lead below is listed once ({n} detail block(s) in this email)."
         )
     else:
         subject = (
@@ -141,13 +148,23 @@ def build_assignment_email(
         )
         intro = (
             f"{count_label} new customer(s) have been assigned to you{part}. "
-            "Please talk to each customer and update the work progress in the CRM within 3 days."
+            "Please talk to each customer and update the work progress in the CRM within 3 days. "
+            f"Every lead below is listed once ({n} detail block(s) in this email)."
         )
         if direct:
             intro += " Direct Call leads in this list are urgent — update those within 24 hours."
-    cards = "".join(_lead_card(x) for x in leads)
+    index_rows = "".join(
+        f"<li>{i}. {x.get('enquiry_number') or '—'} — {x.get('customer_name') or '—'} — "
+        f"{x.get('contact_number') or '—'}</li>"
+        for i, x in enumerate(leads, start=1)
+    )
+    cards = "".join(_lead_card(i, x) for i, x in enumerate(leads, start=1))
     html = f"""<p>Hi {employee_name or 'there'},</p>
 <p>{intro}</p>
+<p><b>Leads in this email ({n}):</b></p>
+<ol>
+{index_rows}
+</ol>
 {cards}
 <p>— {settings.BREVO_SENDER_NAME}</p>"""
     return subject, html

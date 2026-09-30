@@ -179,6 +179,7 @@ def _assignment_item(db, lead) -> dict:
     except Exception:
         assigned_str = "—"
     return {
+        "lead_id": str(lead.id),
         "enquiry_number": lead.enquiry_number,
         "legacy_enq": lead.legacy_enquiry_no,
         "enquiry_date": str(lead.enquiry_date) if lead.enquiry_date else "—",
@@ -214,7 +215,7 @@ def _assignment_retry_sweep(db, now):
             Lead.is_active.is_(True),
             Lead.primary_employee_id.isnot(None),
             Lead.assignment_email_sent_at.is_(None),
-        ).order_by(Lead.created_at.asc()).limit(200).all()
+        ).order_by(Lead.created_at.asc()).limit(1000).all()
         if not pending:
             return
         by_emp: dict = {}

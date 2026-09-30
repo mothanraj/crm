@@ -608,6 +608,7 @@ def assign_lead(lid: UUID, body: AssignIn, db: Session = Depends(get_db), admin:
             ).order_by(LeadAssignment.assigned_at.desc()).first()
             at = cur.assigned_at if cur else fresh.created_at
             item = {
+                "lead_id": str(fresh.id),
                 "enquiry_number": fresh.enquiry_number,
                 "legacy_enq": fresh.legacy_enquiry_no,
                 "enquiry_date": str(fresh.enquiry_date) if fresh.enquiry_date else "—",
