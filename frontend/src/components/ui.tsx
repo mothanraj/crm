@@ -1,19 +1,71 @@
 import React from 'react';
 
+/* Progress colours used on dashboards, reports, charts, and badges. */
+export const PROGRESS_HEX: Record<string, string> = {
+  'In Followup': '#E8890C',
+  Meeting: '#38BDF8',
+  'Site Visit': '#0D9488',
+  'Quotation sent': '#FACC15',
+  Converted: '#16A34A',
+  'Not Interested': '#DC2626',
+  'Not Interested/Spam': '#DC2626',
+};
+
+export const PROGRESS_TILE_BG: Record<string, string> = {
+  'In Followup': 'bg-[#E8890C]',
+  Meeting: 'bg-[#38BDF8]',
+  'Site Visit': 'bg-[#0D9488]',
+  'Quotation sent': 'bg-[#FACC15]',
+  Converted: 'bg-[#16A34A]',
+  'Not Interested': 'bg-[#DC2626]',
+};
+
+export const PROGRESS_TILE_TEXT: Record<string, string> = {
+  'In Followup': 'text-white',
+  Meeting: 'text-white',
+  'Site Visit': 'text-white',
+  'Quotation sent': 'text-slate-900',
+  Converted: 'text-white',
+  'Not Interested': 'text-white',
+};
+
+/* Category (A+ / A / B / C) tile colours — kept distinct from progress. */
+export const CATEGORY_HEX: Record<string, string> = {
+  'A+ (Immediate)': '#7C3AED',
+  'A (3-6 months)': '#BE185D',
+  'B (1 year)': '#0284C7',
+  'C (Planning Stage)': '#475569',
+};
+
+export const CATEGORY_TILE_BG: Record<string, string> = {
+  'A+ (Immediate)': 'bg-[#7C3AED]',
+  'A (3-6 months)': 'bg-[#BE185D]',
+  'B (1 year)': 'bg-[#0284C7]',
+  'C (Planning Stage)': 'bg-[#475569]',
+};
+
+export function categoryTileBg(label: string): string {
+  if (label.startsWith('A+')) return CATEGORY_TILE_BG['A+ (Immediate)'];
+  if (label.startsWith('A ')) return CATEGORY_TILE_BG['A (3-6 months)'];
+  if (label.startsWith('B ')) return CATEGORY_TILE_BG['B (1 year)'];
+  if (label.startsWith('C ')) return CATEGORY_TILE_BG['C (Planning Stage)'];
+  return CATEGORY_TILE_BG[label] || 'bg-[#475569]';
+}
+
 /* ---------- status / sla color maps (single source of truth for badges) ---------- */
 const STATUS_STYLES: Record<string, string> = {
   'New Lead': 'bg-sky-100 text-sky-800 ring-sky-200',
   'Assigned': 'bg-blue-100 text-blue-800 ring-blue-200',
-  'In Followup': 'bg-amber-100 text-amber-800 ring-amber-200',
+  'In Followup': 'bg-orange-100 text-orange-800 ring-orange-200',
   'Meeting': 'bg-sky-100 text-sky-800 ring-sky-200',
   'A - Prospect': 'bg-violet-100 text-violet-800 ring-violet-200',
   'A+ - Immediate': 'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200',
   'RNR / Not reachable': 'bg-orange-100 text-orange-800 ring-orange-200',
-  'Not Interested': 'bg-graphite-200 text-graphite-700 ring-graphite-300',
+  'Not Interested': 'bg-red-100 text-red-800 ring-red-200',
   'Not Interested/Spam': 'bg-red-100 text-red-800 ring-red-200',
-  'Site Visit': 'bg-lime-100 text-lime-800 ring-lime-200',
-  'Quotation sent': 'bg-emerald-100 text-emerald-800 ring-emerald-200',
-  Converted: 'bg-[#2F9E44]/10 text-[#237A35] ring-[#2F9E44]/30',
+  'Site Visit': 'bg-teal-100 text-teal-800 ring-teal-200',
+  'Quotation sent': 'bg-yellow-100 text-yellow-800 ring-yellow-200',
+  Converted: 'bg-green-100 text-green-800 ring-green-200',
   Duplicate: 'bg-graphite-100 text-graphite-500 ring-graphite-200',
   Investor: 'bg-teal-100 text-teal-800 ring-teal-200',
   'Channel Partner': 'bg-indigo-100 text-indigo-800 ring-indigo-200',

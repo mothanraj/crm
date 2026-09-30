@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { api } from '../services/api';
-import { Card, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { Card, EmptyState, PageHeader, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, Spinner } from '../components/ui';
 
 const MONTH_OPTIONS = [1, 2, 3, 4, 6, 12];
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
@@ -115,15 +115,15 @@ export function Comparison() {
   const current = data?.current;
   const previous = data?.previous;
   const tiles = current ? [
-    { label: 'Total Leads', value: current.leads || 0, previous: previous?.leads || 0, bg: 'bg-[#1e3a5f]' },
-    { label: 'Total Lead Value', value: inr(current.lead_value), previous: inr(previous?.lead_value), bg: 'bg-[#3F6212]', isText: true },
-    { label: 'In Followup', value: actionCount(current, 'In Followup'), previous: actionCount(previous, 'In Followup'), bg: 'bg-[#c0392b]' },
-    { label: 'Meeting', value: actionCount(current, 'Meeting'), previous: actionCount(previous, 'Meeting'), bg: 'bg-[#0284c7]' },
-    { label: 'Site Visit', value: actionCount(current, 'Site Visit'), previous: actionCount(previous, 'Site Visit'), bg: 'bg-[#65A30D]' },
-    { label: 'Quotation Sent', value: actionCount(current, 'Quotation sent'), previous: actionCount(previous, 'Quotation sent'), bg: 'bg-[#2F9E44]' },
-    { label: 'Not Interested', value: actionCount(current, 'Not Interested'), previous: actionCount(previous, 'Not Interested'), bg: 'bg-[#7b241c]' },
-    { label: 'Assigned', value: actionCount(current, 'Assigned'), previous: actionCount(previous, 'Assigned'), bg: 'bg-[#0e7490]' },
-    { label: 'New Lead', value: actionCount(current, 'New Lead'), previous: actionCount(previous, 'New Lead'), bg: 'bg-[#1c2833]' },
+    { label: 'Total Leads', value: current.leads || 0, previous: previous?.leads || 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
+    { label: 'Total Lead Value', value: inr(current.lead_value), previous: inr(previous?.lead_value), bg: 'bg-[#3F6212]', text: 'text-white', isText: true },
+    { label: 'In Followup', value: actionCount(current, 'In Followup'), previous: actionCount(previous, 'In Followup'), bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
+    { label: 'Meeting', value: actionCount(current, 'Meeting'), previous: actionCount(previous, 'Meeting'), bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
+    { label: 'Site Visit', value: actionCount(current, 'Site Visit'), previous: actionCount(previous, 'Site Visit'), bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
+    { label: 'Quotation Sent', value: actionCount(current, 'Quotation sent'), previous: actionCount(previous, 'Quotation sent'), bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
+    { label: 'Not Interested', value: actionCount(current, 'Not Interested'), previous: actionCount(previous, 'Not Interested'), bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
+    { label: 'Assigned', value: actionCount(current, 'Assigned'), previous: actionCount(previous, 'Assigned'), bg: 'bg-[#0e7490]', text: 'text-white' },
+    { label: 'New Lead', value: actionCount(current, 'New Lead'), previous: actionCount(previous, 'New Lead'), bg: 'bg-[#1c2833]', text: 'text-white' },
   ] : [];
   const sourceRows = current?.by_source || [];
   const productRows = current?.by_product || [];
@@ -188,7 +188,7 @@ export function Comparison() {
             <div className="space-y-5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {tiles.map((tile) => (
-                  <div key={tile.label} className={`${tile.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+                  <div key={tile.label} className={`${tile.bg} ${tile.text || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
                     <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{tile.label}</div>
                   <div className={`${tile.isText ? 'text-sm sm:text-base leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{tile.value}</div>
                   <div className="text-[10px] opacity-80 mt-1">vs {tile.previous}</div>

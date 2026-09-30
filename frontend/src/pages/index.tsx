@@ -5,12 +5,47 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
-import { Card, EmptyState, PageHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
+import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, categoryTileBg, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Comparison } from './comparison';
 export { Analytics } from './analytics';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
+
+function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
+  if (!rows.length) return <EmptyState title="No data" />;
+  return (
+    <div className="w-full">
+      <div className="h-[300px] w-full overflow-visible">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart margin={{ top: 28, right: 36, bottom: 28, left: 36 }}>
+            <Pie
+              data={rows}
+              dataKey="value"
+              nameKey="name"
+              cx="50%"
+              cy="50%"
+              outerRadius={78}
+              labelLine={{ strokeWidth: 1 }}
+              label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}
+            >
+              {rows.map((e, i) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2 px-1">
+        {rows.map((e, i) => (
+          <li key={e.name} className="inline-flex items-center gap-1.5 text-xs text-graphite-700">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+            <span className="leading-tight">{e.name}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function leadRowColour(lead: any, status: string) {
   if (lead.sla_state === 'COMPLETED' && status === 'Converted') return 'bg-emerald-50';
@@ -271,13 +306,14 @@ export function Dashboard() {
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
     { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value), bg: 'bg-[#3F6212]', text: 'text-white', isText: true },
-    { label: 'In Followup', value: f.in_followup ?? 0, bg: 'bg-[#c0392b]', text: 'text-white' },
-    { label: 'Meeting', value: f.meeting ?? 0, bg: 'bg-[#0284c7]', text: 'text-white' },
-    { label: 'Site Visit', value: f.site_visit ?? 0, bg: 'bg-[#65A30D]', text: 'text-white' },
-    { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: 'bg-[#2F9E44]', text: 'text-white' },
-    { label: 'Not Interested', value: f.not_interested ?? 0, bg: 'bg-[#7b241c]', text: 'text-white' },
+    { label: 'In Followup', value: f.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
+    { label: 'Meeting', value: f.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
+    { label: 'Site Visit', value: f.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
+    { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
+    { label: 'Not Interested', value: f.not_interested ?? 0, bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
     { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
     { label: 'New Lead', value: d.new_lead_display ?? 5, bg: 'bg-[#1c2833]', text: 'text-white' },
+    { label: 'Other / Unmapped', value: f.other ?? 0, bg: 'bg-graphite-500', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
@@ -285,182 +321,152 @@ export function Dashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid lg:grid-cols-2 gap-5">
-        <div className="space-y-5">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {tiles.map((t) => (
-              t.label === 'New Lead' ? (
-                <button key={t.label} type="button" onClick={() => setShowLatest(true)} title="Click to view the 5 customers"
-                  className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm text-left cursor-pointer hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-brand-400`}>
-                  <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label} ⓘ</div>
-                  <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
-                </button>
-              ) : (
-                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
-                  <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                  <div className={`${(t as any).isText ? 'text-sm sm:text-base leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
-                </div>
-              )
-            ))}
-          </div>
-          {showLatest && (
-            <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowLatest(false)}>
-              <div className="card p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-graphite-900">New Lead — last 5 assigned customers</h3>
-                  <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => setShowLatest(false)}>✕ Close</button>
-                </div>
-                {(d.latest_assigned || []).length === 0 ? <EmptyState title="No assigned customers" /> : (
-                  <div className="overflow-x-auto -mx-6 px-6">
-                    <table className="w-full min-w-[640px] text-sm">
-                      <thead className="bg-graphite-50"><tr>
-                        <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th>
-                        <th className="th">Employee</th><th className="th">Assigned</th>
-                      </tr></thead>
-                      <tbody>
-                        {(d.latest_assigned || []).map((l: any) => (
-                          <tr key={l.lead_id} className="hover:bg-brand-50/50">
-                            <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
-                            <td className="td">{l.customer_name}</td>
-                            <td className="td">
-                              <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
-                              <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
-                            </td>
-                            <td className="td text-center">{l.quantity_raw || '—'}</td>
-                            <td className="td">{l.employee}</td>
-                            <td className="td whitespace-nowrap">{l.assigned_date}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 max-w-5xl">
+        {tiles.map((t) => (
+          t.label === 'New Lead' ? (
+            <button key={t.label} type="button" onClick={() => setShowLatest(true)} title="Click to view the 5 customers"
+              className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center cursor-pointer hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-brand-400`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label} ⓘ</div>
+              <div className="text-xl font-bold mt-1 tabular-nums">{t.value}</div>
+            </button>
+          ) : (
+            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+              <div className={`${(t as any).isText ? 'text-sm leading-tight' : 'text-xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
             </div>
-          )}
-          <div className="bg-graphite-100 text-graphite-700 rounded-lg px-3 py-2 text-sm flex justify-between">
-            <span className="font-medium">Other / Unmapped status</span>
-            <span className="font-bold tabular-nums">{f.other ?? 0}</span>
-          </div>
-
-          <Card title="Leads by Source">
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[640px] text-sm text-center">
-                <thead>
-                  <tr className="bg-[#0e7490] text-white">
-                    <th className="th !text-white !bg-transparent !text-center">Source</th>
-                    <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                    <th className="th !text-white !bg-transparent !text-center">In Followup</th>
-                    <th className="th !text-white !bg-transparent !text-center">Meeting</th>
-                    <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
-                    <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
-                    <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {srcRows.map((r: any, i: number) => (
-                    <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                      <td className="td font-medium text-center">{r.name}</td>
-                      <td className="td font-bold text-center">{r.total}</td>
-                      <td className="td text-center">{r['In Followup'] ?? 0}</td>
-                      <td className="td text-center">{r.Meeting ?? 0}</td>
-                      <td className="td text-center">{r['Site Visit'] ?? 0}</td>
-                      <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
-                      <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
-                    </tr>
-                  ))}
-                  {srcRows.length > 0 && (
-                    <tr className="bg-graphite-100 font-bold">
-                      <td className="td text-center">TOTAL</td>
-                      <td className="td text-center">{srcTotals.total}</td>
-                      <td className="td text-center">{srcTotals.follow}</td>
-                      <td className="td text-center">{srcTotals.meeting}</td>
-                      <td className="td text-center">{srcTotals.siteVisit}</td>
-                      <td className="td text-center">{srcTotals.quote}</td>
-                      <td className="td text-center">{srcTotals.notInt}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              {srcRows.length === 0 && <EmptyState title="No source data" hint="Import leads to populate the funnel." />}
-            </div>
-          </Card>
-        </div>
-
-        <div className="space-y-5">
-          <Card title="Leads by Source">
-            {pie.length === 0 ? <EmptyState title="No data" /> : (
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie data={pie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}>
-                      {pie.map((e: any, i: number) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip /><Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </Card>
-        </div>
+          )
+        ))}
       </div>
-      <div className="grid xl:grid-cols-[1.4fr_1fr] gap-5">
-        <Card title="Leads by Product">
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full min-w-[640px] text-sm text-center">
-                <thead>
-                  <tr className="bg-[#0e7490] text-white">
-                    <th className="th !text-white !bg-transparent !text-center">Product</th>
-                    <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                    <th className="th !text-white !bg-transparent !text-center">In Followup</th>
-                    <th className="th !text-white !bg-transparent !text-center">Meeting</th>
-                    <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
-                    <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
-                    <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {productRows.map((r: any, i: number) => (
-                    <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                      <td className="td font-medium text-center">{r.name}</td>
-                      <td className="td font-bold text-center">{r.total}</td>
-                      <td className="td text-center">{r['In Followup'] ?? 0}</td>
-                      <td className="td text-center">{r.Meeting ?? 0}</td>
-                      <td className="td text-center">{r['Site Visit'] ?? 0}</td>
-                      <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
-                      <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
-                    </tr>
-                  ))}
-                  {productRows.length > 0 && (
-                    <tr className="bg-graphite-100 font-bold">
-                      <td className="td text-center">TOTAL</td>
-                      <td className="td text-center">{productTotals.total}</td>
-                      <td className="td text-center">{productTotals.follow}</td>
-                      <td className="td text-center">{productTotals.meeting}</td>
-                      <td className="td text-center">{productTotals.siteVisit}</td>
-                      <td className="td text-center">{productTotals.quote}</td>
-                      <td className="td text-center">{productTotals.notInt}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              {productRows.length === 0 && <EmptyState title="No product data" hint="Import leads to populate the funnel." />}
+      {showLatest && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowLatest(false)}>
+          <div className="card p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-graphite-900">New Lead — last 5 assigned customers</h3>
+              <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => setShowLatest(false)}>✕ Close</button>
             </div>
-          </Card>
-                  <Card title="Leads by Product">
-            {productPie.length === 0 ? <EmptyState title="No data" /> : (
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie data={productPie} dataKey="value" nameKey="name" outerRadius={110} label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}>
-                      {productPie.map((e: any, i: number) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip /><Legend />
-                  </PieChart>
-                </ResponsiveContainer>
+            {(d.latest_assigned || []).length === 0 ? <EmptyState title="No assigned customers" /> : (
+              <div className="overflow-x-auto -mx-6 px-6">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead className="bg-graphite-50"><tr>
+                    <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th>
+                    <th className="th">Employee</th><th className="th">Assigned</th>
+                  </tr></thead>
+                  <tbody>
+                    {(d.latest_assigned || []).map((l: any) => (
+                      <tr key={l.lead_id} className="hover:bg-brand-50/50">
+                        <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
+                        <td className="td">{l.customer_name}</td>
+                        <td className="td">
+                          <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
+                          <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                        </td>
+                        <td className="td text-center">{l.quantity_raw || '—'}</td>
+                        <td className="td">{l.employee}</td>
+                        <td className="td whitespace-nowrap">{l.assigned_date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
-          </Card>
+          </div>
+        </div>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-5 items-start">
+        <Card title="Leads by Source" className="min-w-0">
+          <div className="overflow-x-auto rounded-lg border border-graphite-100">
+            <table className="w-full min-w-[560px] text-sm text-center">
+              <thead>
+                <tr className="bg-[#0e7490] text-white">
+                  <th className="th !text-white !bg-transparent !text-center">Source</th>
+                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
+                </tr>
+              </thead>
+              <tbody>
+                {srcRows.map((r: any, i: number) => (
+                  <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+                    <td className="td font-medium text-center">{r.name}</td>
+                    <td className="td font-bold text-center">{r.total}</td>
+                    <td className="td text-center">{r['In Followup'] ?? 0}</td>
+                    <td className="td text-center">{r.Meeting ?? 0}</td>
+                    <td className="td text-center">{r['Site Visit'] ?? 0}</td>
+                    <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
+                    <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                  </tr>
+                ))}
+                {srcRows.length > 0 && (
+                  <tr className="bg-graphite-100 font-bold">
+                    <td className="td text-center">TOTAL</td>
+                    <td className="td text-center">{srcTotals.total}</td>
+                    <td className="td text-center">{srcTotals.follow}</td>
+                    <td className="td text-center">{srcTotals.meeting}</td>
+                    <td className="td text-center">{srcTotals.siteVisit}</td>
+                    <td className="td text-center">{srcTotals.quote}</td>
+                    <td className="td text-center">{srcTotals.notInt}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            {srcRows.length === 0 && <EmptyState title="No source data" hint="Import leads to populate the funnel." />}
+          </div>
+        </Card>
+        <Card title="Leads by Source" className="min-w-0">
+          <DashboardPie rows={pie} />
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-5 items-start">
+        <Card title="Leads by Product" className="min-w-0">
+          <div className="overflow-x-auto rounded-lg border border-graphite-100">
+            <table className="w-full min-w-[560px] text-sm text-center">
+              <thead>
+                <tr className="bg-[#0e7490] text-white">
+                  <th className="th !text-white !bg-transparent !text-center">Product</th>
+                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
+                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
+                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
+                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
+                </tr>
+              </thead>
+              <tbody>
+                {productRows.map((r: any, i: number) => (
+                  <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+                    <td className="td font-medium text-center">{r.name}</td>
+                    <td className="td font-bold text-center">{r.total}</td>
+                    <td className="td text-center">{r['In Followup'] ?? 0}</td>
+                    <td className="td text-center">{r.Meeting ?? 0}</td>
+                    <td className="td text-center">{r['Site Visit'] ?? 0}</td>
+                    <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
+                    <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+                  </tr>
+                ))}
+                {productRows.length > 0 && (
+                  <tr className="bg-graphite-100 font-bold">
+                    <td className="td text-center">TOTAL</td>
+                    <td className="td text-center">{productTotals.total}</td>
+                    <td className="td text-center">{productTotals.follow}</td>
+                    <td className="td text-center">{productTotals.meeting}</td>
+                    <td className="td text-center">{productTotals.siteVisit}</td>
+                    <td className="td text-center">{productTotals.quote}</td>
+                    <td className="td text-center">{productTotals.notInt}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            {productRows.length === 0 && <EmptyState title="No product data" hint="Import leads to populate the funnel." />}
+          </div>
+        </Card>
+        <Card title="Leads by Product" className="min-w-0">
+          <DashboardPie rows={productPie} />
+        </Card>
       </div>
       <Card title="Customer quotation values">
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
@@ -662,18 +668,18 @@ export function EmployeeDashboard() {
     return sum + (Number(row.count) || 0);
   }, 0);
   const progressTiles = [
-    { label: 'In Followup', bg: 'bg-[#c0392b]' },
-    { label: 'Meeting', bg: 'bg-[#0284c7]' },
-    { label: 'Site Visit', bg: 'bg-[#65A30D]' },
-    { label: 'Quotation sent', bg: 'bg-[#2F9E44]' },
-    { label: 'Converted', bg: 'bg-[#3F6212]' },
-    { label: 'Not Interested', bg: 'bg-[#7b241c]' },
+    { label: 'In Followup', bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
+    { label: 'Meeting', bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
+    { label: 'Site Visit', bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
+    { label: 'Quotation sent', bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
+    { label: 'Converted', bg: PROGRESS_TILE_BG.Converted, text: PROGRESS_TILE_TEXT.Converted },
+    { label: 'Not Interested', bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
   ];
   const categoryTiles = [
-    { label: 'A+ (Immediate)', bg: 'bg-[#7c3aed]' },
-    { label: 'A (3-6 months)', bg: 'bg-[#d97706]' },
-    { label: 'B (1 year)', bg: 'bg-[#0284c7]' },
-    { label: 'C (Planning Stage)', bg: 'bg-[#475569]' },
+    { label: 'A+ (Immediate)', bg: CATEGORY_TILE_BG['A+ (Immediate)'] },
+    { label: 'A (3-6 months)', bg: CATEGORY_TILE_BG['A (3-6 months)'] },
+    { label: 'B (1 year)', bg: CATEGORY_TILE_BG['B (1 year)'] },
+    { label: 'C (Planning Stage)', bg: CATEGORY_TILE_BG['C (Planning Stage)'] },
   ];
   const tiles = [
     { label: 'Total leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
@@ -689,31 +695,36 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {tiles.map((t) => (
-          <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
-            <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-            <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
-            <div className="text-[11px] opacity-80 mt-0.5">{t.hint}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-0 items-start">
+        <div className="md:pr-5">
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Summary</div>
+          <div className="space-y-2">
+            {tiles.map((t) => (
+              <div key={t.label} className={`${t.bg} text-white rounded-lg px-4 py-3 shadow-sm h-[88px] flex flex-col justify-center`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
+                <div className="text-[11px] opacity-80 mt-0.5">{t.hint}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div>
-        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {categoryTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount('', t.label)}</div>
-            </div>
-          ))}
+        </div>
+        <div className="md:border-l md:border-graphite-200 md:pl-5">
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
+          <div className="space-y-2">
+            {categoryTiles.map((t) => (
+              <div key={t.label} className={`${t.bg} text-white rounded-lg px-4 py-3 shadow-sm h-[88px] flex flex-col justify-center`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount('', t.label)}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <div>
         <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {progressTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-3 shadow-sm`}>
+            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
               <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
               <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount(t.label, '')}</div>
             </div>
@@ -805,20 +816,8 @@ export function EmployeeDashboard() {
   );
 }
 
-const REPORT_PROGRESS_BG: Record<string, string> = {
-  'In Followup': 'bg-[#c0392b]',
-  Meeting: 'bg-[#0284c7]',
-  'Site Visit': 'bg-[#65A30D]',
-  'Quotation sent': 'bg-[#2F9E44]',
-  Converted: 'bg-[#3F6212]',
-  'Not Interested': 'bg-[#7b241c]',
-};
-const REPORT_CATEGORY_BG: Record<string, string> = {
-  'A+ (Immediate)': 'bg-[#7c3aed]',
-  'A (3-6 months)': 'bg-[#d97706]',
-  'B (1 year)': 'bg-[#0284c7]',
-  'C (Planning Stage)': 'bg-[#475569]',
-};
+const REPORT_PROGRESS_BG = PROGRESS_TILE_BG;
+const REPORT_CATEGORY_BG = CATEGORY_TILE_BG;
 
 const REPORT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -868,7 +867,7 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
           <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {(data?.progress || []).map((row: any) => (
-              <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
+              <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} ${PROGRESS_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
                 <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
                 <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
               </div>
@@ -2238,7 +2237,7 @@ export function EmployeeLeads() {
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
-  const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const statusOf = (l: any) => {
     const s = nameOf('statuses', l.status_id);
     return s === 'New Lead' && l.primary_employee_id ? 'Assigned' : s;
@@ -2277,7 +2276,7 @@ export function EmployeeLeads() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
             {[
               { label: 'Total assigned', value: total, bg: 'bg-[#1e3a5f]' },
-              { label: 'Needs first contact', value: needsContact, bg: 'bg-[#c0392b]' },
+              { label: 'Pending', value: needsContact, bg: 'bg-[#c0392b]' },
               { label: 'Overdue', value: overdue, bg: 'bg-[#7b241c]' },
               { label: 'Contact done', value: done, bg: 'bg-[#2F9E44]' },
             ].map((s) => (
@@ -2289,19 +2288,12 @@ export function EmployeeLeads() {
           </div>
           <div className="mb-4">
             <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
               {workActionCounts.map((s) => {
-                const bg: Record<string, string> = {
-                  Assigned: 'bg-[#0e7490]',
-                  'In Followup': 'bg-[#c0392b]',
-                  Meeting: 'bg-[#0284c7]',
-                  'Site Visit': 'bg-[#65A30D]',
-                  'Quotation sent': 'bg-[#2F9E44]',
-                  Converted: 'bg-[#3F6212]',
-                  'Not Interested': 'bg-[#7b241c]',
-                };
+                const bg = PROGRESS_TILE_BG[s.label] || (s.label === 'Assigned' ? 'bg-[#0e7490]' : 'bg-[#1e3a5f]');
+                const text = PROGRESS_TILE_TEXT[s.label] || 'text-white';
                 return (
-                  <div key={s.label} className={`${bg[s.label] || 'bg-[#1e3a5f]'} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
+                  <div key={s.label} className={`${bg} ${text} rounded-lg px-3 py-3 text-center shadow-sm`}>
                     <div className="text-2xl font-bold tabular-nums">{s.value}</div>
                     <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1 leading-tight">{s.label}</div>
                   </div>
@@ -2313,7 +2305,7 @@ export function EmployeeLeads() {
             <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {reviewCounts.map((s) => {
-                const bg = s.label.startsWith('A+') ? 'bg-[#7c3aed]' : s.label.startsWith('A ') ? 'bg-[#d97706]' : s.label.startsWith('B ') ? 'bg-[#0284c7]' : 'bg-[#475569]';
+                const bg = categoryTileBg(s.label);
                 return (
                   <div key={s.label} className={`${bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
                     <div className="text-2xl font-bold tabular-nums">{s.value}</div>
@@ -3899,11 +3891,11 @@ export function Reports() {
                       <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                       <Tooltip /><Legend />
                       <Bar dataKey="total" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="quote_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="in_followup" fill={PROGRESS_HEX['In Followup']} name="In Followup" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="meeting" fill={PROGRESS_HEX.Meeting} name="Meeting" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="site_visit" fill={PROGRESS_HEX['Site Visit']} name="Site Visit" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="quote_sent" fill={PROGRESS_HEX['Quotation sent']} name="Quotation sent" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="not_interested" fill={PROGRESS_HEX['Not Interested']} name="Not Interested" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -4060,11 +4052,11 @@ export function Reports() {
                       <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
                       <Tooltip /><Legend />
                       <Bar dataKey="leads" fill="#1e3a5f" name="Total Leads" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="in_followup" fill="#f59e0b" name="In Followup" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="meeting" fill="#8b5cf6" name="Meeting" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="site_visit" fill="#10b981" name="Site Visit" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="quotation_sent" fill="#0ea5e9" name="Quotation sent" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="not_interested" fill="#ef4444" name="Not Interested" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="in_followup" fill={PROGRESS_HEX['In Followup']} name="In Followup" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="meeting" fill={PROGRESS_HEX.Meeting} name="Meeting" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="site_visit" fill={PROGRESS_HEX['Site Visit']} name="Site Visit" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="quotation_sent" fill={PROGRESS_HEX['Quotation sent']} name="Quotation sent" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="not_interested" fill={PROGRESS_HEX['Not Interested']} name="Not Interested" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -4430,12 +4422,16 @@ export function EmployeesPage() {
               <div className="mb-4">
                 <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-                  {empWorkActionCounts.map((s) => (
-                    <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
-                      <div className="text-xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
-                      <div className="text-[11px] text-graphite-500 uppercase tracking-wide mt-1">{s.label}</div>
-                    </div>
-                  ))}
+                  {empWorkActionCounts.map((s) => {
+                    const bg = PROGRESS_TILE_BG[s.label] || (s.label === 'Assigned' ? 'bg-[#0e7490]' : 'bg-[#1e3a5f]');
+                    const text = PROGRESS_TILE_TEXT[s.label] || 'text-white';
+                    return (
+                      <div key={s.label} className={`${bg} ${text} rounded-lg px-3 py-3 text-center shadow-sm`}>
+                        <div className="text-xl font-bold tabular-nums">{s.value}</div>
+                        <div className="text-[11px] uppercase tracking-wide opacity-90 font-semibold mt-1">{s.label}</div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
               <div className="mb-4">
