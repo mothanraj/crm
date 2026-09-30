@@ -173,7 +173,7 @@ def _escape_like(s: str) -> str:
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
                employee: str = "", sla: str = "", unassigned: str = "", customer_review: str = "",
-               sort: str = "", page: int = 1, size: int = 20):
+               city: str = "", sort: str = "", page: int = 1, size: int = 20):
     page = max(1, page)
     size = min(max(1, size), 100)
     q = db.query(Lead).filter(Lead.is_active.is_(True))
@@ -183,7 +183,9 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         like = f"%{_escape_like(search)}%"
         q = q.filter(or_(Lead.customer_name.ilike(like, escape="\\"), Lead.company_name.ilike(like, escape="\\"),
                          Lead.contact_number.ilike(like, escape="\\"), Lead.enquiry_number.ilike(like, escape="\\"),
-                         Lead.email.ilike(like, escape="\\")))
+                         Lead.email.ilike(like, escape="\\"), Lead.city.ilike(like, escape="\\")))
+    if city:
+        q = q.filter(Lead.city.ilike(f"%{_escape_like(city.strip())}%", escape="\\"))
     if status:
         q = q.filter(Lead.status_id == _parse_uuid(status, "status"))
     if source:
@@ -257,6 +259,7 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                 {
                     "quotation_number": quote_by_lead[r.id].quotation_number,
                     "revision": quote_by_lead[r.id].revision,
+                    "amount_excl": _money_str(quote_by_lead[r.id].amount_excl),
                     "grand_total": _money_str(quote_by_lead[r.id].grand_total),
                 }
                 if r.id in quote_by_lead else None

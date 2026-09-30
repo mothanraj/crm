@@ -425,11 +425,11 @@ def build_employee_period_pdf(payload: dict) -> bytes:
         ]))
         story.append(table)
 
-    count_table("Progress", payload.get("progress") or [])
     count_table("Category", payload.get("category") or [])
+    count_table("Progress", payload.get("progress") or [])
     story.append(Spacer(1, 14))
     story.append(Paragraph(
-        "Progress is each time that step was logged. Category is the number of customers.",
+        "Category is the number of customers. Progress is each time that step was logged.",
         meta,
     ))
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)

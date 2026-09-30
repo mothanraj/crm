@@ -57,6 +57,20 @@ function fmtDT(v: any, len = 16) {
   return String(v).slice(0, len).replace('T', ' ');
 }
 
+function withUpdateStamp(remarks: string) {
+  const cleaned = String(remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim();
+  const stamp = new Date().toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${cleaned}\n[${stamp}]`;
+}
+
 function prodName(l: any, nameOf: (kind: any, id?: string) => string) {
   // Prefer mapped master product name (canonical 7); fall back to raw Excel text.
   if (l.product_name) return l.product_name;
@@ -312,7 +326,7 @@ export function Dashboard() {
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
     { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
     { label: 'New Lead', value: d.new_lead_display ?? 5, bg: 'bg-[#1c2833]', text: 'text-white' },
-    { label: 'Other / Unmapped', value: f.other ?? 0, bg: 'bg-graphite-500', text: 'text-white' },
+    { label: 'Converted', value: f.converted ?? 0, bg: PROGRESS_TILE_BG.Converted, text: PROGRESS_TILE_TEXT.Converted },
   ];
   return (
     <div className="space-y-5">
@@ -325,13 +339,13 @@ export function Dashboard() {
           t.label === 'New Lead' ? (
             <button key={t.label} type="button" onClick={() => setShowLatest(true)} title="Click to view the 5 customers"
               className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center cursor-pointer hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-brand-400`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label} ⓘ</div>
-              <div className="text-xl font-bold mt-1 tabular-nums">{t.value}</div>
+              <div className="text-sm uppercase tracking-wide opacity-95 font-semibold leading-tight">{t.label} ⓘ</div>
+              <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
             </button>
           ) : (
             <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-              <div className={`${(t as any).isText ? 'text-sm leading-tight' : 'text-xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
+              <div className="text-sm uppercase tracking-wide opacity-95 font-semibold leading-tight">{t.label}</div>
+              <div className={`${(t as any).isText ? 'text-base sm:text-lg leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
             </div>
           )
         ))}
@@ -694,38 +708,42 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-0 items-start">
-        <div className="md:pr-5">
-          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Summary</div>
-          <div className="space-y-2">
-            {tiles.map((t) => (
-              <div key={t.label} className={`${t.bg} text-white rounded-lg px-4 py-3 shadow-sm h-[88px] flex flex-col justify-center`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
-                <div className="text-[11px] opacity-80 mt-0.5">{t.hint}</div>
-              </div>
-            ))}
+      <div className="flex flex-col md:flex-row gap-6 justify-center items-start">
+        <div className="flex flex-col items-center">
+          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Summary</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 shadow-sm">
+            <div className="grid grid-cols-2 gap-2">
+              {tiles.map((t) => (
+                <div key={t.label} className={`${t.bg} text-white rounded-lg w-[8.5rem] h-[8.5rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5`}>
+                  <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                  <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-xs opacity-85 mt-1.5 leading-tight">{t.hint}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="md:border-l md:border-graphite-200 md:pl-5">
-          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
-          <div className="space-y-2">
-            {categoryTiles.map((t) => (
-              <div key={t.label} className={`${t.bg} text-white rounded-lg px-4 py-3 shadow-sm h-[88px] flex flex-col justify-center`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount('', t.label)}</div>
-              </div>
-            ))}
+        <div className="flex flex-col items-center">
+          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 shadow-sm">
+            <div className="grid grid-cols-2 gap-2">
+              {categoryTiles.map((t) => (
+                <div key={t.label} className={`${t.bg} text-white rounded-lg w-[8.5rem] h-[8.5rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5`}>
+                  <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                  <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{mixCount('', t.label)}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
       <div>
-        <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
+        <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {progressTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-3 shadow-sm`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-              <div className="text-2xl font-bold mt-1 tabular-nums">{mixCount(t.label, '')}</div>
+            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-4 shadow-sm text-center flex flex-col items-center justify-center aspect-[4/3]`}>
+              <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+              <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
             </div>
           ))}
         </div>
@@ -863,19 +881,19 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
       <div className="mb-4">{controls}</div>
       {error ? <p className="text-sm text-red-700">{error}</p> : loading && !data ? <Spinner /> : (
         <>
-          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-            {(data?.progress || []).map((row: any) => (
-              <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} ${PROGRESS_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {(data?.category || []).map((row: any) => (
+              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#475569]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
                 <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
                 <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
               </div>
             ))}
           </div>
-          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mt-4 mb-2">Category</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {(data?.category || []).map((row: any) => (
-              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#475569]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
+          <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mt-4 mb-2">Progress</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {(data?.progress || []).map((row: any) => (
+              <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} ${PROGRESS_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
                 <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
                 <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
               </div>
@@ -1800,6 +1818,42 @@ function QuotationFormModal({
 }
 
 /* ================= LEADS ================= */
+const REPEATABLE_PROGRESS = new Set(['In Followup', 'Meeting', 'Site Visit', 'Quotation sent']);
+
+function progressOrdinal(n: number) {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? 'th' : mod10 === 1 ? 'st' : mod10 === 2 ? 'nd' : mod10 === 3 ? 'rd' : 'th';
+  return `${n}${suffix}`;
+}
+
+function shortProgressName(action: string) {
+  return action === 'In Followup' ? 'Followup' : action;
+}
+
+function formatProgressOccurrence(action: string, occurrence: number) {
+  if (!action || action === '—') return '—';
+  if (!REPEATABLE_PROGRESS.has(action)) return action;
+  const name = shortProgressName(action);
+  return occurrence <= 1 ? name : `${progressOrdinal(occurrence)} ${name}`;
+}
+
+function labeledProgressHistory(history: any[] | undefined) {
+  const counts: Record<string, number> = {};
+  return (history || []).map((entry) => {
+    const action = entry.work_action || '';
+    if (REPEATABLE_PROGRESS.has(action)) {
+      counts[action] = (counts[action] || 0) + 1;
+      return { ...entry, displayAction: formatProgressOccurrence(action, counts[action]) };
+    }
+    return { ...entry, displayAction: action || '—' };
+  });
+}
+
+function countProgressAction(history: any[] | undefined, action: string) {
+  return (history || []).filter((h) => (h.work_action || '') === action).length;
+}
+
 export function Leads() {
   const role = localStorage.getItem('role') || '';
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
@@ -1809,6 +1863,7 @@ export function Leads() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
+  const [city, setCity] = useState('');
   const [sla, setSla] = useState('');
   const [sort, setSort] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
@@ -1829,7 +1884,7 @@ export function Leads() {
     const t = setTimeout(() => {
       setLoading(true); setError('');
       api.get('/leads', {
-        params: { search, status, source, sla, page, size, ...(sort ? { sort } : {}) },
+        params: { search, status, source, city, sla, page, size, ...(sort ? { sort } : {}) },
         signal: ctrl.signal,
       })
         .then((r) => {
@@ -1845,15 +1900,34 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, sla, sort, page]);
+  }, [search, status, source, city, sla, sort, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const statusLabel = (lead: any) => {
-    const selectedStatus = nameOf('statuses', role === 'EMPLOYEE' ? (draftFor(lead).progress || lead.status_id) : lead.status_id);
+    if (role === 'EMPLOYEE') {
+      const draft = draftFor(lead);
+      const editing = !!(expandedRows[lead.id] || !lead.employee_remarks);
+      if (editing && draft.progress) {
+        const action = nameOf('statuses', draft.progress);
+        if (REPEATABLE_PROGRESS.has(action)) {
+          return formatProgressOccurrence(action, countProgressAction(lead.work_history, action) + 1);
+        }
+        return action === 'New Lead' && lead.primary_employee_id ? 'Assigned' : action;
+      }
+      const labeled = labeledProgressHistory(lead.work_history);
+      if (labeled.length) return labeled[labeled.length - 1].displayAction;
+    }
+    const selectedStatus = nameOf('statuses', lead.status_id);
     return selectedStatus === 'New Lead' && lead.primary_employee_id ? 'Assigned' : selectedStatus;
   };
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
+  const quotationFromForm = (lead: any) => {
+    const raw = lead?.quotation_form?.amount_excl ?? lead?.quotation_value;
+    if (raw == null || String(raw).trim() === '') return '';
+    const n = Math.round(Number(raw));
+    return Number.isFinite(n) && n >= 0 ? String(n) : '';
+  };
   const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
   const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
   const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
@@ -1889,9 +1963,12 @@ export function Leads() {
       setValidationMessage('Please fill Remarks, Category, and Work Action before saving or completing this lead.');
       return;
     }
-    if (actionName === 'Quotation sent' && draft.quotationValue && !/^\d+$/.test(String(draft.quotationValue).trim())) {
-      setValidationMessage('Enter a whole-number quotation value (no decimals).');
-      return;
+    if (actionName === 'Quotation sent') {
+      const qv = quotationFromForm(lead);
+      if (!qv) {
+        setValidationMessage('Open the quotation form and enter a value first. That amount is used for Quotation sent.');
+        return;
+      }
     }
     if (done && actionName === 'Converted' && !conversionConfirmed) {
       setConversionToConfirm(lead);
@@ -1900,16 +1977,22 @@ export function Leads() {
     setConversionToConfirm(null);
     setSavingId(lead.id);
     try {
+      const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
+      const rawRemarks = draft.remarks.trim() || 'Lead completed';
+      const stripStamp = (s: string) => s.replace(/\n?\[[^\]]*\]\s*$/u, '').trim();
+      const stampedRemarks = done && !reopening && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
+        ? (lead.employee_remarks || rawRemarks)
+        : withUpdateStamp(rawRemarks);
       const { data } = await api.post(`/leads/${lead.id}/status`, {
         new_status_id: draft.progress || lead.status_id,
-        reason: draft.remarks.trim() || 'Lead completed',
+        reason: stampedRemarks,
         method: 'Call',
         customer_review: draft.review,
-        quotation_value: actionName === 'Quotation sent' && draft.quotationValue ? draft.quotationValue : undefined,
+        quotation_value: qv || undefined,
         sla_state: done ? 'COMPLETED' : reopening ? 'PENDING' : lead.sla_state,
       });
       setItems((current) => current.map((item) => item.id === lead.id
-        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: draft.remarks.trim() || 'Lead completed', customer_review: draft.review, quotation_value: actionName === 'Quotation sent' && draft.quotationValue ? draft.quotationValue : item.quotation_value, sla_state: data.sla_state, work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: draft.remarks.trim(), category: draft.review, quotation_value: actionName === 'Quotation sent' ? draft.quotationValue : null, work_action: nameOf('statuses', draft.progress || item.status_id) }] }
+        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: draft.review, quotation_value: qv || item.quotation_value, sla_state: data.sla_state, work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), at: new Date().toISOString() }] }
         : item));
       setDrafts((current) => { const next = { ...current }; delete next[lead.id]; return next; });
       setExpandedRows((current) => ({ ...current, [lead.id]: false }));
@@ -1937,14 +2020,19 @@ export function Leads() {
       setValidationMessage('Please fill Remarks, Category, and Work Action for this follow-up.');
       return;
     }
-    if (actionName === 'Quotation sent' && form.quotationValue && !/^\d+$/.test(String(form.quotationValue).trim())) {
-      setValidationMessage('Enter a whole-number quotation value (no decimals).');
-      return;
+    if (actionName === 'Quotation sent') {
+      const qv = quotationFromForm(lead);
+      if (!qv) {
+        setValidationMessage('Open the quotation form and enter a value first. That amount is used for Quotation sent.');
+        return;
+      }
     }
     setSavingId(lead.id);
     try {
-      await api.post(`/leads/${lead.id}/status`, { new_status_id: form.progress || lead.status_id, reason: form.remarks.trim(), method: 'Call', customer_review: form.review, quotation_value: actionName === 'Quotation sent' && form.quotationValue ? form.quotationValue : undefined, sla_state: lead.sla_state });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: form.remarks.trim(), customer_review: form.review, quotation_value: actionName === 'Quotation sent' && form.quotationValue ? form.quotationValue : item.quotation_value, work_history: [...(item.work_history || []), { remarks: form.remarks.trim(), category: form.review, quotation_value: actionName === 'Quotation sent' ? form.quotationValue : null, work_action: nameOf('statuses', form.progress || item.status_id) }] } : item));
+      const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
+      const stampedRemarks = withUpdateStamp(form.remarks.trim());
+      await api.post(`/leads/${lead.id}/status`, { new_status_id: form.progress || lead.status_id, reason: stampedRemarks, method: 'Call', customer_review: form.review, quotation_value: qv || undefined, sla_state: lead.sla_state });
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
     finally { setSavingId(null); }
@@ -1952,8 +2040,9 @@ export function Leads() {
   return (
     <div className="min-w-0 max-w-full">
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
-      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr]">
+      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
         <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        <input className="input min-w-0" placeholder="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }} />
         <select className="input min-w-0" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">Status</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
@@ -1980,25 +2069,30 @@ export function Leads() {
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="relative isolate w-full overflow-x-auto">
-            <table className="w-full table-fixed min-w-[2220px] border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words">
+            <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2340px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
-                <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
-                <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
-                <th className="th whitespace-nowrap align-top w-[120px]">City</th>
-                <th className="th whitespace-nowrap align-top w-[170px]">Contact / Email</th>
-                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[100px] text-center">Email</th>}
-                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[120px] text-center">Quotation form</th>}
+                {role === 'EMPLOYEE' ? (
+                  <th className="th whitespace-nowrap align-top w-[200px] sm:w-[240px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer details</th>
+                ) : (
+                  <>
+                    <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
+                    <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
+                    <th className="th whitespace-nowrap align-top w-[120px]">City</th>
+                  </>
+                )}
+                <th className="th whitespace-nowrap align-top w-[260px] sm:w-[280px]">Contact / Email</th>
                 <th className="th whitespace-nowrap align-top w-[110px] text-center">Cars</th>
                 <th className="th whitespace-nowrap align-top w-[200px]">Product</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
-                <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Progress</th>
+                <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
                 <th className="th whitespace-nowrap align-top w-[140px]">Source</th>
                 <th className="th whitespace-nowrap align-top w-[170px] text-center">Current status</th>
                 <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
                 {role !== 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[170px]">Employee</th>}
                 <th className="th whitespace-nowrap align-top w-[130px] text-right">Lead Value</th>
+                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[120px] text-center">Quotation form</th>}
                 <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
               </tr></thead>
               <tbody>
@@ -2014,10 +2108,20 @@ export function Leads() {
                     }}>
 
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                    <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
-                    <td className="td align-top">{l.company_name || '—'}</td>
-                    <td className="td align-top">{l.city || '—'}</td>
-                    <td className="td align-top">
+                    {role === 'EMPLOYEE' ? (
+                      <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
+                        <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
+                        <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
+                        <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
+                      </td>
+                    ) : (
+                      <>
+                        <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
+                        <td className="td align-top">{l.company_name || '—'}</td>
+                        <td className="td align-top">{l.city || '—'}</td>
+                      </>
+                    )}
+                    <td className="td align-top min-w-[260px]">
                       <div className="whitespace-nowrap flex items-center gap-1.5">
                         <span>{l.contact_number || '—'}</span>
                         {role === 'EMPLOYEE' && l.contact_number && whatsappUrl(l.contact_number) && (
@@ -2042,30 +2146,115 @@ export function Leads() {
                           </a>
                         )}
                       </div>
-                      <div className="text-xs mt-0.5 break-all">
+                      <div className="text-xs mt-0.5 break-words [overflow-wrap:anywhere]">
                         {l.email && role === 'EMPLOYEE'
-                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-all" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
+                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-words [overflow-wrap:anywhere]" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
                           : l.email
-                            ? <span className="break-all">{l.email}</span>
+                            ? <span className="break-words [overflow-wrap:anywhere]">{l.email}</span>
                             : <span className="text-graphite-400">No email</span>}
                       </div>
                     </td>
-                    {role === 'EMPLOYEE' && (
-                      <td className="td align-top text-center relative z-30">
-                        <button
-                          type="button"
-                          data-webmail
-                          className="btn-secondary !px-2 !py-1 text-xs"
-                          title={l.email ? `Open Estar webmail to ${l.email}` : 'Open Estar webmail'}
-                          onClick={(e) => {
-                            if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
-                            openEstarWebmail(e, l.email, l.enquiry_number);
+                    <td className="td align-top text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {canEditProductCars(l) ? (
+                        <input
+                          className="input text-xs text-center w-full max-w-[5.5rem]"
+                          type="number"
+                          min="2"
+                          step={allowsOddCars(prodName(l, nameOf)) ? 1 : 2}
+                          disabled={savingId === l.id}
+                          value={l.quantity_raw || ''}
+                          placeholder="2"
+                          title="Starts at 2. Odd or even for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Even only for Two Post, Four Post, Pit Stack, and Tower."
+                          onChange={(e) => setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: e.target.value } : item))}
+                          onKeyDown={(e) => {
+                            const step = allowsOddCars(prodName(l, nameOf)) ? 1 : 2;
+                            const next = arrowStep(e.currentTarget.value, e.key, step, 2);
+                            if (next == null) return;
+                            e.preventDefault();
+                            setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: next } : item));
                           }}
+                          onBlur={(e) => saveProductCars(l, l.product_id || '', e.target.value)}
+                        />
+                      ) : (l.quantity_raw || '—')}
+                    </td>
+                    <td className="td align-top" onClick={(e) => e.stopPropagation()}>
+                      {canEditProductCars(l) ? (
+                        <select
+                          className="input text-xs w-full max-w-[12rem]"
+                          disabled={savingId === l.id}
+                          value={l.product_id || ''}
+                          onChange={(e) => saveProductCars(l, e.target.value, l.quantity_raw || '')}
                         >
-                          ✉️ Email
-                        </button>
-                      </td>
-                    )}
+                          <option value="">Select product…</option>
+                          {(masters?.products || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      ) : prodName(l, nameOf)}
+                    </td>
+                    <td className="td align-top">
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
+                          <option value="">Select category…</option>
+                          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
+                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : isNotInterestedLocked(l) ? '✓ Not interested — click Reopen for email and quotation' : '✓ Completed — reopen to edit'}</span>
+                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
+                    </td>
+                    <td className="td align-top">
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
+                          <option value="">Select progress…</option>
+                          {actionOptions.map((option) => {
+                            const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
+                            return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                          })}
+                        </select>
+                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => (
+                        <div key={`progress-${index}`}>
+                          <select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
+                            <option value="">Select progress…</option>
+                            {actionOptions.map((option) => {
+                              const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
+                              return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                            })}
+                          </select>
+                        </div>
+                      ))}
+                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
+                    </td>
+                    <td className="td align-top">
+                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
+                          value={draftFor(l).remarks}
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
+                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
+                    </td>
+                    <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
+                    <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
+                    <td className="td align-top text-center">
+                      <SlaBadge value={l.sla_state} />
+                      {role === 'EMPLOYEE' && (
+                        <div className="mt-2">
+                          {isConvertedLocked(l) ? (
+                            <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
+                          ) : (
+                            <button type="button" data-reopen={l.sla_state === 'COMPLETED' ? '' : undefined} className={`btn-secondary !px-3 !py-1 text-xs ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200' : '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700'}`}
+                              disabled={savingId === l.id}
+                              onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
+                              {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
+                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
                     {role === 'EMPLOYEE' && (
                       <td className="td align-top text-center">
                         <div className="flex flex-col items-center gap-1">
@@ -2119,102 +2308,6 @@ export function Leads() {
                         )}
                       </td>
                     )}
-                    <td className="td align-top text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      {canEditProductCars(l) ? (
-                        <input
-                          className="input text-xs text-center w-full max-w-[5.5rem]"
-                          type="number"
-                          min="2"
-                          step={allowsOddCars(prodName(l, nameOf)) ? 1 : 2}
-                          disabled={savingId === l.id}
-                          value={l.quantity_raw || ''}
-                          placeholder="2"
-                          title="Starts at 2. Odd or even for Puzzle, Pit Puzzle, Car Elevator, Shuttle, and ASRS. Even only for Two Post, Four Post, Pit Stack, and Tower."
-                          onChange={(e) => setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: e.target.value } : item))}
-                          onKeyDown={(e) => {
-                            const step = allowsOddCars(prodName(l, nameOf)) ? 1 : 2;
-                            const next = arrowStep(e.currentTarget.value, e.key, step, 2);
-                            if (next == null) return;
-                            e.preventDefault();
-                            setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: next } : item));
-                          }}
-                          onBlur={(e) => saveProductCars(l, l.product_id || '', e.target.value)}
-                        />
-                      ) : (l.quantity_raw || '—')}
-                    </td>
-                    <td className="td align-top" onClick={(e) => e.stopPropagation()}>
-                      {canEditProductCars(l) ? (
-                        <select
-                          className="input text-xs w-full max-w-[12rem]"
-                          disabled={savingId === l.id}
-                          value={l.product_id || ''}
-                          onChange={(e) => saveProductCars(l, e.target.value, l.quantity_raw || '')}
-                        >
-                          <option value="">Select product…</option>
-                          {(masters?.products || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      ) : prodName(l, nameOf)}
-                    </td>
-                    <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
-                          <option value="">Select category…</option>
-                          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                        </select>
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
-                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : isNotInterestedLocked(l) ? '✓ Not interested — click Reopen for email and quotation' : '✓ Completed — reopen to edit'}</span>
-                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
-                    </td>
-                    <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
-                          value={draftFor(l).remarks}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
-                    </td>
-                    <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
-                          <option value="">Select progress…</option>
-                          {actionOptions.map((option) => {
-                            const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                            return <option key={option} value={match?.id || l.status_id}>{option}</option>;
-                          })}
-                        </select>
-                      ) : (<div className="max-h-[110px] overflow-y-auto space-y-2 pr-1 text-sm leading-5">                      {l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.work_action || '—'}{entry.quotation_value != null && entry.quotation_value !== '' && <span className="block text-xs">Quotation value: {inr(entry.quotation_value)}</span>}</div>) : nameOf('statuses', l.status_id)}</div>)}
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && nameOf('statuses', draftFor(l).progress) === 'Quotation sent' && (
-                        <label className="block text-xs text-graphite-600 mt-2">Quotation value
-                          <input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).quotationValue ?? ''} onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: e.target.value.replace(/[^\d]/g, '') } }))} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, 1, 0); if (next == null) return; e.preventDefault(); setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), quotationValue: next } })); }} />
-                        </label>
-                      )}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`progress-${index}`}><select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}><option value="">Select progress…</option>{actionOptions.map((option) => { const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase()); return <option key={option} value={match?.id || l.status_id}>{option}</option>; })}</select>{nameOf('statuses', form.progress) === 'Quotation sent' && <label className="block text-xs text-graphite-600 mt-2">Quotation value<input type="number" min="0" step="1" inputMode="numeric" className="input text-xs mt-1" placeholder="Whole rupees only" value={form.quotationValue ?? ''} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: e.target.value.replace(/[^\d]/g, '') } : item) }))} onKeyDown={(e) => { const next = arrowStep(e.currentTarget.value, e.key, 1, 0); if (next == null) return; e.preventDefault(); setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, quotationValue: next } : item) })); }} /></label>}</div>)}
-                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
-                    </td>
-                    <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
-                    <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
-                    <td className="td align-top text-center">
-                      <SlaBadge value={l.sla_state} />
-                      {role === 'EMPLOYEE' && (
-                        <div className="mt-2">
-                          {isConvertedLocked(l) ? (
-                            <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
-                          ) : (
-                            <button type="button" data-reopen={l.sla_state === 'COMPLETED' ? '' : undefined} className={`btn-secondary !px-3 !py-1 text-xs ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200' : '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700'}`}
-                              disabled={savingId === l.id}
-                              onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
-                              {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
-                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
                     <td className="td align-top text-right whitespace-nowrap">
                       {l.quotation_value != null && l.quotation_value !== '' ? (
                         <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
@@ -2353,41 +2446,41 @@ export function EmployeeLeads() {
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
             {[
-              { label: 'Total assigned', value: total, bg: 'bg-[#1e3a5f]' },
+              { label: 'Total leads', value: total, bg: 'bg-[#1e3a5f]' },
               { label: 'Pending', value: needsContact, bg: 'bg-[#c0392b]' },
               { label: 'Overdue', value: overdue, bg: 'bg-[#7b241c]' },
               { label: 'Contact done', value: done, bg: 'bg-[#2F9E44]' },
             ].map((s) => (
               <div key={s.label} className={`${s.bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
                 <div className="text-2xl font-bold tabular-nums">{s.value}</div>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1">{s.label}</div>
+                <div className="text-xs uppercase tracking-wide opacity-90 font-semibold mt-1">{s.label}</div>
               </div>
             ))}
           </div>
           <div className="mb-4">
-            <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {workActionCounts.map((s) => {
-                const bg = PROGRESS_TILE_BG[s.label] || (s.label === 'Assigned' ? 'bg-[#0e7490]' : 'bg-[#1e3a5f]');
-                const text = PROGRESS_TILE_TEXT[s.label] || 'text-white';
+            <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {reviewCounts.map((s) => {
+                const bg = categoryTileBg(s.label);
                 return (
-                  <div key={s.label} className={`${bg} ${text} rounded-lg px-3 py-3 text-center shadow-sm`}>
-                    <div className="text-2xl font-bold tabular-nums">{s.value}</div>
-                    <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1 leading-tight">{s.label}</div>
+                  <div key={s.label} className={`${bg} text-white rounded-lg px-3 py-4 text-center shadow-sm`}>
+                    <div className="text-3xl font-bold tabular-nums">{s.value}</div>
+                    <div className="text-sm uppercase tracking-wide opacity-95 font-semibold mt-1.5 leading-tight">{s.label}</div>
                   </div>
                 );
               })}
             </div>
           </div>
           <div className="mb-4">
-            <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category (A+ / A / B / C)</div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {reviewCounts.map((s) => {
-                const bg = categoryTileBg(s.label);
+            <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Work action</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {workActionCounts.map((s) => {
+                const bg = PROGRESS_TILE_BG[s.label] || (s.label === 'Assigned' ? 'bg-[#0e7490]' : 'bg-[#1e3a5f]');
+                const text = PROGRESS_TILE_TEXT[s.label] || 'text-white';
                 return (
-                  <div key={s.label} className={`${bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
-                    <div className="text-2xl font-bold tabular-nums">{s.value}</div>
-                    <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold mt-1 leading-tight">{s.label}</div>
+                  <div key={s.label} className={`${bg} ${text} rounded-lg px-3 py-4 text-center shadow-sm`}>
+                    <div className="text-3xl font-bold tabular-nums">{s.value}</div>
+                    <div className="text-sm uppercase tracking-wide opacity-95 font-semibold mt-1.5 leading-tight">{s.label}</div>
                   </div>
                 );
               })}
