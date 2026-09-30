@@ -1450,3 +1450,314 @@ def meta_payload(db: Session) -> dict:
         "cars": car_values,
         "value_buckets": list(VALUE_BUCKETS),
     }
+
+
+# ---------------------------------------------------------------------------
+# Filter analytics dashboard (Category / Product / Source / Progress)
+# ---------------------------------------------------------------------------
+
+FILTER_TYPES = ("category", "product", "source", "progress")
+DASHBOARD_METRICS = {
+    "leads": {"label": "No. of Leads", "money": False},
+    "lead_value": {"label": "Lead Value", "money": True},
+    "quotations": {"label": "No. of Quotations", "money": False},
+    "quotation_value": {"label": "Quotation Value", "money": True},
+}
+GRANULARITIES = ("day", "week", "month", "year")
+
+
+def _filter_label_expr(filter_type: str):
+    try:
+        return {
+            "category": category_expr(),
+            "product": product_expr(),
+            "source": source_expr(),
+            "progress": status_expr(),
+        }[filter_type]
+    except KeyError as exc:
+        raise ValueError(filter_type) from exc
+
+
+def filter_option_values(db: Session, filter_type: str) -> list[str]:
+    """Distinct values currently present on active leads. Nothing is hard-coded."""
+    label = _filter_label_expr(filter_type)
+    rows = (
+        _base(db)
+        .filter(Lead.is_active.is_(True))
+        .with_entities(label)
+        .distinct()
+        .all()
+    )
+    return sorted({str(name).strip() for (name,) in rows if name and str(name).strip()})
+
+
+def _scoped_leads(db: Session, filter_type: str | None, filter_value: str | None):
+    day = _lead_day()
+    q = _base(db).filter(Lead.is_active.is_(True))
+    if filter_type and filter_value:
+        q = q.filter(_filter_label_expr(filter_type) == filter_value)
+    return q, day
+
+
+def _metric_agg(metric: str):
+    if metric == "leads":
+        return func.count(Lead.id)
+    if metric == "lead_value":
+        return func.coalesce(func.sum(Lead.lead_value), 0)
+    if metric == "quotations":
+        return func.count(Lead.quotation_value)
+    if metric == "quotation_value":
+        return func.coalesce(func.sum(Lead.quotation_value), 0)
+    raise ValueError(metric)
+
+
+def _kpi_four(q) -> dict:
+    row = q.with_entities(
+        func.count(Lead.id).label("leads"),
+        func.coalesce(func.sum(Lead.lead_value), 0).label("lead_value"),
+        func.count(Lead.quotation_value).label("quotations"),
+        func.coalesce(func.sum(Lead.quotation_value), 0).label("quotation_value"),
+    ).one()
+    return {
+        "leads": _int(row.leads),
+        "lead_value": _rupee0(row.lead_value),
+        "quotations": _int(row.quotations),
+        "quotation_value": _rupee0(row.quotation_value),
+    }
+
+
+def _bucket_expr(day, granularity: str):
+    if granularity == "day":
+        return day
+    if granularity == "week":
+        return cast(func.date_trunc("week", day), Date)
+    if granularity == "month":
+        return cast(func.date_trunc("month", day), Date)
+    if granularity == "year":
+        return cast(func.extract("year", day), Integer)
+    raise ValueError(granularity)
+
+
+def _bucket_key(value, granularity: str) -> str:
+    if value is None:
+        return ""
+    if granularity == "year":
+        return str(int(value))
+    if hasattr(value, "isoformat"):
+        stamp = value if type(value) is date else value.date()
+        if granularity == "day":
+            return stamp.isoformat()
+        if granularity == "week":
+            return stamp.isoformat()
+        if granularity == "month":
+            return f"{stamp.year}-{stamp.month:02d}"
+    return str(value)
+
+
+def _bucket_label(value, granularity: str) -> str:
+    if value is None:
+        return "—"
+    if granularity == "year":
+        return str(int(value))
+    if hasattr(value, "isoformat"):
+        stamp = value if type(value) is date else value.date()
+        if granularity == "day":
+            return stamp.strftime("%d %b %Y")
+        if granularity == "week":
+            return f"Week of {stamp.strftime('%d %b %Y')}"
+        if granularity == "month":
+            return stamp.strftime("%b %Y")
+    return str(value)
+
+
+def _apply_time_scope(q, day, year: int | None, start: date | None, end: date | None):
+    if year is not None:
+        q = q.filter(func.extract("year", day) == year)
+    if start is not None:
+        q = q.filter(day >= start)
+    if end is not None:
+        q = q.filter(day <= end)
+    return q
+
+
+def build_filter_dashboard(
+    db: Session,
+    filter_type: str | None,
+    filter_value: str | None,
+    metric: str,
+    granularity: str,
+    year: int | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> dict:
+    """KPIs plus a time series for one filter value and one metric."""
+    if filter_type and filter_type not in FILTER_TYPES:
+        raise ValueError("filter_type")
+    if filter_type and not filter_value:
+        raise ValueError("filter_value")
+    if metric not in DASHBOARD_METRICS:
+        raise ValueError("metric")
+    if granularity not in GRANULARITIES:
+        raise ValueError("granularity")
+    if from_date and to_date and from_date > to_date:
+        raise ValueError("date_range")
+
+    q, day = _scoped_leads(db, filter_type, filter_value)
+    q = _apply_time_scope(q, day, year, from_date, to_date)
+    kpi = _kpi_four(q)
+
+    bucket = _bucket_expr(day, granularity)
+    metric_col = _metric_agg(metric).label("value")
+    rows = (
+        q.with_entities(bucket.label("bucket"), metric_col)
+        .group_by(bucket)
+        .order_by(bucket)
+        .all()
+    )
+    found = {
+        _bucket_key(row.bucket, granularity): _rupee0(row.value) if DASHBOARD_METRICS[metric]["money"] else _int(row.value)
+        for row in rows
+        if row.bucket is not None
+    }
+
+    series: list[dict] = []
+    if granularity == "month" and year is not None:
+        for month in range(1, 13):
+            key = f"{year}-{month:02d}"
+            label = date(year, month, 1).strftime("%b %Y")
+            series.append({"key": key, "label": label, "value": found.get(key, 0)})
+    elif granularity == "year":
+        years = sorted({int(k) for k in found})
+        if year is not None and year not in years:
+            years.append(year)
+            years.sort()
+        for item in years:
+            key = str(item)
+            series.append({"key": key, "label": key, "value": found.get(key, 0)})
+    else:
+        for row in rows:
+            if row.bucket is None:
+                continue
+            key = _bucket_key(row.bucket, granularity)
+            series.append({
+                "key": key,
+                "label": _bucket_label(row.bucket, granularity),
+                "value": found.get(key, 0),
+            })
+
+    return {
+        "filter_type": filter_type,
+        "filter_value": filter_value,
+        "metric": metric,
+        "metric_label": DASHBOARD_METRICS[metric]["label"],
+        "money": DASHBOARD_METRICS[metric]["money"],
+        "granularity": granularity,
+        "year": year,
+        "from_date": from_date.isoformat() if from_date else None,
+        "to_date": to_date.isoformat() if to_date else None,
+        "kpi": kpi,
+        "series": series,
+        "years": available_years(db),
+        "data_years": sorted({
+            int(y) for (y,) in db.query(func.extract("year", _lead_day()))
+            .select_from(Lead)
+            .filter(Lead.is_active.is_(True))
+            .distinct().all()
+            if y is not None
+        }, reverse=True),
+    }
+
+
+def build_filter_period_compare(
+    db: Session,
+    filter_type: str | None,
+    filter_value: str | None,
+    metric: str,
+    period_a: tuple[date, date],
+    period_b: tuple[date, date],
+) -> dict:
+    """Period A vs Period B for one filter value and metric.
+
+    When both ranges have the same length, points are aligned day-by-day.
+    """
+    if filter_type and filter_type not in FILTER_TYPES:
+        raise ValueError("filter_type")
+    if filter_type and not filter_value:
+        raise ValueError("filter_value")
+    if metric not in DASHBOARD_METRICS:
+        raise ValueError("metric")
+    a_start, a_end = period_a
+    b_start, b_end = period_b
+    if a_start > a_end or b_start > b_end:
+        raise ValueError("date_range")
+
+    money = DASHBOARD_METRICS[metric]["money"]
+
+    def daily(start: date, end: date) -> dict[date, int]:
+        q, day = _scoped_leads(db, filter_type, filter_value)
+        q = q.filter(day >= start, day <= end)
+        rows = (
+            q.with_entities(day.label("day"), _metric_agg(metric).label("value"))
+            .group_by(day)
+            .all()
+        )
+        out: dict[date, int] = {}
+        for row in rows:
+            if row.day is None:
+                continue
+            stamp = row.day if type(row.day) is date else row.day.date()
+            out[stamp] = _rupee0(row.value) if money else _int(row.value)
+        return out
+
+    def days_between(start: date, end: date) -> list[date]:
+        out = []
+        cursor = start
+        while cursor <= end:
+            out.append(cursor)
+            cursor += timedelta(days=1)
+        return out
+
+    a_found = daily(a_start, a_end)
+    b_found = daily(b_start, b_end)
+    a_days = days_between(a_start, a_end)
+    b_days = days_between(b_start, b_end)
+    a_total = sum(a_found.values())
+    b_total = sum(b_found.values())
+    equal = len(a_days) == len(b_days)
+
+    series = []
+    if equal:
+        for index, (a_day, b_day) in enumerate(zip(a_days, b_days)):
+            series.append({
+                "index": index + 1,
+                "period_a_date": a_day.isoformat(),
+                "period_b_date": b_day.isoformat(),
+                "period_a": a_found.get(a_day, 0),
+                "period_b": b_found.get(b_day, 0),
+                "label": a_day.strftime("%d %b"),
+            })
+    else:
+        for index in range(max(len(a_days), len(b_days))):
+            a_day = a_days[index] if index < len(a_days) else None
+            b_day = b_days[index] if index < len(b_days) else None
+            series.append({
+                "index": index + 1,
+                "period_a_date": a_day.isoformat() if a_day else None,
+                "period_b_date": b_day.isoformat() if b_day else None,
+                "period_a": a_found.get(a_day, 0) if a_day else 0,
+                "period_b": b_found.get(b_day, 0) if b_day else 0,
+                "label": str(index + 1),
+            })
+
+    return {
+        "filter_type": filter_type,
+        "filter_value": filter_value,
+        "metric": metric,
+        "metric_label": DASHBOARD_METRICS[metric]["label"],
+        "money": money,
+        "aligned": equal,
+        "period_a": {"from": a_start.isoformat(), "to": a_end.isoformat(), "total": a_total},
+        "period_b": {"from": b_start.isoformat(), "to": b_end.isoformat(), "total": b_total},
+        "change": percent_change(a_total, b_total),
+        "series": series,
+    }

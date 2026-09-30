@@ -291,6 +291,7 @@ def _lead_email_item_db(lead: Lead, src_map: dict, prod_map: dict, assign_map: d
     at = assign.assigned_at if assign else lead.created_at
     deadline = lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—"
     return {
+        "lead_id": str(lead.id),
         "enquiry_number": lead.enquiry_number,
         "legacy_enq": lead.legacy_enquiry_no,
         "enquiry_date": str(lead.enquiry_date) if lead.enquiry_date else "—",
@@ -315,6 +316,7 @@ def _lead_email_item(db: Session, lead: Lead) -> dict:
     prod = db.get(Product, lead.product_id) if lead.product_id else None
     deadline = lead.sla_deadline.strftime("%d-%b-%Y %H:%M") if lead.sla_deadline else "—"
     return {
+        "lead_id": str(lead.id),
         "enquiry_number": lead.enquiry_number,
         "legacy_enq": lead.legacy_enquiry_no,
         "enquiry_date": str(lead.enquiry_date) if lead.enquiry_date else "—",
@@ -573,9 +575,21 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
                     seen_enqs.add(classified["legacy_enq"])
         preview.append(rec)
 
+    safe_preview = [_json_safe_rec({**r, "dup": r.get("dup"), "errors": r.get("errors")}) for r in preview]
+    # Keep classification flags that _json_safe_rec strips from error copies.
+    for src, dst in zip(preview, safe_preview):
+        if src.get("dup"):
+            dst["dup"] = True
+        if src.get("errors"):
+            dst["errors"] = list(src["errors"])
+        if src.get("email_invalid"):
+            dst["email_invalid"] = True
+        if src.get("product_unmapped"):
+            dst["product_unmapped"] = True
     batch = ImportBatch(
         file_name=safe_name, sheet_name=ws.title, total_rows=len(preview),
-        duplicates=len(duplicates), invalid=len(invalids), status="PREVIEW", created_by=admin.id,
+        duplicates=len(duplicates), invalid=len(invalids), status="PREVIEW",
+        preview_rows=safe_preview, created_by=admin.id,
     )
     db.add(batch)
     db.commit()
@@ -596,128 +610,243 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
     }
 
 
+def _batch_rows(batch: ImportBatch, bid: UUID) -> list[dict]:
+    """Preview rows from Postgres first, then the in-memory cache."""
+    rows = batch.preview_rows if isinstance(batch.preview_rows, list) else None
+    if rows:
+        return rows
+    return PENDING.get(str(bid), [])
+
+
+def _run_import_job(bid: str, admin_id: str) -> None:
+    """Import every preview row on a private DB session (survives HTTP timeouts)."""
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        batch = db.get(ImportBatch, UUID(bid))
+        admin = db.get(User, UUID(admin_id))
+        if not batch or not admin:
+            return
+        rows = _batch_rows(batch, UUID(bid))
+        if not rows:
+            batch.status = "FAILED"
+            batch.error_message = "Preview rows missing — re-upload the Excel file"
+            db.commit()
+            return
+        st = _default_status(db)
+        ok = assigned = pending = 0
+        new_by_emp: dict = {}
+        commit_every = 25
+        for rec in rows:
+            emp = None
+            if rec.get("dup") or rec.get("errors"):
+                db.add(ImportError(
+                    batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
+                    error=",".join(rec.get("errors") or ["duplicate"]),
+                    reason="DUPLICATE" if rec.get("dup") else "INVALID",
+                ))
+                continue
+            legacy = rec.get("legacy_enq")
+            if legacy is None:
+                enquiry_number = next_enquiry_number(db)
+            else:
+                enquiry_number = format_enquiry_number(int(legacy))
+                if (
+                    db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
+                    or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
+                ):
+                    db.add(ImportError(
+                        batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
+                        error=f"duplicate enquiry no {enquiry_number}", reason="DUPLICATE",
+                    ))
+                    batch.duplicates = (batch.duplicates or 0) + 1
+                    continue
+            phone = str(rec.get("phone") or "")
+            phone_n = rec.get("phone_norm") or norm_phone(phone)
+            if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+                db.add(ImportError(
+                    batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
+                    error="duplicate phone", reason="DUPLICATE",
+                ))
+                batch.duplicates = (batch.duplicates or 0) + 1
+                continue
+            cars = str(rec.get("cars") or "")
+            src = _norm_source(db, str(rec.get("source") or ""))
+            prod = _norm_product(db, str(rec.get("product") or ""))
+            count, car_error = normalize_car_count(cars or str(rec.get("quantity") or ""), str(rec.get("product") or ""))
+            if car_error:
+                db.add(ImportError(
+                    batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
+                    error=car_error, reason="INVALID",
+                ))
+                batch.invalid = (batch.invalid or 0) + 1
+                continue
+            try:
+                with db.begin_nested():
+                    lead = Lead(
+                        enquiry_number=enquiry_number,
+                        legacy_enquiry_no=legacy,
+                        enquiry_date=parse_excel_date(rec.get("date")),
+                        customer_name=str(rec.get("name") or ""),
+                        company_name=str(rec.get("company") or ""),
+                        contact_number=phone,
+                        contact_number_norm=phone_n,
+                        alternate_contact=str(rec.get("alternate_contact") or "").strip(),
+                        email=str(rec.get("email") or "").strip(),
+                        city=str(rec.get("city") or ""),
+                        product_raw=str(rec.get("product") or "").strip(),
+                        requirement=str(rec.get("requirement") or "").strip(),
+                        quantity_raw=str(count),
+                        quantity_num=count,
+                        priority=str(rec.get("priority") or "").strip(),
+                        first_contact_notes=str(rec.get("remarks") or "").strip(),
+                        source_id=src.id if src else None,
+                        product_id=prod.id if prod else None,
+                        status_id=st.id,
+                        sla_state="PENDING",
+                        created_by=admin.id,
+                    )
+                    apply_pricing_to_lead(lead, product=prod)
+                    db.add(lead)
+                    db.flush()
+                    db.add(LeadStatusHistory(
+                        lead_id=lead.id, old_status_id=None, new_status_id=st.id,
+                        changed_by=admin.id, reason="excel import",
+                    ))
+                    emp = auto_assign(db, lead, admin, ignore_limit=True)
+                    if emp:
+                        new_by_emp.setdefault(emp.id, []).append(lead.id)
+            except IntegrityError:
+                db.add(ImportError(
+                    batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
+                    error="duplicate enquiry no or phone", reason="DUPLICATE",
+                ))
+                batch.duplicates = (batch.duplicates or 0) + 1
+                continue
+            if emp:
+                assigned += 1
+            else:
+                pending += 1
+            ok += 1
+            if ok % commit_every == 0:
+                batch.imported = ok
+                batch.assigned_count = assigned
+                batch.pending_count = pending
+                db.commit()
+        batch.imported = ok
+        batch.assigned_count = assigned
+        batch.pending_count = pending
+        batch.status = "DONE"
+        batch.preview_rows = None
+        batch.error_message = ""
+        db.commit()
+        PENDING.pop(bid, None)
+        if ok:
+            live.bump()
+        if new_by_emp:
+            _send_assignment_batches(db, new_by_emp)
+    except Exception as exc:
+        log.exception("background excel import failed for %s: %s", bid, exc)
+        try:
+            db.rollback()
+            batch = db.get(ImportBatch, UUID(bid))
+            if batch and batch.status != "DONE":
+                batch.status = "FAILED"
+                batch.error_message = str(exc)[:500]
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 @router.post("/{bid}/confirm")
 def confirm(bid: UUID, background: BackgroundTasks, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
     batch = db.get(ImportBatch, bid)
-    rows = PENDING.get(str(bid), [])
-    if not batch or not rows:
-        raise HTTPException(404, "Batch expired — re-upload")
-    st = _default_status(db)
-    ok = assigned = pending = 0
-    new_by_emp: dict = {}
-    for rec in rows:
-        if rec.get("dup") or rec.get("errors"):
-            db.add(ImportError(
-                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error=",".join(rec.get("errors", ["duplicate"])),
-                reason="DUPLICATE" if rec.get("dup") else "INVALID",
-            ))
-            continue
-        legacy = rec.get("legacy_enq")
-        if legacy is None:
-            enquiry_number = next_enquiry_number(db)
-        else:
-            enquiry_number = format_enquiry_number(int(legacy))
-            if (
-                db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
-                or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
-            ):
-                db.add(ImportError(
-                    batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                    error=f"duplicate enquiry no {enquiry_number}", reason="DUPLICATE",
-                ))
-                batch.duplicates += 1
-                continue
-        phone_n = rec.get("phone_norm") or norm_phone(str(rec.get("phone") or ""))
-        if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
-            db.add(ImportError(
-                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error="duplicate phone", reason="DUPLICATE",
-            ))
-            batch.duplicates += 1
-            continue
-
-        cars = str(rec.get("cars") or "")
-        phone = str(rec.get("phone") or "")
-        phone_n = rec.get("phone_norm") or norm_phone(phone)
-        src = _norm_source(db, str(rec.get("source") or ""))
-        prod = _norm_product(db, str(rec.get("product") or ""))
-        count, car_error = normalize_car_count(cars or str(rec.get("quantity") or ""), str(rec.get("product") or ""))
-        if car_error:
-            db.add(ImportError(
-                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error=car_error, reason="INVALID",
-            ))
-            batch.invalid += 1
-            continue
-        try:
-            with db.begin_nested():
-                lead = Lead(
-                    enquiry_number=enquiry_number,
-                    legacy_enquiry_no=legacy,
-                    enquiry_date=parse_excel_date(rec.get("date")),
-                    customer_name=str(rec.get("name") or ""),
-                    company_name=str(rec.get("company") or ""),
-                    contact_number=phone,
-                    contact_number_norm=phone_n,
-                    alternate_contact=str(rec.get("alternate_contact") or "").strip(),
-                    email=str(rec.get("email") or "").strip(),
-                    city=str(rec.get("city") or ""),
-                    product_raw=str(rec.get("product") or "").strip(),
-                    requirement=str(rec.get("requirement") or "").strip(),
-                    quantity_raw=str(count),
-                    quantity_num=count,
-                    priority=str(rec.get("priority") or "").strip(),
-                    first_contact_notes=str(rec.get("remarks") or "").strip(),
-                    source_id=src.id if src else None,
-                    product_id=prod.id if prod else None,
-                    status_id=st.id,
-                    sla_state="PENDING",
-                    created_by=admin.id,
-                )
-                apply_pricing_to_lead(lead, product=prod)
-                db.add(lead)
-                db.flush()
-                db.add(LeadStatusHistory(
-                    lead_id=lead.id, old_status_id=None, new_status_id=st.id,
-                    changed_by=admin.id, reason="excel import",
-                ))
-                emp = auto_assign(db, lead, admin, ignore_limit=True)
-                if emp:
-                    new_by_emp.setdefault(emp.id, []).append(lead.id)
-        except IntegrityError:
-            db.add(ImportError(
-                batch_id=bid, row_number=rec["row"], raw=_json_safe_rec(rec),
-                error="duplicate enquiry no or phone", reason="DUPLICATE",
-            ))
-            batch.duplicates += 1
-            continue
-        if emp:
-            assigned += 1
-        else:
-            pending += 1
-        ok += 1
-    batch.imported = ok
-    batch.status = "DONE"
+    if not batch:
+        raise HTTPException(404, "Batch not found — re-upload")
+    if batch.status == "DONE":
+        errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
+        return {
+            "batch_id": str(bid),
+            "status": "DONE",
+            "total": batch.total_rows,
+            "imported": batch.imported or 0,
+            "assigned": batch.assigned_count or 0,
+            "pending": batch.pending_count or 0,
+            "duplicates": batch.duplicates,
+            "invalid": batch.invalid,
+            "skipped": len(errors),
+            "errors": [_serialize_error(e) for e in errors],
+        }
+    if batch.status == "IMPORTING":
+        return {
+            "batch_id": str(bid),
+            "status": "IMPORTING",
+            "total": batch.total_rows,
+            "imported": batch.imported or 0,
+            "assigned": batch.assigned_count or 0,
+            "pending": batch.pending_count or 0,
+            "duplicates": batch.duplicates,
+            "invalid": batch.invalid,
+            "message": "Import already running. Keep this page open — progress updates automatically.",
+        }
+    if batch.status == "FAILED":
+        raise HTTPException(400, batch.error_message or "Previous import failed — re-upload the Excel file")
+    rows = _batch_rows(batch, bid)
+    if not rows:
+        raise HTTPException(404, "Batch expired — re-upload the Excel file")
+    # Persist preview if we only had the in-memory cache (older flow).
+    if not batch.preview_rows:
+        safe_preview = []
+        for r in rows:
+            item = _json_safe_rec({**r})
+            if r.get("dup"):
+                item["dup"] = True
+            if r.get("errors"):
+                item["errors"] = list(r["errors"])
+            safe_preview.append(item)
+        batch.preview_rows = safe_preview
+    batch.status = "IMPORTING"
+    batch.error_message = ""
     db.commit()
-    if ok:
-        live.bump()
-    errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
-    if new_by_emp:
-        background.add_task(
-            _email_assignments_later,
-            {str(emp_id): [str(lid) for lid in lids] for emp_id, lids in new_by_emp.items()},
-        )
+    background.add_task(_run_import_job, str(bid), str(admin.id))
     return {
         "batch_id": str(bid),
+        "status": "IMPORTING",
         "total": batch.total_rows,
-        "imported": ok,
-        "assigned": assigned,
-        "pending": pending,
+        "imported": 0,
+        "assigned": 0,
+        "pending": 0,
+        "duplicates": batch.duplicates,
+        "invalid": batch.invalid,
+        "message": "Import started in the background. Large files can take a few minutes on Render.",
+    }
+
+
+@router.get("/{bid}/status")
+def import_status(bid: UUID, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    batch = db.get(ImportBatch, bid)
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    errors = []
+    if batch.status in {"DONE", "FAILED"}:
+        errors = [
+            _serialize_error(e)
+            for e in db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
+        ]
+    return {
+        "batch_id": str(bid),
+        "status": batch.status,
+        "total": batch.total_rows,
+        "imported": batch.imported or 0,
+        "assigned": batch.assigned_count or 0,
+        "pending": batch.pending_count or 0,
         "duplicates": batch.duplicates,
         "invalid": batch.invalid,
         "skipped": len(errors),
-        "errors": [_serialize_error(e) for e in errors],
+        "error_message": batch.error_message or "",
+        "errors": errors,
     }
 
 

@@ -2903,17 +2903,41 @@ export function ImportPage() {
   };
 
   const [confirming, setConfirming] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
   const confirm = async () => {
     if (!res?.batch_id || confirming) return;
-    setConfirming(true); setError(''); setOkMsg('');
+    setConfirming(true); setError(''); setOkMsg(''); setImportProgress('Starting import…');
+    const batchId = res.batch_id;
     try {
-      const { data } = await api.post(`/import/${res.batch_id}/confirm`, null, { timeout: 180000 });
+      const { data: started } = await api.post(`/import/${batchId}/confirm`, null, { timeout: 60000 });
+      let data = started;
+      // Large Excel files import in the background so Render's HTTP limit cannot abort them.
+      if (started?.status === 'IMPORTING') {
+        for (let i = 0; i < 900; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const { data: status } = await api.get(`/import/${batchId}/status`, { timeout: 30000 });
+          data = status;
+          setImportProgress(`Importing… ${status.imported || 0} / ${status.total || res.total || '?'} saved`);
+          if (status.status === 'DONE' || status.status === 'FAILED') break;
+        }
+      }
+      if (data?.status === 'FAILED') {
+        setError(data.error_message || 'Import failed — re-upload the Excel file');
+        loadBatches();
+        return;
+      }
+      if (data?.status === 'IMPORTING') {
+        setError('Import is still running on the server. Refresh Leads in a minute, or check Recent import batches.');
+        loadBatches();
+        return;
+      }
       setDone(data);
       setErrors(data.errors || []);
       setRes(null);
+      setImportProgress('');
       loadBatches();
       if ((data.errors || []).length) setTab(data.errors.some((x: any) => x.reason === 'DUPLICATE') ? 'duplicates' : 'invalid');
-    } catch (e: any) { setError(errMsg(e)); } finally { setConfirming(false); }
+    } catch (e: any) { setError(errMsg(e)); } finally { setConfirming(false); setImportProgress(''); }
   };
 
   const pickFile = (f: File | null) => {
@@ -3083,8 +3107,11 @@ export function ImportPage() {
               </table>
             </div>
             <button onClick={confirm} disabled={confirming || (!res.valid && !res.duplicates && !res.invalid)} className="btn-primary">
-              {confirming ? 'Importing…' : `4 · Confirm import (${res.valid} leads)`}{res.duplicates || res.invalid ? ` · keep ${res.duplicates + res.invalid} for review` : ''}
+              {confirming ? (importProgress || 'Importing…') : `4 · Confirm import (${res.valid} leads)`}{!confirming && (res.duplicates || res.invalid) ? ` · keep ${res.duplicates + res.invalid} for review` : ''}
             </button>
+            {confirming && importProgress && (
+              <p className="text-sm text-graphite-600 mt-2">{importProgress}. Keep this tab open.</p>
+            )}
           </Card>
 
           {(previewDups.length > 0 || previewInvalid.length > 0) && (
