@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AppShell } from '../layouts/AppShell';
-import { Analytics, Comparison, Dashboard, EmployeeDashboard, EmployeeLeads, EmployeeReport, EmployeesPage, ImportPage, LeadDetail, Leads, Login, NotificationsPage, ReassignmentsPage, Reports } from '../pages';
+import { Analytics, Dashboard, EmployeeDashboard, EmployeeLeads, EmployeeReport, EmployeesPage, ImportPage, LeadDetail, Leads, Login, NotificationsPage, ReassignmentsPage, ReportHistory, Reports } from '../pages';
 
 function Role({ children, roles }: { children: React.ReactElement; roles?: string[] }) {
   const token = localStorage.getItem('token');
@@ -29,17 +29,17 @@ export function AppRoutes() {
       <Routes>
         <Route path="/login" element={<LoginGate />} />
         <Route element={<AppShell />}>
-          <Route path="/dashboard" element={<Role roles={['ADMIN', 'MANAGER', 'EMPLOYEE']}><DashboardGate /></Role>} />
+          <Route path="/dashboard" element={<Role roles={['ADMIN', 'EMPLOYEE']}><DashboardGate /></Role>} />
           <Route path="/leads" element={<Role><Leads /></Role>} />
           <Route path="/leads/:id" element={<Role><Detail /></Role>} />
           <Route path="/import" element={<Role roles={['ADMIN']}><ImportPage /></Role>} />
           <Route path="/employees" element={<Role roles={['ADMIN']}><EmployeesPage /></Role>} />
           <Route path="/employee-leads" element={<Role roles={['ADMIN']}><EmployeeLeads /></Role>} />
           <Route path="/reassignments" element={<Role roles={['ADMIN']}><ReassignmentsPage /></Role>} />
-          <Route path="/comparison" element={<Role roles={['ADMIN']}><Comparison /></Role>} />
-          <Route path="/reports" element={<Role roles={['ADMIN', 'MANAGER']}><Reports /></Role>} />
+          <Route path="/reports" element={<Role roles={['ADMIN']}><Reports /></Role>} />
+          <Route path="/report-history" element={<Role roles={['ADMIN']}><ReportHistory /></Role>} />
           <Route path="/my-report" element={<Role roles={['EMPLOYEE']}><EmployeeReport /></Role>} />
-          <Route path="/analytics" element={<Role roles={['ADMIN', 'MANAGER']}><Analytics /></Role>} />
+          <Route path="/analytics" element={<Role roles={['ADMIN']}><Analytics /></Role>} />
           <Route path="/notifications" element={<Role><NotificationsPage /></Role>} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

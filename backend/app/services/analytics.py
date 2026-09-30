@@ -1393,7 +1393,7 @@ def meta_payload(db: Session) -> dict:
         {"id": str(user.id), "name": user.name}
         for user in (
             db.query(User).join(Role, User.role_id == Role.id)
-            .filter(User.is_active.is_(True), Role.name.in_(("EMPLOYEE", "MANAGER")))
+            .filter(User.is_active.is_(True), Role.name == "EMPLOYEE")
             .order_by(User.name).all()
         )
     ]

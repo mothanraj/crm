@@ -7,7 +7,6 @@ import {
 import { api } from '../services/api';
 import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, categoryTileBg, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
-export { Comparison } from './comparison';
 export { Analytics } from './analytics';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
@@ -889,9 +888,19 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
   );
 }
 
-export function EmployeeReport() {
+function PeriodReportPage({
+  title,
+  subtitle,
+  pickEmployee = false,
+}: {
+  title: string;
+  subtitle: string;
+  pickEmployee?: boolean;
+}) {
   const years = useMemo(reportYears, []);
   const today = new Date();
+  const [employees, setEmployees] = useState<Array<{ id: string; name: string }>>([]);
+  const [employeeId, setEmployeeId] = useState('');
   const [monthYear, setMonthYear] = useState(today.getFullYear());
   const [monthIndex, setMonthIndex] = useState(today.getMonth() + 1);
   const [weekYear, setWeekYear] = useState(today.getFullYear());
@@ -906,19 +915,39 @@ export function EmployeeReport() {
   const [weekData, setWeekData] = useState<any>(null);
   const [monthErr, setMonthErr] = useState('');
   const [weekErr, setWeekErr] = useState('');
-  const [monthLoading, setMonthLoading] = useState(true);
-  const [weekLoading, setWeekLoading] = useState(true);
+  const [monthLoading, setMonthLoading] = useState(!pickEmployee);
+  const [weekLoading, setWeekLoading] = useState(!pickEmployee);
   const [pdfBusy, setPdfBusy] = useState<'month' | 'week' | ''>('');
   const [pdfErr, setPdfErr] = useState('');
+  const ready = !pickEmployee || Boolean(employeeId);
+  const selectedName = employees.find((e) => e.id === employeeId)?.name || '';
+
+  useEffect(() => {
+    if (!pickEmployee) return;
+    api.get('/masters').then((r) => {
+      const list = (r.data?.employees || []) as Array<{ id: string; name: string }>;
+      setEmployees(list);
+      if (list.length && !employeeId) setEmployeeId(list[0].id);
+    }).catch(() => setEmployees([]));
+  }, [pickEmployee]);
+
+  function withEmployee(params: Record<string, string>) {
+    if (pickEmployee && employeeId) params.employee_id = employeeId;
+    return params;
+  }
 
   async function downloadPdf(mode: 'month' | 'week') {
+    if (!ready) return;
     setPdfBusy(mode);
     setPdfErr('');
     try {
-      const params: Record<string, string> = { mode };
+      const params: Record<string, string> = withEmployee({ mode });
       if (mode === 'month') params.month = month;
       else { params.from_date = weekFrom; params.to_date = weekTo; }
-      const filename = mode === 'month' ? `my-report-${month}.pdf` : `my-report-${weekFrom}-to-${weekTo}.pdf`;
+      const who = selectedName ? selectedName.replace(/[^\w.-]+/g, '-') : 'my';
+      const filename = mode === 'month'
+        ? `report-${who}-${month}.pdf`
+        : `report-${who}-${weekFrom}-to-${weekTo}.pdf`;
       await downloadReport('/dashboard/period-report/pdf', filename, params);
     } catch (e: any) {
       setPdfErr(e?.message || 'Could not download the PDF');
@@ -928,18 +957,27 @@ export function EmployeeReport() {
   }
 
   useEffect(() => {
-    if (!month) return;
+    if (!month || !ready) {
+      setMonthData(null);
+      setMonthLoading(false);
+      return;
+    }
     const ctrl = new AbortController();
     setMonthLoading(true);
     setMonthErr('');
-    api.get('/dashboard/period-report', { params: { mode: 'month', month }, signal: ctrl.signal })
+    api.get('/dashboard/period-report', { params: withEmployee({ mode: 'month', month }), signal: ctrl.signal })
       .then((r) => setMonthData(r.data))
       .catch((e: any) => { if (!ctrl.signal.aborted) setMonthErr(e?.response?.data?.detail || 'Could not load the monthly report'); })
       .finally(() => { if (!ctrl.signal.aborted) setMonthLoading(false); });
     return () => ctrl.abort();
-  }, [month]);
+  }, [month, ready, employeeId]);
 
   useEffect(() => {
+    if (!ready) {
+      setWeekData(null);
+      setWeekLoading(false);
+      return;
+    }
     if (!weekFrom || !weekTo || weekFrom > weekTo) {
       setWeekLoading(false);
       setWeekErr('From date must be on or before to date');
@@ -948,102 +986,142 @@ export function EmployeeReport() {
     const ctrl = new AbortController();
     setWeekLoading(true);
     setWeekErr('');
-    api.get('/dashboard/period-report', { params: { mode: 'week', from_date: weekFrom, to_date: weekTo }, signal: ctrl.signal })
+    api.get('/dashboard/period-report', {
+      params: withEmployee({ mode: 'week', from_date: weekFrom, to_date: weekTo }),
+      signal: ctrl.signal,
+    })
       .then((r) => setWeekData(r.data))
       .catch((e: any) => { if (!ctrl.signal.aborted) setWeekErr(e?.response?.data?.detail || 'Could not load the weekly report'); })
       .finally(() => { if (!ctrl.signal.aborted) setWeekLoading(false); });
     return () => ctrl.abort();
-  }, [weekFrom, weekTo]);
+  }, [weekFrom, weekTo, ready, employeeId]);
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="My reports"
-        subtitle="How many site visits, follow-ups and other progress you logged, and the category, for a month or a week."
-      />
+      <PageHeader title={title} subtitle={subtitle} />
+      {pickEmployee && (
+        <Card title="Employee">
+          <label className="text-sm block max-w-sm">Choose employee
+            <select className="input mt-1" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+              {!employees.length && <option value="">No employees found</option>}
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
+              ))}
+            </select>
+          </label>
+          {selectedName && (
+            <p className="text-xs text-graphite-500 mt-2">Showing work history for <span className="font-medium text-graphite-700">{selectedName}</span>.</p>
+          )}
+        </Card>
+      )}
       {pdfErr && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{pdfErr}</div>}
-      <ReportBlock
-        title="Monthly"
-        data={monthData}
-        loading={monthLoading}
-        error={monthErr}
-        pdfBusy={pdfBusy === 'month'}
-        onPdf={() => { void downloadPdf('month'); }}
-        controls={(
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="text-sm block w-[140px]">Year
-              <select className="input mt-1" value={monthYear} onChange={(e) => setMonthYear(Number(e.target.value))}>
-                {years.map((year) => <option key={year} value={year}>{year}</option>)}
-              </select>
-            </label>
-            <label className="text-sm block w-[180px]">Month
-              <select className="input mt-1" value={monthIndex} onChange={(e) => setMonthIndex(Number(e.target.value))}>
-                {REPORT_MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
-              </select>
-            </label>
-          </div>
-        )}
-      />
-      <ReportBlock
-        title="Weekly"
-        data={weekData}
-        loading={weekLoading}
-        error={weekErr}
-        pdfBusy={pdfBusy === 'week'}
-        onPdf={() => { void downloadPdf('week'); }}
-        controls={(
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="text-sm block w-[140px]">Year
-              <select
-                className="input mt-1"
-                value={weekYear}
-                onChange={(e) => {
-                  const year = Number(e.target.value);
-                  setWeekYear(year);
-                  setWeekFrom((currentFrom) => {
-                    const nextFrom = dateInYear(currentFrom, year);
-                    setWeekTo((currentTo) => {
-                      const nextTo = dateInYear(currentTo, year);
-                      return nextTo < nextFrom ? nextFrom : nextTo;
-                    });
-                    return nextFrom;
-                  });
-                }}
-              >
-                {years.map((year) => <option key={year} value={year}>{year}</option>)}
-              </select>
-            </label>
-            <label className="text-sm block w-[180px]">From date
-              <input
-                type="date"
-                className="input mt-1"
-                value={weekFrom}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (!value) return;
-                  setWeekFrom(value);
-                  setWeekYear(Number(value.slice(0, 4)));
-                  setWeekTo((current) => (current < value ? value : current));
-                }}
-              />
-            </label>
-            <label className="text-sm block w-[180px]">To date
-              <input
-                type="date"
-                className="input mt-1"
-                value={weekTo}
-                min={weekFrom}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (!value) return;
-                  setWeekTo(value < weekFrom ? weekFrom : value);
-                }}
-              />
-            </label>
-          </div>
-        )}
-      />
+      {!ready ? (
+        <Card><EmptyState title="Choose an employee" hint="Pick a staff member to see their monthly and weekly report history." /></Card>
+      ) : (
+        <>
+          <ReportBlock
+            title={pickEmployee && selectedName ? `Monthly · ${selectedName}` : 'Monthly'}
+            data={monthData}
+            loading={monthLoading}
+            error={monthErr}
+            pdfBusy={pdfBusy === 'month'}
+            onPdf={() => { void downloadPdf('month'); }}
+            controls={(
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm block w-[140px]">Year
+                  <select className="input mt-1" value={monthYear} onChange={(e) => setMonthYear(Number(e.target.value))}>
+                    {years.map((year) => <option key={year} value={year}>{year}</option>)}
+                  </select>
+                </label>
+                <label className="text-sm block w-[180px]">Month
+                  <select className="input mt-1" value={monthIndex} onChange={(e) => setMonthIndex(Number(e.target.value))}>
+                    {REPORT_MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
+                  </select>
+                </label>
+              </div>
+            )}
+          />
+          <ReportBlock
+            title={pickEmployee && selectedName ? `Weekly · ${selectedName}` : 'Weekly'}
+            data={weekData}
+            loading={weekLoading}
+            error={weekErr}
+            pdfBusy={pdfBusy === 'week'}
+            onPdf={() => { void downloadPdf('week'); }}
+            controls={(
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm block w-[140px]">Year
+                  <select
+                    className="input mt-1"
+                    value={weekYear}
+                    onChange={(e) => {
+                      const year = Number(e.target.value);
+                      setWeekYear(year);
+                      setWeekFrom((currentFrom) => {
+                        const nextFrom = dateInYear(currentFrom, year);
+                        setWeekTo((currentTo) => {
+                          const nextTo = dateInYear(currentTo, year);
+                          return nextTo < nextFrom ? nextFrom : nextTo;
+                        });
+                        return nextFrom;
+                      });
+                    }}
+                  >
+                    {years.map((year) => <option key={year} value={year}>{year}</option>)}
+                  </select>
+                </label>
+                <label className="text-sm block w-[180px]">From date
+                  <input
+                    type="date"
+                    className="input mt-1"
+                    value={weekFrom}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (!value) return;
+                      setWeekFrom(value);
+                      setWeekYear(Number(value.slice(0, 4)));
+                      setWeekTo((current) => (current < value ? value : current));
+                    }}
+                  />
+                </label>
+                <label className="text-sm block w-[180px]">To date
+                  <input
+                    type="date"
+                    className="input mt-1"
+                    value={weekTo}
+                    min={weekFrom}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (!value) return;
+                      setWeekTo(value < weekFrom ? weekFrom : value);
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+          />
+        </>
+      )}
     </div>
+  );
+}
+
+export function EmployeeReport() {
+  return (
+    <PeriodReportPage
+      title="My reports"
+      subtitle="How many site visits, follow-ups and other progress you logged, and the category, for a month or a week."
+    />
+  );
+}
+
+export function ReportHistory() {
+  return (
+    <PeriodReportPage
+      title="Employee report history"
+      subtitle="Employee-wise work history — the same monthly and weekly progress report employees see for themselves."
+      pickEmployee
+    />
   );
 }
 
@@ -2430,8 +2508,8 @@ export function LeadDetail({ id }: { id: string }) {
   const selectedProduct = masters?.products?.find((p: any) => p.id === productId);
   const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, String(cars || '').trim() || '2');
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
-  const canUpdateProgress = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
-  const canEditPricing = !leadLocked && (role === 'ADMIN' || role === 'MANAGER' || (role === 'EMPLOYEE' && l.primary_employee_id));
+  const canUpdateProgress = !leadLocked && (role === 'ADMIN' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
+  const canEditPricing = !leadLocked && (role === 'ADMIN' || (role === 'EMPLOYEE' && l.primary_employee_id));
   const rr = l.reassignment_request;
   const canRequestReassign = !leadLocked && role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
   const addNote = async () => {
@@ -3357,7 +3435,7 @@ export function Reports() {
       return d.map((x: any) => x?.msg || JSON.stringify(x)).join('; ');
     }
     if (e?.response?.status === 401) return 'Session expired — please log in again';
-    if (e?.response?.status === 403) return 'Reports require admin or manager role';
+    if (e?.response?.status === 403) return 'Reports require an admin role';
     if (e?.message === 'Network Error') return 'Cannot reach the server. Is the backend running?';
     return fallback;
   };

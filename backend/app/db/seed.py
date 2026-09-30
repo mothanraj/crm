@@ -15,11 +15,17 @@ from app.services.pricing import PRODUCT_PRICES
 def run():
     db = SessionLocal()
     try:
-        for r in ["ADMIN", "EMPLOYEE", "MANAGER"]:
+        for r in ["ADMIN", "EMPLOYEE"]:
             if not db.query(Role).filter_by(name=r).first():
                 db.add(Role(name=r, description=r))
         db.flush()
         roles = {r.name: r for r in db.query(Role).all()}
+        # Legacy MANAGER accounts become employees — only ADMIN and EMPLOYEE remain.
+        manager_role = db.query(Role).filter_by(name="MANAGER").first()
+        if manager_role and roles.get("EMPLOYEE"):
+            for user in db.query(User).filter(User.role_id == manager_role.id).all():
+                user.role_id = roles["EMPLOYEE"].id
+
         for name, term, lost, order in CANONICAL_STATUSES:
             st = db.query(LeadStatus).filter_by(name=name).first()
             if not st:

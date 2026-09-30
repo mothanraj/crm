@@ -3,17 +3,17 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 
 const NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
+  { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/my-report', label: 'Reports', icon: '▥', roles: ['EMPLOYEE'] },
-  { to: '/leads', label: 'Leads', icon: '☰', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
+  { to: '/leads', label: 'Leads', icon: '☰', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/import', label: 'Import', icon: '⤴', roles: ['ADMIN'] },
   { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
   { to: '/employee-leads', label: 'Employee Leads', icon: '👥', roles: ['ADMIN'] },
   { to: '/reassignments', label: 'Reassign', icon: '⇄', roles: ['ADMIN'] },
-  { to: '/comparison', label: 'Comparison', icon: '⚖', roles: ['ADMIN'] },
-  { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN', 'MANAGER'] },
-  { to: '/analytics', label: 'Analytics', icon: '▤', roles: ['ADMIN', 'MANAGER'] },
-  { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'MANAGER', 'EMPLOYEE'] },
+  { to: '/reports', label: 'Reports', icon: '▥', roles: ['ADMIN'] },
+  { to: '/report-history', label: 'Employee Report History', icon: '▦', roles: ['ADMIN'] },
+  { to: '/analytics', label: 'Analytics', icon: '▤', roles: ['ADMIN'] },
+  { to: '/notifications', label: 'Notifications', icon: '🔔', roles: ['ADMIN', 'EMPLOYEE'] },
 ];
 
 export function AppShell() {

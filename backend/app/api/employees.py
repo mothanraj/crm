@@ -12,7 +12,7 @@ from app.schemas import EmployeeCreate, EmployeeUpdate, PasswordReset
 
 router = APIRouter(prefix="/api/employees", tags=["employees"])
 
-_STAFF_ROLES = ("EMPLOYEE", "MANAGER")
+_STAFF_ROLES = ("EMPLOYEE",)
 
 
 def _serialize(u: User) -> dict:

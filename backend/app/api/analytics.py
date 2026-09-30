@@ -27,8 +27,8 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 def _require(u: User) -> None:
-    if not u.role or u.role.name not in {"ADMIN", "MANAGER"}:
-        raise HTTPException(403, "Analytics is available to admins and managers")
+    if not u.role or u.role.name != "ADMIN":
+        raise HTTPException(403, "Analytics is available to admins")
 
 
 def _parse_date(value: str | None, field: str) -> date | None:

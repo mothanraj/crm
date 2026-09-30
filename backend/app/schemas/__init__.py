@@ -17,7 +17,7 @@ class EmployeeCreate(BaseModel):
     password: str
     phone: str = ""
     department: str = "Sales"
-    role: str = "EMPLOYEE"  # EMPLOYEE | MANAGER
+    role: str = "EMPLOYEE"
 
 
 class EmployeeUpdate(BaseModel):

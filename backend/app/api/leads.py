@@ -130,10 +130,10 @@ def _serialize_reassignment(db: Session, lead_id) -> dict | None:
 
 
 def _require_lead_write(u: User) -> None:
-    """Managers are read-only per business rules; admins/employees may mutate."""
+    """Only admin and employee may mutate leads."""
     role = getattr(getattr(u, "role", None), "name", None)
-    if role == "MANAGER":
-        raise HTTPException(403, "Managers have read-only access")
+    if role not in ("ADMIN", "EMPLOYEE"):
+        raise HTTPException(403, "Not allowed")
 
 
 def _lookup(db, model, name: str):

@@ -108,8 +108,8 @@ def _is_employee(u: User | None) -> bool:
 
 
 def _require_reports(u: User) -> None:
-    if not u.role or u.role.name not in ("ADMIN", "MANAGER"):
-        raise HTTPException(403, "Reports require an admin or manager role")
+    if not u.role or u.role.name != "ADMIN":
+        raise HTTPException(403, "Reports require an admin role")
 
 
 def _emp_clauses(u: User | None):
@@ -263,6 +263,23 @@ PERIOD_PROGRESS = [
 _PROGRESS_ALIASES = {"Not Interested/Spam": "Not Interested"}
 
 
+def _period_subject(db: Session, viewer: User, employee_id: UUID | None) -> User:
+    """Employee sees only their own report. Admin may pick any employee."""
+    role = viewer.role.name if viewer.role else ""
+    if role == "ADMIN":
+        if not employee_id:
+            raise HTTPException(400, "Choose an employee")
+        subject = db.get(User, employee_id)
+        if not subject or not subject.is_active:
+            raise HTTPException(404, "Employee not found")
+        return subject
+    if _is_employee(viewer):
+        if employee_id and employee_id != viewer.id:
+            raise HTTPException(403, "This report is for your own assigned work")
+        return viewer
+    raise HTTPException(403, "This report is for employees and admins")
+
+
 def _employee_period_payload(
     db: Session,
     u: User,
@@ -271,9 +288,9 @@ def _employee_period_payload(
     week: str | None,
     from_date: str | None = None,
     to_date: str | None = None,
+    employee_id: UUID | None = None,
 ) -> dict:
-    if not _is_employee(u):
-        raise HTTPException(403, "This report is for your own assigned work")
+    subject = _period_subject(db, u, employee_id)
     if from_date or to_date:
         start = _parse_date(from_date, "from date")
         end = _parse_date(to_date, "to date")
@@ -290,7 +307,7 @@ def _employee_period_payload(
     rows = (
         db.query(LeadActivity.outcome, LeadActivity.customer_review, LeadActivity.lead_id)
         .filter(
-            LeadActivity.employee_id == u.id,
+            LeadActivity.employee_id == subject.id,
             LeadActivity.activity_type == "Work Progress",
             LeadActivity.activity_at.isnot(None),
             local_day >= start,
@@ -309,7 +326,8 @@ def _employee_period_payload(
         if cat in category_leads and lead_id:
             category_leads[cat].add(lead_id)
     return {
-        "employee": u.name or "Employee",
+        "employee_id": str(subject.id),
+        "employee": subject.name or "Employee",
         "mode": resolved,
         "from": start.isoformat(),
         "to": end.isoformat(),
@@ -327,9 +345,13 @@ def period_report(
     week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    employee_id: UUID | None = None,
 ):
-    """Work this employee logged in a month or week: every progress and category."""
-    return _employee_period_payload(db, u, mode, month, week, from_date, to_date)
+    """Work logged in a month or week: every progress and category.
+
+    Employees see their own history. Admins pass employee_id.
+    """
+    return _employee_period_payload(db, u, mode, month, week, from_date, to_date, employee_id)
 
 
 @router.get("/dashboard/period-report/pdf")
@@ -341,13 +363,15 @@ def period_report_pdf(
     week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    employee_id: UUID | None = None,
 ):
     from app.services.report_pdf import build_employee_period_pdf
 
-    payload = _employee_period_payload(db, u, mode, month, week, from_date, to_date)
+    payload = _employee_period_payload(db, u, mode, month, week, from_date, to_date, employee_id)
     content = build_employee_period_pdf(payload)
     stamp = payload["from"] if payload["mode"] == "week" else payload["from"][:7]
-    filename = f"my-report-{payload['mode']}-{stamp}.pdf"
+    who = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (payload.get("employee") or "employee"))
+    filename = f"report-{who}-{payload['mode']}-{stamp}.pdf"
     return StreamingResponse(
         BytesIO(content),
         media_type="application/pdf",
@@ -1508,7 +1532,7 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
     staff = (
         db.query(User)
         .join(Role, User.role_id == Role.id)
-        .filter(User.is_active.is_(True), Role.name.in_(("EMPLOYEE", "MANAGER")))
+        .filter(User.is_active.is_(True), Role.name == "EMPLOYEE")
         .options(joinedload(User.role))
         .order_by(User.name)
         .all()
