@@ -1675,15 +1675,17 @@ def build_filter_period_compare(
     metric: str,
     period_a: tuple[date, date],
     period_b: tuple[date, date],
+    *,
+    category: str | None = None,
+    progress: str | None = None,
 ) -> dict:
     """Period A vs Period B for one filter value and metric.
 
     When both ranges have the same length, points are aligned day-by-day.
+    Prefer category/progress (employee lead fields) when provided.
     """
     if filter_type and filter_type not in FILTER_TYPES:
         raise ValueError("filter_type")
-    if filter_type and not filter_value:
-        raise ValueError("filter_value")
     if metric not in DASHBOARD_METRICS:
         raise ValueError("metric")
     a_start, a_end = period_a
@@ -1691,10 +1693,24 @@ def build_filter_period_compare(
     if a_start > a_end or b_start > b_end:
         raise ValueError("date_range")
 
+    # Prefer explicit category/progress, else map filter_type into a single scope.
+    use_type = filter_type
+    use_value = filter_value
+    if not use_type:
+        if category:
+            use_type, use_value = "category", category
+        elif progress:
+            use_type, use_value = "progress", progress
+
     money = DASHBOARD_METRICS[metric]["money"]
 
+    def scoped_q():
+        if use_type and use_value:
+            return _scoped_leads(db, use_type, use_value)
+        return _scoped_employee_leads(db)
+
     def daily(start: date, end: date) -> dict[date, int]:
-        q, day = _scoped_leads(db, filter_type, filter_value)
+        q, day = scoped_q()
         q = q.filter(day >= start, day <= end)
         rows = (
             q.with_entities(day.label("day"), _metric_agg(metric).label("value"))
@@ -1749,15 +1765,206 @@ def build_filter_period_compare(
                 "label": str(index + 1),
             })
 
+    def dim_breakdown(start: date, end: date, kind: str) -> list[dict]:
+        q, day = scoped_q()
+        q = q.filter(day >= start, day <= end)
+        expr = category_expr() if kind == "category" else status_expr()
+        rows = (
+            q.with_entities(expr.label("name"), _metric_agg(metric).label("value"))
+            .group_by(expr)
+            .all()
+        )
+        found = {
+            str(row.name): (_rupee0(row.value) if money else _int(row.value))
+            for row in rows if row.name
+        }
+        order = _category_names(db) if kind == "category" else _progress_names(db)
+        out = [{"name": name, "value": found.get(name, 0)} for name in order if found.get(name, 0)]
+        for name, value in sorted(found.items()):
+            if name not in {row["name"] for row in out}:
+                out.append({"name": name, "value": value})
+        return out
+
     return {
-        "filter_type": filter_type,
-        "filter_value": filter_value,
+        "filter_type": use_type,
+        "filter_value": use_value,
+        "category": use_value if use_type == "category" else None,
+        "progress": use_value if use_type == "progress" else None,
         "metric": metric,
         "metric_label": DASHBOARD_METRICS[metric]["label"],
         "money": money,
         "aligned": equal,
-        "period_a": {"from": a_start.isoformat(), "to": a_end.isoformat(), "total": a_total},
-        "period_b": {"from": b_start.isoformat(), "to": b_end.isoformat(), "total": b_total},
+        "period_a": {
+            "from": a_start.isoformat(),
+            "to": a_end.isoformat(),
+            "total": a_total,
+            "by_progress": dim_breakdown(a_start, a_end, "progress"),
+            "by_category": dim_breakdown(a_start, a_end, "category"),
+        },
+        "period_b": {
+            "from": b_start.isoformat(),
+            "to": b_end.isoformat(),
+            "total": b_total,
+            "by_progress": dim_breakdown(b_start, b_end, "progress"),
+            "by_category": dim_breakdown(b_start, b_end, "category"),
+        },
         "change": percent_change(a_total, b_total),
         "series": series,
+    }
+
+
+def _auto_granularity(start: date, end: date) -> str:
+    days = (end - start).days + 1
+    if days <= 45:
+        return "day"
+    if days <= 180:
+        return "week"
+    return "month"
+
+
+def _scoped_employee_leads(
+    db: Session,
+    *,
+    category: str | None = None,
+    progress: str | None = None,
+):
+    """Leads filtered by the same category/progress employees set on the leads page."""
+    day = _lead_day()
+    q = _base(db).filter(Lead.is_active.is_(True))
+    if category:
+        q = q.filter(category_expr() == category)
+    if progress:
+        q = q.filter(status_expr() == progress)
+    return q, day
+
+
+def _breakdown_rows(q, expr, metric: str) -> list[dict]:
+    money = DASHBOARD_METRICS[metric]["money"]
+    rows = (
+        q.with_entities(expr.label("name"), _metric_agg(metric).label("value"))
+        .group_by(expr)
+        .all()
+    )
+    found = {
+        str(row.name): (_rupee0(row.value) if money else _int(row.value))
+        for row in rows if row.name
+    }
+    total = sum(found.values())
+    packed = []
+    for name, value in found.items():
+        packed.append({
+            "name": name,
+            "value": value,
+            "pct": round(100.0 * value / total, 1) if total else None,
+        })
+    packed.sort(key=lambda row: (-row["value"], row["name"]))
+    return packed
+
+
+def build_overview(
+    db: Session,
+    *,
+    from_date: date,
+    to_date: date,
+    metric: str = "leads",
+    filter_type: str | None = None,
+    filter_value: str | None = None,
+    category: str | None = None,
+    progress: str | None = None,
+    granularity: str | None = None,
+) -> dict:
+    """GA-style overview: KPIs vs previous period, trend, dimension breakdowns.
+
+    Scope with filter_type + filter_value (category / product / progress / source),
+    or legacy category/progress params.
+    """
+    if metric not in DASHBOARD_METRICS:
+        raise ValueError("metric")
+    if from_date > to_date:
+        raise ValueError("date_range")
+    if filter_type and filter_type not in FILTER_TYPES:
+        raise ValueError("filter_type")
+    if filter_type and not filter_value:
+        raise ValueError("filter_value")
+    grain = granularity or _auto_granularity(from_date, to_date)
+    if grain not in GRANULARITIES:
+        raise ValueError("granularity")
+
+    # Normalize legacy params into a single dimension filter.
+    use_type = filter_type
+    use_value = filter_value
+    if not use_type:
+        if category:
+            use_type, use_value = "category", category
+        elif progress:
+            use_type, use_value = "progress", progress
+
+    length = (to_date - from_date).days
+    prev_end = from_date - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=length)
+
+    if use_type and use_value:
+        q, day = _scoped_leads(db, use_type, use_value)
+    else:
+        q, day = _scoped_employee_leads(db)
+    current_q = q.filter(day >= from_date, day <= to_date)
+    previous_q = q.filter(day >= prev_start, day <= prev_end)
+
+    kpi = _kpi_four(current_q)
+    prev_kpi = _kpi_four(previous_q)
+    kpi_change = {key: percent_change(kpi[key], prev_kpi[key]) for key in kpi}
+
+    bucket = _bucket_expr(day, grain)
+    money = DASHBOARD_METRICS[metric]["money"]
+    rows = (
+        current_q.with_entities(bucket.label("bucket"), _metric_agg(metric).label("value"))
+        .group_by(bucket)
+        .order_by(bucket)
+        .all()
+    )
+    series = []
+    for row in rows:
+        if row.bucket is None:
+            continue
+        series.append({
+            "key": _bucket_key(row.bucket, grain),
+            "label": _bucket_label(row.bucket, grain),
+            "value": _rupee0(row.value) if money else _int(row.value),
+        })
+
+    by_progress = _breakdown_rows(current_q, status_expr(), metric)
+    by_category = _breakdown_rows(current_q, category_expr(), metric)
+    by_product = _breakdown_rows(current_q, product_expr(), metric)
+    by_source = _breakdown_rows(current_q, source_expr(), metric)
+
+    progress_order = {name: i for i, name in enumerate(_progress_names(db))}
+    category_order = {name: i for i, name in enumerate(_category_names(db))}
+    by_progress.sort(key=lambda row: (progress_order.get(row["name"], 999), -row["value"]))
+    by_category.sort(key=lambda row: (category_order.get(row["name"], 999), -row["value"]))
+
+    return {
+        "metric": metric,
+        "metric_label": DASHBOARD_METRICS[metric]["label"],
+        "money": money,
+        "granularity": grain,
+        "filter_type": use_type,
+        "filter_value": use_value,
+        "category": use_value if use_type == "category" else None,
+        "progress": use_value if use_type == "progress" else None,
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "previous_from": prev_start.isoformat(),
+        "previous_to": prev_end.isoformat(),
+        "kpi": kpi,
+        "kpi_previous": prev_kpi,
+        "kpi_change": kpi_change,
+        "series": series,
+        "by_progress": by_progress,
+        "by_category": by_category,
+        "by_product": by_product,
+        "by_source": by_source,
+        "progress_options": filter_option_values(db, "progress"),
+        "category_options": filter_option_values(db, "category"),
+        "product_options": filter_option_values(db, "product"),
+        "source_options": filter_option_values(db, "source"),
     }
