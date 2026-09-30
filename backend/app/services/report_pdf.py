@@ -4,17 +4,30 @@ from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from reportlab.graphics.charts.legends import Legend
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
+from reportlab.graphics.shapes import Drawing, String
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 LOGO = Path(__file__).resolve().parents[1] / "assets" / "company-logo.jpg"
 NAVY = colors.HexColor("#1e3a5f")
 GREEN = colors.HexColor("#3F6212")
 KEYS = ("total", "in_followup", "meeting", "site_visit", "quote_sent", "not_interested")
+CHART_COLORS = [
+    colors.HexColor("#1971C2"),
+    colors.HexColor("#65A30D"),
+    colors.HexColor("#7c3aed"),
+    colors.HexColor("#E8890C"),
+    colors.HexColor("#0e7490"),
+    colors.HexColor("#c0392b"),
+    colors.HexColor("#0369a1"),
+    colors.HexColor("#3F6212"),
+]
 
 
 def _brand_logo() -> ImageReader:
@@ -111,17 +124,120 @@ def _page_header_fn(logo, logo_iw, logo_ih, title: str, generated: str, width, h
     return page_header
 
 
+def _comparison_line_chart(
+    months: list[dict],
+    years: list[str],
+    by_month: dict,
+    focus: dict | None,
+    chart_width: float,
+) -> Drawing | None:
+    """Month × year line chart, sized to match the table width below it."""
+    if not months or not years:
+        return None
+    series = []
+    labels = []
+    peak = 0.0
+    for year in years:
+        points = []
+        for month in months:
+            if focus:
+                match = by_month.get(month.get("month")) or {}
+                found = next(
+                    (row for row in (match.get("items") or []) if row.get("name") == focus.get("name")),
+                    {},
+                )
+                values = found.get("values") or {}
+            else:
+                values = month.get("values") or {}
+            try:
+                value = float(values.get(year, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0.0
+            points.append(value)
+            if value > peak:
+                peak = value
+        series.append(points)
+        labels.append(year)
+
+    # Leave room for Y labels on the left and a centered legend under the plot.
+    left_pad = 54
+    right_pad = 18
+    top_pad = 22
+    legend_h = 28
+    plot_h = 168
+    drawing_h = top_pad + plot_h + legend_h + 18
+    plot_w = max(220.0, chart_width - left_pad - right_pad)
+
+    drawing = Drawing(chart_width, drawing_h)
+    chart = HorizontalLineChart()
+    chart.x = left_pad
+    chart.y = legend_h + 10
+    chart.height = plot_h
+    chart.width = plot_w
+    chart.data = series
+    chart.joinedLines = 1
+    chart.categoryAxis.categoryNames = [str(month.get("name") or "")[:3] for month in months]
+    chart.categoryAxis.labels.boxAnchor = "n"
+    chart.categoryAxis.labels.dy = -4
+    chart.categoryAxis.labels.angle = 0
+    chart.categoryAxis.labels.fontSize = 8
+    chart.categoryAxis.labels.fontName = "Helvetica"
+    chart.categoryAxis.strokeColor = colors.HexColor("#94a3b8")
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.valueMax = peak * 1.15 if peak > 0 else 1
+    chart.valueAxis.valueSteps = None
+    chart.valueAxis.labels.fontSize = 8
+    chart.valueAxis.labels.fontName = "Helvetica"
+    chart.valueAxis.strokeColor = colors.HexColor("#94a3b8")
+    chart.valueAxis.gridStrokeColor = colors.HexColor("#e2e8f0")
+    chart.valueAxis.gridStrokeWidth = 0.5
+    chart.lines.strokeWidth = 2.2
+    for index, _year in enumerate(years):
+        chart.lines[index].strokeColor = CHART_COLORS[index % len(CHART_COLORS)]
+    drawing.add(chart)
+
+    legend = Legend()
+    legend.alignment = "right"
+    legend.fontName = "Helvetica"
+    legend.fontSize = 8
+    legend.dx = 8
+    legend.dy = 8
+    legend.dxTextSpace = 4
+    legend.deltax = min(90, max(60, plot_w / max(len(labels), 1)))
+    legend.deltay = 12
+    legend.columnMaximum = max(1, (len(labels) + 1) // 2) if len(labels) > 4 else len(labels)
+    legend.colorNamePairs = [
+        (CHART_COLORS[index % len(CHART_COLORS)], str(labels[index]))
+        for index in range(len(labels))
+    ]
+    # Center the legend under the plot area.
+    legend_width = legend.deltax * min(len(labels), legend.columnMaximum)
+    legend.x = left_pad + max(0, (plot_w - legend_width) / 2)
+    legend.y = 8
+    drawing.add(legend)
+    drawing.add(String(left_pad, drawing_h - 12, "Monthly comparison", fontSize=9, fillColor=NAVY))
+    return drawing
+
+
 def build_comparison_pdf(payload: dict, item: str | None = None) -> bytes:
-    """Year-by-month comparison. One category, product, source, or progress when item is set."""
+    """Year-by-month comparison PDF.
+
+    Chart and data table are always on separate pages.
+    For Progress / Category / Product / Source:
+    - one chosen type → chart page then table page for that type
+    - no type chosen → every type gets its own chart page and table page
+    For lead / quotation measures → one chart page, then one table page.
+    """
     title = "Lead Comparison"
     years = [str(year) for year in (payload.get("years") or [])]
-    wide = len(years) > 4
-    page = landscape(A4) if wide else A4
+    page = landscape(A4)
     width, height = page
+    margin = 40
+    usable = width - (margin * 2)
     buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buffer, pagesize=page, leftMargin=36, rightMargin=36,
-        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+        buffer, pagesize=page, leftMargin=margin, rightMargin=margin,
+        topMargin=118, bottomMargin=36, title=title, author="ESTAR Engineers Pvt Ltd",
     )
     generated = datetime.now().strftime("%d %b %Y")
     logo = _brand_logo()
@@ -130,18 +246,25 @@ def build_comparison_pdf(payload: dict, item: str | None = None) -> bytes:
     cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
     left = ParagraphStyle("left", parent=cell, alignment=0)
     heading = ParagraphStyle(
-        "heading", fontName="Helvetica-Bold", fontSize=14, textColor=NAVY,
-        spaceAfter=4, alignment=1,
+        "heading", fontName="Helvetica-Bold", fontSize=13, textColor=NAVY,
+        spaceAfter=2, alignment=1,
     )
-    meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=10, leading=14, alignment=1, textColor=colors.HexColor("#334155"))
+    meta = ParagraphStyle(
+        "meta", fontName="Helvetica", fontSize=9, leading=12, alignment=1,
+        textColor=colors.HexColor("#334155"), spaceAfter=1,
+    )
+    section = ParagraphStyle(
+        "section", fontName="Helvetica-Bold", fontSize=11, textColor=NAVY,
+        spaceBefore=4, spaceAfter=8, alignment=1,
+    )
     header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
     money = bool(payload.get("money"))
     label = str(payload.get("compare_label") or "Comparison")
-    focus = None
-    if item:
-        focus = next((row for row in (payload.get("details") or []) if row.get("name") == item), None)
-    subject = f"{label} · {focus.get('name')}" if focus else label
     year_text = " vs ".join(years) if years else "All years"
+    months = payload.get("months") or []
+    by_month = {row.get("month"): row for row in (payload.get("by_month") or [])}
+    details = payload.get("details") or []
+    chosen = (item or "").strip()
 
     def fmt(value) -> str:
         if money:
@@ -151,49 +274,87 @@ def build_comparison_pdf(payload: dict, item: str | None = None) -> bytes:
         except (TypeError, ValueError):
             return "0"
 
-    story = [
-        Paragraph(title, heading),
-        Paragraph(escape(subject), meta),
-        Paragraph(escape(year_text), meta),
-        Spacer(1, 10),
-    ]
-    head = [Paragraph("Month", header)] + [Paragraph(escape(year), header) for year in years]
-    body = [head]
-    months = payload.get("months") or []
-    by_month = {row.get("month"): row for row in (payload.get("by_month") or [])}
-    for month in months:
-        if focus:
-            match = by_month.get(month.get("month")) or {}
-            found = next((row for row in (match.get("items") or []) if row.get("name") == focus.get("name")), {})
-            values = found.get("values") or {}
-        else:
-            values = month.get("values") or {}
+    def month_table(focus: dict | None):
+        head = [Paragraph("Month", header)] + [Paragraph(escape(year), header) for year in years]
+        body = [head]
+        for month in months:
+            if focus:
+                match = by_month.get(month.get("month")) or {}
+                found = next(
+                    (row for row in (match.get("items") or []) if row.get("name") == focus.get("name")),
+                    {},
+                )
+                values = found.get("values") or {}
+            else:
+                values = month.get("values") or {}
+            body.append([
+                Paragraph(escape(str(month.get("name") or "")), left),
+                *[Paragraph(fmt(values.get(year, 0)), cell) for year in years],
+            ])
+        totals = (focus or {}).get("values") if focus else (payload.get("selected_total") or {})
         body.append([
-            Paragraph(escape(str(month.get("name") or "")), left),
-            *[Paragraph(fmt(values.get(year, 0)), cell) for year in years],
+            Paragraph("Total", left),
+            *[Paragraph(fmt((totals or {}).get(year, 0)), cell) for year in years],
         ])
-    totals = (focus or {}).get("values") if focus else (payload.get("selected_total") or {})
-    body.append([
-        Paragraph("Total", left),
-        *[Paragraph(fmt((totals or {}).get(year, 0)), cell) for year in years],
-    ])
-    usable = width - 72
-    name_w = min(150, usable * 0.34)
-    rest = (usable - name_w) / max(len(years), 1)
-    table = Table(body, colWidths=[name_w, *([rest] * len(years))], hAlign="CENTER", repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#edf4fa")]),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#dce6ef")),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
-        ("TOPPADDING", (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    story.append(table)
+        name_w = min(120, usable * 0.18)
+        rest = (usable - name_w) / max(len(years), 1)
+        table = Table(body, colWidths=[name_w, *([rest] * len(years))], hAlign="LEFT", repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#edf4fa")]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#dce6ef")),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e2e8f0")),
+        ]))
+        return table
+
+    def append_section(story: list, focus: dict | None, subject: str, *, first: bool) -> None:
+        if not first:
+            story.append(PageBreak())
+        story.extend([
+            Paragraph(title, heading),
+            Paragraph(escape(subject), meta),
+            Paragraph(escape(year_text), meta),
+            Spacer(1, 6),
+            Paragraph("Chart", section),
+        ])
+        chart = _comparison_line_chart(months, years, by_month, focus, usable)
+        if chart is not None:
+            story.append(chart)
+        else:
+            story.append(Paragraph("No chart data for this selection.", meta))
+        story.append(PageBreak())
+        story.extend([
+            Paragraph(title, heading),
+            Paragraph(escape(subject), meta),
+            Paragraph(escape(year_text), meta),
+            Spacer(1, 6),
+            Paragraph("Monthly data", section),
+            month_table(focus),
+        ])
+
+    story: list = []
+    if details:
+        if chosen:
+            focuses = [row for row in details if row.get("name") == chosen]
+            if not focuses:
+                focuses = details
+        else:
+            focuses = details
+        for index, focus in enumerate(focuses):
+            name = str(focus.get("name") or "—")
+            append_section(story, focus, f"{label} · {name}", first=index == 0)
+    else:
+        append_section(story, None, label, first=True)
+
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
 

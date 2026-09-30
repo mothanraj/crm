@@ -1,6 +1,8 @@
 from app.services.email_service import (
+    ASSIGNMENT_EMAIL_CHUNK,
     build_assignment_email,
     build_overdue_digest,
+    dedupe_assignment_items,
     send_assignment_email,
 )
 
@@ -51,6 +53,27 @@ def test_assignment_single_lead_template():
 
 def test_assignment_empty_sends_nothing():
     assert send_assignment_email("hari@example.com", "hari", []) is False
+
+
+def test_assignment_dedupes_same_enquiry():
+    leads = [_lead(1), _lead(1), _lead(2)]
+    unique = dedupe_assignment_items(leads)
+    assert [x["enquiry_number"] for x in unique] == ["ENQ-000001", "ENQ-000002"]
+    subject, html = build_assignment_email("hari", leads)
+    assert "2" in subject
+    assert "Customer1" in html and html.count("<h3>Customer1") == 1
+    assert "Customer2" in html
+
+
+def test_assignment_chunk_label_for_large_batches():
+    leads = [_lead(n) for n in range(1, ASSIGNMENT_EMAIL_CHUNK + 3)]
+    first = leads[:ASSIGNMENT_EMAIL_CHUNK]
+    subject, html = build_assignment_email(
+        "hari", first, total=len(leads), batch=1, batches=2,
+    )
+    assert f"{ASSIGNMENT_EMAIL_CHUNK} of {len(leads)}" in subject
+    assert "part 1/2" in subject
+    assert f"{ASSIGNMENT_EMAIL_CHUNK} of {len(leads)}" in html
 
 
 def test_direct_call_assignment_is_urgent():

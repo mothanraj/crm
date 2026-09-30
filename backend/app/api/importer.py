@@ -334,10 +334,17 @@ def _lead_email_item(db: Session, lead: Lead) -> dict:
 
 
 def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
-    """Send one batched assignment email per employee. Fail-open (never raises)."""
+    """Send one batched assignment email per employee. Fail-open (never raises).
+
+    Each lead is mailed at most once. Already-sent rows are skipped. Large
+    assignments are split into chunks so Brevo can accept 100–1000 leads.
+    """
     now = datetime.now(timezone.utc)
     try:
-        all_ids = [lid for ids in (new_by_emp or {}).values() for lid in ids]
+        unique_by_emp: dict = {}
+        for emp_id, lead_ids in (new_by_emp or {}).items():
+            unique_by_emp[emp_id] = list(dict.fromkeys(lead_ids or []))
+        all_ids = [lid for ids in unique_by_emp.values() for lid in ids]
         leads_by_id = {x.id: x for x in db.query(Lead).filter(Lead.id.in_(all_ids)).all()} if all_ids else {}
         src_map = {s.id: s.name for s in db.query(LeadSource).all()}
         prod_map = {p.id: p.name for p in db.query(Product).all()}
@@ -346,18 +353,30 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
             LeadAssignment.is_current.is_(True),
         ).all() if leads_by_id else []
         assign_map = {a.lead_id: a for a in assigns}
-        for emp_id, lead_ids in (new_by_emp or {}).items():
+        for emp_id, lead_ids in unique_by_emp.items():
             try:
                 emp = db.get(User, emp_id)
                 if not emp:
                     continue
-                leads = [leads_by_id[lid] for lid in lead_ids if lid in leads_by_id]
+                leads = [
+                    leads_by_id[lid] for lid in lead_ids
+                    if lid in leads_by_id and leads_by_id[lid].assignment_email_sent_at is None
+                ]
                 if not leads:
                     continue
                 items = [_lead_email_item_db(x, src_map, prod_map, assign_map) for x in leads]
-                sent = email_service.send_assignment_email(emp.email, emp.name, items)
-                if sent:
-                    for x in leads:
+                chunk_size = max(1, int(email_service.ASSIGNMENT_EMAIL_CHUNK))
+                for index in range(0, len(items), chunk_size):
+                    chunk_items = items[index:index + chunk_size]
+                    chunk_leads = leads[index:index + chunk_size]
+                    batches = (len(items) + chunk_size - 1) // chunk_size
+                    subject, html = email_service.build_assignment_email(
+                        emp.name, chunk_items,
+                        total=len(items), batch=(index // chunk_size) + 1, batches=batches,
+                    )
+                    if not email_service.send_email(emp.email, emp.name, subject, html):
+                        break
+                    for x in chunk_leads:
                         x.assignment_email_sent_at = now
                     db.commit()
             except Exception as exc:

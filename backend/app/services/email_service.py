@@ -18,10 +18,25 @@ from app.core.config import settings
 log = logging.getLogger(__name__)
 
 BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
+# Keep each message small enough for Brevo. Large Excel imports are split.
+ASSIGNMENT_EMAIL_CHUNK = 40
 
 
 def emails_enabled() -> bool:
     return bool(settings.EMAIL_ENABLED and settings.BREVO_API_KEY and settings.BREVO_SENDER_EMAIL)
+
+
+def dedupe_assignment_items(leads: list[dict]) -> list[dict]:
+    """Keep the first card for each enquiry / lead id. Drop empty rows."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for item in leads or []:
+        key = str(item.get("enquiry_number") or item.get("lead_id") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def send_email(to_email: str, to_name: str, subject: str, html: str) -> bool:
@@ -44,7 +59,7 @@ def send_email(to_email: str, to_name: str, subject: str, html: str) -> bool:
             json=payload,
             headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json",
                      "Accept": "application/json"},
-            timeout=15.0,
+            timeout=60.0,
         )
         if resp.status_code in (200, 201):
             log.info("email sent '%s' to %s", subject, to_email)
@@ -88,7 +103,14 @@ def _lead_card(item: dict) -> str:
 </ul>"""
 
 
-def build_assignment_email(employee_name: str, leads: list[dict]) -> tuple[str, str]:
+def build_assignment_email(
+    employee_name: str,
+    leads: list[dict],
+    *,
+    total: int | None = None,
+    batch: int = 1,
+    batches: int = 1,
+) -> tuple[str, str]:
     """(subject, html) for the batched assignment email to the employee.
 
     leads: [{enquiry_number, legacy_enq, enquiry_date, assigned_date_str,
@@ -96,22 +118,29 @@ def build_assignment_email(employee_name: str, leads: list[dict]) -> tuple[str, 
       city, source, product, quantity_raw, deadline_str, lead_url}]
     Direct Call rows ask for an update within 24 hours. Other sources stay at 3 days.
     """
+    leads = dedupe_assignment_items(leads)
     n = len(leads)
+    total_n = total if total is not None else n
     enqs = ", ".join(str(x.get("enquiry_number") or "") for x in leads[:5] if x.get("enquiry_number"))
+    part = f" · part {batch}/{batches}" if batches > 1 else ""
+    count_label = f"{n} of {total_n}" if batches > 1 else str(n)
     direct = [x for x in leads if _is_direct_call(x)]
     if direct and len(direct) == n:
         subject = (
-            f"URGENT Direct Call — update within 24 hours: {n} ({enqs})"
-            if enqs else f"URGENT Direct Call — update within 24 hours: {n}"
+            f"URGENT Direct Call — update within 24 hours: {count_label} ({enqs}){part}"
+            if enqs else f"URGENT Direct Call — update within 24 hours: {count_label}{part}"
         )
         intro = (
-            f"{n} Direct Call customer(s) have been assigned to you. "
+            f"{count_label} Direct Call customer(s) have been assigned to you{part}. "
             "This is urgent. Please update the work progress in the CRM within 24 hours."
         )
     else:
-        subject = f"New customers assigned: {n} ({enqs})" if enqs else f"New customers assigned: {n}"
+        subject = (
+            f"New customers assigned: {count_label} ({enqs}){part}"
+            if enqs else f"New customers assigned: {count_label}{part}"
+        )
         intro = (
-            f"{n} new customer(s) have been assigned to you. "
+            f"{count_label} new customer(s) have been assigned to you{part}. "
             "Please talk to each customer and update the work progress in the CRM within 3 days."
         )
         if direct:
@@ -126,10 +155,36 @@ def build_assignment_email(employee_name: str, leads: list[dict]) -> tuple[str, 
 
 def send_assignment_email(employee_email: str, employee_name: str,
                           leads: list[dict]) -> bool:
-    if not leads:
-        return False
-    subject, html = build_assignment_email(employee_name, leads)
-    return send_email(employee_email, employee_name, subject, html)
+    """Send one or more assignment emails. Large lists are split into chunks.
+
+    Returns True only when every chunk is accepted. Callers should mark
+    assignment_email_sent_at only after a True result, or use
+    send_assignment_email_chunks for per-chunk marking.
+    """
+    return send_assignment_email_chunks(employee_email, employee_name, leads)[0]
+
+
+def send_assignment_email_chunks(
+    employee_email: str,
+    employee_name: str,
+    leads: list[dict],
+) -> tuple[bool, list[list[dict]]]:
+    """Send assignment mail in chunks. Returns (all_sent, chunks that were sent)."""
+    unique = dedupe_assignment_items(leads)
+    if not unique:
+        return False, []
+    chunk_size = max(1, int(ASSIGNMENT_EMAIL_CHUNK))
+    batches = (len(unique) + chunk_size - 1) // chunk_size
+    sent_chunks: list[list[dict]] = []
+    for index in range(batches):
+        chunk = unique[index * chunk_size:(index + 1) * chunk_size]
+        subject, html = build_assignment_email(
+            employee_name, chunk, total=len(unique), batch=index + 1, batches=batches,
+        )
+        if not send_email(employee_email, employee_name, subject, html):
+            return False, sent_chunks
+        sent_chunks.append(chunk)
+    return True, sent_chunks
 
 
 def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:

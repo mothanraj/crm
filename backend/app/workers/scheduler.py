@@ -233,13 +233,36 @@ def _assignment_retry_sweep(db, now):
                 if not owner:
                     db.rollback()
                     continue
-                items = [_assignment_item(db, x) for x in leads]
-                if not email_service.send_assignment_email(owner.email, owner.name, items):
-                    db.rollback()  # retry next sweep
+                # One lead once. Already-sent rows stay out of the batch.
+                unique = []
+                seen = set()
+                for lead in leads:
+                    if lead.id in seen or lead.assignment_email_sent_at is not None:
+                        continue
+                    seen.add(lead.id)
+                    unique.append(lead)
+                if not unique:
+                    db.rollback()
                     continue
-                for x in leads:
-                    x.assignment_email_sent_at = now
-                db.commit()
+                items = [_assignment_item(db, x) for x in unique]
+                chunk_size = max(1, int(email_service.ASSIGNMENT_EMAIL_CHUNK))
+                all_ok = True
+                for index in range(0, len(items), chunk_size):
+                    chunk_items = items[index:index + chunk_size]
+                    chunk_leads = unique[index:index + chunk_size]
+                    batches = (len(items) + chunk_size - 1) // chunk_size
+                    subject, html = email_service.build_assignment_email(
+                        owner.name, chunk_items,
+                        total=len(items), batch=(index // chunk_size) + 1, batches=batches,
+                    )
+                    if not email_service.send_email(owner.email, owner.name, subject, html):
+                        all_ok = False
+                        break
+                    for x in chunk_leads:
+                        x.assignment_email_sent_at = now
+                    db.commit()
+                if not all_ok and not any(x.assignment_email_sent_at for x in unique):
+                    db.rollback()  # nothing sent — retry next sweep
             except Exception as exc:
                 log.error("assignment retry failed for %s: %s", emp_id, exc)
                 try:

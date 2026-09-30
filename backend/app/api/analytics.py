@@ -345,12 +345,13 @@ def analytics_comparison_pdf(
     payload = _comparison_payload(db, filters, compare_by, measure)
     chosen = (item or "").strip()
     details = payload.get("details") or []
-    if details and not any(row.get("name") == chosen for row in details):
+    # Blank item downloads every type on its own pages. A named item must match.
+    if chosen and details and not any(row.get("name") == chosen for row in details):
         label = str(payload.get("detail_label") or "item").lower()
         raise HTTPException(400, f"Choose one {label}")
     content = build_comparison_pdf(payload, chosen or None)
     stamp = datetime.now().strftime("%Y%m%d")
-    slug = chosen or str(payload.get("compare_by") or "comparison")
+    slug = chosen or ("all-" + str(payload.get("compare_by") or "comparison"))
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in slug).strip("-") or "comparison"
     filename = f"comparison-{safe}-{stamp}.pdf"
     return StreamingResponse(

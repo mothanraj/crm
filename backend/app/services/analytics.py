@@ -702,20 +702,21 @@ def _period_label(months: list[int]) -> str:
     return "Selected total"
 
 
-def _progress_names(db: Session) -> list[str]:
-    from app.services.normalize import CANONICAL_STATUSES
+# Progress options shown on the analytics Compare-by Progress picker.
+ANALYTICS_PROGRESS = (
+    "In Followup",
+    "Site Visit",
+    "Meeting",
+    "Quotation sent",
+    "Converted",
+    "Not Interested",
+)
 
-    stored = [name for (name,) in db.query(LeadStatus.name).order_by(LeadStatus.sort_order, LeadStatus.name).all()]
-    names = [name for name, *_rest in CANONICAL_STATUSES]
-    for name in stored:
-        if name not in names:
-            names.append(name)
-    if "Assigned" not in names:
-        if "New Lead" in names:
-            names.insert(names.index("New Lead") + 1, "Assigned")
-        else:
-            names.insert(0, "Assigned")
-    return names
+
+def _progress_names(db: Session) -> list[str]:
+    """Fixed progress list for analytics. Other statuses stay off this page."""
+    del db
+    return list(ANALYTICS_PROGRESS)
 
 
 def _category_names(db: Session) -> list[str]:
