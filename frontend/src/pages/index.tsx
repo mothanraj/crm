@@ -708,42 +708,42 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="flex flex-col md:flex-row gap-6 justify-center items-start">
-        <div className="flex flex-col items-center">
-          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Summary</div>
-          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 shadow-sm">
-            <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Summary</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm h-full">
+            <div className="grid grid-cols-2 gap-2 md:gap-3 auto-rows-fr">
               {tiles.map((t) => (
-                <div key={t.label} className={`${t.bg} text-white rounded-lg w-[8.5rem] h-[8.5rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5`}>
-                  <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
-                  <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{t.value}</div>
-                  <div className="text-xs opacity-85 mt-1.5 leading-tight">{t.hint}</div>
+                <div key={t.label} className={`${t.bg} text-white rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
+                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                  <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-[10px] sm:text-xs opacity-85 mt-1 sm:mt-1.5 leading-tight px-0.5">{t.hint}</div>
                 </div>
               ))}
             </div>
           </div>
         </div>
-        <div className="flex flex-col items-center">
-          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
-          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 shadow-sm">
-            <div className="grid grid-cols-2 gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Category</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm h-full">
+            <div className="grid grid-cols-2 gap-2 md:gap-3 auto-rows-fr">
               {categoryTiles.map((t) => (
-                <div key={t.label} className={`${t.bg} text-white rounded-lg w-[8.5rem] h-[8.5rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5`}>
-                  <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
-                  <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{mixCount('', t.label)}</div>
+                <div key={t.label} className={`${t.bg} text-white rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
+                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words hyphens-auto">{t.label}</div>
+                  <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount('', t.label)}</div>
                 </div>
               ))}
             </div>
           </div>
         </div>
       </div>
-      <div>
-        <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2">Progress</div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Progress</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3 auto-rows-fr">
           {progressTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-4 shadow-sm text-center flex flex-col items-center justify-center aspect-[4/3]`}>
-              <div className="text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
-              <div className="text-3xl font-bold mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
+            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[5.75rem] sm:min-h-[7rem] lg:min-h-[8.25rem] px-2 py-2.5 sm:px-3 sm:py-4 shadow-sm text-center flex flex-col items-center justify-center`}>
+              <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
+              <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
             </div>
           ))}
         </div>
