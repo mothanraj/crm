@@ -1495,7 +1495,11 @@ def _scoped_leads(db: Session, filter_type: str | None, filter_value: str | None
     day = _lead_day()
     q = _base(db).filter(Lead.is_active.is_(True))
     if filter_type and filter_value:
-        q = q.filter(_filter_label_expr(filter_type) == filter_value)
+        label = _filter_label_expr(filter_type)
+        if filter_type == "progress" and filter_value == "Not Interested":
+            q = q.filter(label.in_(["Not Interested", "Not Interested/Spam"]))
+        else:
+            q = q.filter(label == filter_value)
     return q, day
 
 
@@ -1967,4 +1971,289 @@ def build_overview(
         "category_options": filter_option_values(db, "category"),
         "product_options": filter_option_values(db, "product"),
         "source_options": filter_option_values(db, "source"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Selection compare (year / month / date / period A vs B)
+# ---------------------------------------------------------------------------
+
+COMPARE_MODES = ("year", "month", "date", "period")
+
+# Fixed menus for the Analytics page (CRM field names).
+# Category = customer_review; Progress = work status.
+ANALYTICS_FILTER_MENUS = {
+    "category": [
+        "A+ (Immediate)",
+        "A (3-6 months)",
+        "B (1 year)",
+        "C (Planning Stage)",
+    ],
+    "progress": [
+        "In Followup",
+        "Meeting",
+        "Site Visit",
+        "Not Interested",
+        "Converted",
+    ],
+    "product": [
+        "Two Post Stack Parking",
+        "Four Post Stack Parking",
+        "Pit Stack Parking",
+        "Puzzle Parking",
+        "Pit Puzzle Parking",
+        "Tower Parking",
+        "Shuttle Parking",
+        "Car Elevator",
+        "ASRS Parking",
+    ],
+    "source": [
+        "SEO",
+        "Facebook/Instagram",
+        "Google Ads",
+        "India Mart",
+        "Direct Call",
+        "Referral",
+        "WhatsApp",
+        "Email Campaign",
+        "Email Enquiry",
+        "Others",
+        "Expo/Stall",
+    ],
+}
+
+MONTH_SHORT = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def analytics_meta(db: Session) -> dict:
+    return {
+        "metrics": [
+            {"id": key, "label": spec["label"], "money": spec["money"]}
+            for key, spec in DASHBOARD_METRICS.items()
+        ],
+        "dimensions": [
+            {"id": "category", "label": "Category", "values": ANALYTICS_FILTER_MENUS["category"]},
+            {"id": "product", "label": "Product", "values": ANALYTICS_FILTER_MENUS["product"]},
+            {"id": "progress", "label": "Progress", "values": ANALYTICS_FILTER_MENUS["progress"]},
+            {"id": "source", "label": "Source", "values": ANALYTICS_FILTER_MENUS["source"]},
+        ],
+        "compare_modes": [
+            {"id": "year", "label": "Year wise"},
+            {"id": "month", "label": "Month wise"},
+            {"id": "date", "label": "Date wise"},
+            {"id": "period", "label": "From–to vs From–to"},
+        ],
+        "years": available_years(db),
+        "months": [{"id": i + 1, "label": MONTH_SHORT[i]} for i in range(12)],
+    }
+
+
+def _metric_total(q, metric: str) -> int:
+    money = DASHBOARD_METRICS[metric]["money"]
+    value = q.with_entities(_metric_agg(metric)).scalar()
+    return _rupee0(value) if money else _int(value)
+
+
+def build_selection_compare(
+    db: Session,
+    *,
+    metric: str,
+    filter_type: str | None = None,
+    filter_value: str | None = None,
+    mode: str,
+    years: list[int] | None = None,
+    year: int | None = None,
+    months: list[int] | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    period_a: tuple[date, date] | None = None,
+    period_b: tuple[date, date] | None = None,
+) -> dict:
+    """Compare one metric (optionally scoped by dimension) under year/month/date/period modes."""
+    if metric not in DASHBOARD_METRICS:
+        raise ValueError("metric")
+    use_type = (filter_type or "").strip() or None
+    use_value = (filter_value or "").strip() or None
+    if use_type:
+        if use_type not in FILTER_TYPES:
+            raise ValueError("filter_type")
+        if not use_value:
+            raise ValueError("filter_value")
+    elif use_value:
+        raise ValueError("filter_type")
+    if mode not in COMPARE_MODES:
+        raise ValueError("mode")
+
+    money = DASHBOARD_METRICS[metric]["money"]
+    q, day = _scoped_leads(db, use_type, use_value)
+    dim_label = {
+        "category": "Category",
+        "product": "Product",
+        "progress": "Progress",
+        "source": "Source",
+    }.get(use_type or "", "All leads")
+
+    def pack_series(points: list[dict]) -> dict:
+        total = sum(int(p.get("value") or 0) for p in points)
+        return {
+            "metric": metric,
+            "metric_label": DASHBOARD_METRICS[metric]["label"],
+            "money": money,
+            "filter_type": use_type,
+            "filter_value": use_value,
+            "dimension_label": dim_label,
+            "mode": mode,
+            "series": points,
+            "rows": points,
+            "total": total,
+        }
+
+    if mode == "year":
+        selected = sorted({int(y) for y in (years or []) if y})
+        if len(selected) < 1:
+            raise ValueError("years")
+        if len(selected) > 8:
+            raise ValueError("years_limit")
+        bucket = cast(func.extract("year", day), Integer)
+        rows = (
+            q.filter(bucket.in_(selected))
+            .with_entities(bucket.label("bucket"), _metric_agg(metric).label("value"))
+            .group_by(bucket)
+            .all()
+        )
+        found = {int(row.bucket): (_rupee0(row.value) if money else _int(row.value)) for row in rows if row.bucket is not None}
+        points = [{"key": str(y), "label": str(y), "value": found.get(y, 0)} for y in selected]
+        out = pack_series(points)
+        out["years"] = selected
+        out["x_title"] = "Year"
+        return out
+
+    if mode == "month":
+        if year is None:
+            raise ValueError("year")
+        selected_months = sorted({int(m) for m in (months or []) if 1 <= int(m) <= 12})
+        if len(selected_months) < 1:
+            raise ValueError("months")
+        month_bucket = cast(func.extract("month", day), Integer)
+        year_bucket = cast(func.extract("year", day), Integer)
+        rows = (
+            q.filter(year_bucket == int(year), month_bucket.in_(selected_months))
+            .with_entities(month_bucket.label("bucket"), _metric_agg(metric).label("value"))
+            .group_by(month_bucket)
+            .all()
+        )
+        found = {int(row.bucket): (_rupee0(row.value) if money else _int(row.value)) for row in rows if row.bucket is not None}
+        points = [
+            {"key": f"{year}-{m:02d}", "label": MONTH_SHORT[m - 1], "month": m, "value": found.get(m, 0)}
+            for m in selected_months
+        ]
+        out = pack_series(points)
+        out["year"] = int(year)
+        out["months"] = selected_months
+        out["x_title"] = f"Month ({year})"
+        return out
+
+    if mode == "date":
+        if not from_date or not to_date:
+            raise ValueError("date_range")
+        if from_date > to_date:
+            raise ValueError("date_range")
+        if (to_date - from_date).days > 366:
+            raise ValueError("date_span")
+        rows = (
+            q.filter(day >= from_date, day <= to_date)
+            .with_entities(day.label("bucket"), _metric_agg(metric).label("value"))
+            .group_by(day)
+            .order_by(day)
+            .all()
+        )
+        found: dict[date, int] = {}
+        for row in rows:
+            if row.bucket is None:
+                continue
+            stamp = row.bucket if type(row.bucket) is date else row.bucket.date()
+            found[stamp] = _rupee0(row.value) if money else _int(row.value)
+        points = []
+        cursor = from_date
+        while cursor <= to_date:
+            points.append({
+                "key": cursor.isoformat(),
+                "label": cursor.strftime("%d %b"),
+                "value": found.get(cursor, 0),
+            })
+            cursor += timedelta(days=1)
+        out = pack_series(points)
+        out["from_date"] = from_date.isoformat()
+        out["to_date"] = to_date.isoformat()
+        out["x_title"] = "Date"
+        return out
+
+    # period A vs period B — separate series so each side keeps its own dates
+    if not period_a or not period_b:
+        raise ValueError("period")
+    a_start, a_end = period_a
+    b_start, b_end = period_b
+    if a_start > a_end or b_start > b_end:
+        raise ValueError("date_range")
+    if (a_end - a_start).days > 1100 or (b_end - b_start).days > 1100:
+        raise ValueError("date_span")
+
+    def daily_series(start: date, end: date) -> tuple[list[dict], int]:
+        rows = (
+            q.filter(day >= start, day <= end)
+            .with_entities(day.label("bucket"), _metric_agg(metric).label("value"))
+            .group_by(day)
+            .all()
+        )
+        found: dict[date, int] = {}
+        for row in rows:
+            if row.bucket is None:
+                continue
+            stamp = row.bucket if type(row.bucket) is date else row.bucket.date()
+            found[stamp] = _rupee0(row.value) if money else _int(row.value)
+        points = []
+        cursor = start
+        total = 0
+        while cursor <= end:
+            value = found.get(cursor, 0)
+            total += value
+            points.append({
+                "key": cursor.isoformat(),
+                "label": cursor.strftime("%d %b"),
+                "value": value,
+            })
+            cursor += timedelta(days=1)
+        return points, total
+
+    series_a, a_total = daily_series(a_start, a_end)
+    series_b, b_total = daily_series(b_start, b_end)
+
+    return {
+        "metric": metric,
+        "metric_label": DASHBOARD_METRICS[metric]["label"],
+        "money": money,
+        "filter_type": use_type,
+        "filter_value": use_value,
+        "dimension_label": dim_label,
+        "mode": mode,
+        "x_title": "Date",
+        "period_a": {
+            "from": a_start.isoformat(),
+            "to": a_end.isoformat(),
+            "total": a_total,
+            "series": series_a,
+        },
+        "period_b": {
+            "from": b_start.isoformat(),
+            "to": b_end.isoformat(),
+            "total": b_total,
+            "series": series_b,
+        },
+        "change": percent_change(a_total, b_total),
+        "series": [],
+        "rows": [
+            {"key": "period_a", "label": f"Period A ({a_start.isoformat()} – {a_end.isoformat()})", "value": a_total},
+            {"key": "period_b", "label": f"Period B ({b_start.isoformat()} – {b_end.isoformat()})", "value": b_total},
+        ],
+        "total": a_total + b_total,
     }
