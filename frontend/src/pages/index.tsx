@@ -2069,18 +2069,10 @@ export function Leads() {
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <div className="relative isolate w-full overflow-x-auto">
-            <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2340px]'}`}>
+            <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2100px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
-                {role === 'EMPLOYEE' ? (
-                  <th className="th whitespace-nowrap align-top w-[200px] sm:w-[240px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer details</th>
-                ) : (
-                  <>
-                    <th className="th whitespace-nowrap align-top w-[144px] sm:w-[200px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer name</th>
-                    <th className="th whitespace-nowrap align-top w-[160px]">Company</th>
-                    <th className="th whitespace-nowrap align-top w-[120px]">City</th>
-                  </>
-                )}
+                <th className="th whitespace-nowrap align-top w-[200px] sm:w-[240px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer details</th>
                 <th className="th whitespace-nowrap align-top w-[260px] sm:w-[280px]">Contact / Email</th>
                 <th className="th whitespace-nowrap align-top w-[110px] text-center">Cars</th>
                 <th className="th whitespace-nowrap align-top w-[200px]">Product</th>
@@ -2108,19 +2100,11 @@ export function Leads() {
                     }}>
 
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                    {role === 'EMPLOYEE' ? (
-                      <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
-                        <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
-                        <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
-                        <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
-                      </td>
-                    ) : (
-                      <>
-                        <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
-                        <td className="td align-top">{l.company_name || '—'}</td>
-                        <td className="td align-top">{l.city || '—'}</td>
-                      </>
-                    )}
+                    <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
+                      <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
+                      <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
+                      <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
+                    </td>
                     <td className="td align-top min-w-[260px]">
                       <div className="whitespace-nowrap flex items-center gap-1.5">
                         <span>{l.contact_number || '—'}</span>
@@ -2490,8 +2474,8 @@ export function EmployeeLeads() {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1280px]">
                 <thead className="bg-graphite-50"><tr>
-                  <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Company</th>
-                  <th className="th">City</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">Lead Value</th><th className="th">Source</th>
+                  <th className="th">Enquiry</th><th className="th">Customer details</th>
+                  <th className="th min-w-[260px] w-[280px]">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">Lead Value</th><th className="th">Source</th>
                   <th className="th">Product</th><th className="th">Status</th><th className="th">Overdue</th>
                   <th className="th">Due date</th>
                   <th className="th">First contact</th><th className="th">Enquiry date</th>
@@ -2500,12 +2484,14 @@ export function EmployeeLeads() {
                   {items.map((l) => (
                     <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}>
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
-                      <td className="td"><div className="font-medium text-graphite-900">{l.customer_name || '—'}</div></td>
-                      <td className="td">{l.company_name || '—'}</td>
-                      <td className="td">{l.city || '—'}</td>
                       <td className="td">
+                        <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
+                        <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
+                        <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
+                      </td>
+                      <td className="td min-w-[260px] w-[280px]">
                         <div className="whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</div>
-                        <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                        <div className="text-xs mt-0.5 break-words [overflow-wrap:anywhere]">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
                       </td>
                       <td className="td text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
                       <td className="td text-right whitespace-nowrap tabular-nums font-semibold">{inr(l.lead_value)}</td>
