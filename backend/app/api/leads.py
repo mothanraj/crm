@@ -222,6 +222,7 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
     sources = {s.id: s.name for s in db.query(LeadSource).filter(LeadSource.id.in_(src_ids)).all()} if src_ids else {}
     lead_ids = [r.id for r in rows]
     hist_by_lead: dict = {lid: [] for lid in lead_ids}
+    quote_value_hist_by_lead: dict = {lid: [] for lid in lead_ids}
     if lead_ids:
         acts = (
             db.query(LeadActivity)
@@ -241,32 +242,64 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             })
+        # One value per revision (R0, R1, R2…) from quotation form saves.
+        quote_acts = (
+            db.query(LeadActivity)
+            .filter(LeadActivity.lead_id.in_(lead_ids), LeadActivity.activity_type == "Quotation Form")
+            .order_by(LeadActivity.activity_at.asc())
+            .all()
+        )
+        rev_order: dict = {lid: [] for lid in lead_ids}
+        rev_latest: dict = {lid: {} for lid in lead_ids}
+        for a in quote_acts:
+            rev = (a.outcome or "R0").strip().upper() or "R0"
+            if not rev.startswith("R"):
+                rev = "R0"
+            entry = {
+                "revision": rev,
+                "quotation_value": _money_str(a.quotation_value),
+                "at": a.activity_at.isoformat() if a.activity_at else None,
+            }
+            bucket = rev_latest.setdefault(a.lead_id, {})
+            order = rev_order.setdefault(a.lead_id, [])
+            if rev not in bucket:
+                order.append(rev)
+            bucket[rev] = entry
+        for lid in lead_ids:
+            quote_value_hist_by_lead[lid] = [rev_latest[lid][r] for r in rev_order[lid] if r in rev_latest[lid]]
     quote_by_lead: dict = {}
     if lead_ids:
         for qrow in db.query(Quotation).filter(Quotation.lead_id.in_(lead_ids)).all():
             prev = quote_by_lead.get(qrow.lead_id)
             if not prev or (qrow.revision or "") >= (prev.revision or ""):
                 quote_by_lead[qrow.lead_id] = qrow
-    items = [
-        {
+    items = []
+    for r in rows:
+        qform = None
+        if r.id in quote_by_lead:
+            qform = {
+                "quotation_number": quote_by_lead[r.id].quotation_number,
+                "revision": quote_by_lead[r.id].revision,
+                "amount_excl": _money_str(quote_by_lead[r.id].amount_excl),
+                "grand_total": _money_str(quote_by_lead[r.id].grand_total),
+            }
+        qhist = list(quote_value_hist_by_lead.get(r.id) or [])
+        # Fallback: current form/lead value when no Quotation Form activity yet
+        if not qhist:
+            cur_val = _money_str(quote_by_lead[r.id].grand_total) if r.id in quote_by_lead else _money_str(r.quotation_value)
+            cur_rev = (quote_by_lead[r.id].revision if r.id in quote_by_lead else None) or "R0"
+            if cur_val not in (None, ""):
+                qhist = [{"revision": str(cur_rev).upper(), "quotation_value": cur_val, "at": None}]
+        items.append({
             **_serialize(
                 r, db,
                 product_name=products.get(r.product_id, ""),
                 source_name=sources.get(r.source_id, ""),
                 work_history=hist_by_lead.get(r.id, []),
             ),
-            "quotation_form": (
-                {
-                    "quotation_number": quote_by_lead[r.id].quotation_number,
-                    "revision": quote_by_lead[r.id].revision,
-                    "amount_excl": _money_str(quote_by_lead[r.id].amount_excl),
-                    "grand_total": _money_str(quote_by_lead[r.id].grand_total),
-                }
-                if r.id in quote_by_lead else None
-            ),
-        }
-        for r in rows
-    ]
+            "quotation_form": qform,
+            "quotation_value_history": qhist,
+        })
     return {"total": total, "items": items}
 
 
@@ -913,13 +946,13 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
             notes=notes,
         )
         db.add(quote)
-    # Keep lead quotation_value in sync (excl GST, whole rupees)
-    lead.quotation_value = round_money(totals["amount_excl"])
+    # Keep lead quotation_value in sync (grand total incl. GST, whole rupees)
+    lead.quotation_value = round_money(totals["grand_total"])
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Quotation Form",
         notes=f"Saved quotation {quote.quotation_number} (units={body.units}, unit_cost={int(round(float(body.unit_cost)))})",
         outcome=quote.revision,
-        quotation_value=round_money(totals["amount_excl"]),
+        quotation_value=round_money(totals["grand_total"]),
     ))
     db.commit()
     db.refresh(quote)
