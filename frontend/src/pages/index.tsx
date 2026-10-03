@@ -2068,7 +2068,74 @@ export function Leads() {
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
       <div className="card min-w-0 overflow-hidden">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
-          <div className="relative isolate w-full overflow-x-auto">
+          <>
+          {/* Admin mobile: stacked cards so leads stay readable on small screens */}
+          {role !== 'EMPLOYEE' && (
+            <div className="md:hidden space-y-3 p-3">
+              {items.map((l) => (
+                <div
+                  key={`m-${l.id}`}
+                  className={`rounded-xl border border-graphite-200 p-3 shadow-sm ${leadRowColour(l, nameOf('statuses', l.status_id))}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <Link to={`/leads/${l.id}`} className="font-semibold text-brand-700 text-sm">
+                      {l.enquiry_number}
+                    </Link>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                      <StatusBadge value={statusLabel(l)} />
+                      <SlaBadge value={l.sla_state} />
+                    </div>
+                  </div>
+                  <div className="mt-2 min-w-0">
+                    <div className="font-medium text-graphite-900 break-words">{l.customer_name || '—'}</div>
+                    <div className="text-sm text-graphite-700 break-words">{l.company_name || '—'}</div>
+                    <div className="text-sm text-graphite-600">{l.city || '—'}</div>
+                  </div>
+                  <div className="mt-2 text-sm text-graphite-800 break-words">
+                    <div>{l.contact_number || '—'}</div>
+                    <div className="text-xs text-graphite-600 break-words [overflow-wrap:anywhere]">
+                      {l.email || <span className="text-graphite-400">No email</span>}
+                    </div>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Product</dt>
+                      <dd className="text-graphite-900 mt-0.5 break-words">{prodName(l, nameOf)}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Cars</dt>
+                      <dd className="text-graphite-900 mt-0.5">{l.quantity_raw || '—'}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Category</dt>
+                      <dd className="text-graphite-900 mt-0.5 break-words">{l.customer_review || '—'}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Source</dt>
+                      <dd className="text-graphite-900 mt-0.5 break-words">{l.source_name || nameOf('sources', l.source_id)}</dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Employee</dt>
+                      <dd className="text-graphite-900 mt-0.5 break-words">
+                        {l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 font-medium">Pending</span>}
+                      </dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Lead value</dt>
+                      <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">{inr(l.lead_value)}</dd>
+                    </div>
+                    <div className="min-w-0 col-span-2">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Quotation value</dt>
+                      <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">
+                        {l.quotation_value != null && l.quotation_value !== '' ? inr(l.quotation_value) : '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className={`relative isolate w-full overflow-x-auto ${role !== 'EMPLOYEE' ? 'hidden md:block' : ''}`}>
             <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2100px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
@@ -2304,8 +2371,9 @@ export function Leads() {
               </tbody>
             </table>
           </div>
+          </>
         )}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-graphite-100 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-3 border-t border-graphite-100 text-sm">
           <span className="text-graphite-500">Page {page} of {Math.max(1, Math.ceil(total / size))}</span>
           <div className="flex gap-2">
             <button className="btn-secondary !px-3 !py-1" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Prev</button>
