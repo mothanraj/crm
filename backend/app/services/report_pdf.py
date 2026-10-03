@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.legends import Legend
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing, String
@@ -436,6 +437,74 @@ def build_employee_period_pdf(payload: dict) -> bytes:
     return buffer.getvalue()
 
 
+def _label_for_axis(text: str, max_len: int = 18) -> str:
+    label = " ".join(str(text or "").split())
+    if len(label) <= max_len:
+        return label
+    return label[: max_len - 1].rstrip() + "…"
+
+
+def _vertical_bar_chart(
+    labels: list[str],
+    values: list[float],
+    chart_width: float,
+    title: str,
+    bar_color=None,
+) -> Drawing | None:
+    """Category names on X, counts on Y — roomy bottom labels so text never hits bars."""
+    if not labels or not values:
+        return None
+    peak = max(float(v or 0) for v in values)
+    if peak <= 0:
+        return None
+    fill = bar_color or colors.HexColor("#65A30D")
+    n = len(labels)
+    # Extra bottom band for angled category names; taller plot so bars stay clear of labels.
+    left_pad = 48.0
+    right_pad = 18.0
+    top_pad = 28.0
+    label_band = 78.0 if n > 4 else 64.0
+    plot_h = 210.0
+    plot_w = max(240.0, chart_width - left_pad - right_pad)
+    drawing_h = top_pad + plot_h + label_band + 8
+    drawing = Drawing(chart_width, drawing_h)
+
+    chart = VerticalBarChart()
+    chart.x = left_pad
+    chart.y = label_band
+    chart.height = plot_h
+    chart.width = plot_w
+    chart.data = [list(values)]
+    chart.strokeColor = colors.white
+    chart.barWidth = min(28, max(10, plot_w / max(n * 1.8, 1)))
+    chart.groupSpacing = max(8, plot_w / max(n * 3.2, 1))
+    chart.barSpacing = 2
+    chart.bars[0].fillColor = fill
+    chart.bars[0].strokeColor = fill
+
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.valueMax = peak * 1.18
+    chart.valueAxis.valueSteps = None
+    chart.valueAxis.labels.fontSize = 8
+    chart.valueAxis.labels.fontName = "Helvetica"
+    chart.valueAxis.strokeColor = colors.HexColor("#94a3b8")
+    chart.valueAxis.gridStrokeColor = colors.HexColor("#e2e8f0")
+    chart.valueAxis.gridStrokeWidth = 0.5
+
+    chart.categoryAxis.categoryNames = [_label_for_axis(name) for name in labels]
+    chart.categoryAxis.labels.boxAnchor = "ne"
+    chart.categoryAxis.labels.angle = 35
+    chart.categoryAxis.labels.dx = -2
+    chart.categoryAxis.labels.dy = -4
+    chart.categoryAxis.labels.fontSize = 7 if n > 8 else 8
+    chart.categoryAxis.labels.fontName = "Helvetica"
+    chart.categoryAxis.strokeColor = colors.HexColor("#94a3b8")
+
+    drawing.add(chart)
+    drawing.add(String(left_pad, drawing_h - 14, title, fontSize=10, fillColor=NAVY))
+    return drawing
+
+
 def build_report_pdf(payload: dict, report_type: str) -> bytes:
     if report_type == "lead_value":
         return build_lead_value_pdf(payload)
@@ -445,10 +514,20 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
         return build_monthly_pdf(payload)
     if report_type == "detailed":
         return build_detailed_leads_pdf(payload)
-    if report_type not in ("source", "product"):
+    if report_type not in ("source", "product", "category"):
         raise ValueError("Invalid report type")
-    title, label = ("Product-wise Report", "Product") if report_type == "product" else ("Lead Source Report", "Lead Source")
-    field = report_type
+    if report_type == "product":
+        title, label, field = "Product-wise Report", "Product", "product"
+        chart_title = "Product-wise leads"
+        bar_color = colors.HexColor("#0f766e")
+    elif report_type == "category":
+        title, label, field = "Category-wise Report", "Category", "category"
+        chart_title = "Category-wise leads"
+        bar_color = colors.HexColor("#0e7490")
+    else:
+        title, label, field = "Lead Source Report", "Lead Source", "source"
+        chart_title = "Leads by source"
+        bar_color = colors.HexColor("#1e3a5f")
     buffer = BytesIO()
     width, height = landscape(A4)
     doc = SimpleDocTemplate(buffer, pagesize=(width, height), leftMargin=36,
@@ -463,6 +542,8 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
     heading = ParagraphStyle("heading", fontName="Helvetica-Bold", fontSize=13,
                              textColor=NAVY, spaceAfter=10, keepWithNext=True, alignment=1)
     header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
+    meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=9, leading=12,
+                          alignment=1, textColor=colors.HexColor("#334155"))
     story = []
     story.append(Paragraph(title, heading))
     headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
@@ -478,7 +559,30 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
     col_w = (width - 72) / 7
     table = Table(rows, colWidths=[col_w] * 7, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style())
-    story.extend([table, Spacer(1, 22)])
+    story.append(table)
+
+    # Chart on its own page so table text never collides with axis labels / bars.
+    chart_labels = [str(row.get(field) or "") for row in payload.get("rows") or []]
+    chart_values = [float(row.get("total") or 0) for row in payload.get("rows") or []]
+    # Drop all-zero rows from the chart only (table still shows full set).
+    paired = [(lab, val) for lab, val in zip(chart_labels, chart_values) if val > 0]
+    if paired:
+        story.append(PageBreak())
+        story.append(Paragraph(chart_title, heading))
+        story.append(Paragraph("X-axis: names · Y-axis: lead count", meta))
+        story.append(Spacer(1, 8))
+        chart = _vertical_bar_chart(
+            [lab for lab, _ in paired],
+            [val for _, val in paired],
+            width - 72,
+            chart_title,
+            bar_color=bar_color,
+        )
+        if chart is not None:
+            story.append(chart)
+        else:
+            story.append(Paragraph("No chart data for this selection.", meta))
+
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
 

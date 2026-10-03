@@ -120,9 +120,9 @@ export function AppShell() {
             </Link>
           </div>
         </header>
-        <main className="flex-1 min-h-0 overflow-y-auto p-6">
-          <div className="max-w-[1400px] w-full mx-auto">
-          <Outlet />
+        <main className="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6">
+          <div className="max-w-[1400px] w-full mx-auto min-w-0">
+            <Outlet />
           </div>
         </main>
       </div>

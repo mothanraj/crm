@@ -13,35 +13,147 @@ const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44'
 
 function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   if (!rows.length) return <EmptyState title="No data" />;
+  const RADIAN = Math.PI / 180;
   return (
-    <div className="w-full">
-      <div className="h-[300px] w-full overflow-visible">
+    <div className="w-full h-full min-h-[240px] flex flex-col">
+      <div className="flex-1 min-h-[180px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart margin={{ top: 28, right: 36, bottom: 28, left: 36 }}>
+          <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
               data={rows}
               dataKey="value"
               nameKey="name"
               cx="50%"
               cy="50%"
-              outerRadius={78}
-              labelLine={{ strokeWidth: 1 }}
-              label={({ percent }) => `${(((percent ?? 0)) * 100).toFixed(0)}%`}
+              innerRadius="38%"
+              outerRadius="72%"
+              paddingAngle={1.5}
+              labelLine={false}
+              label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
+                if ((percent ?? 0) < 0.08) return null;
+                const radius = Number(innerRadius) + (Number(outerRadius) - Number(innerRadius)) * 0.52;
+                const x = Number(cx) + radius * Math.cos(-Number(midAngle) * RADIAN);
+                const y = Number(cy) + radius * Math.sin(-Number(midAngle) * RADIAN);
+                return (
+                  <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={700}>
+                    {`${((percent ?? 0) * 100).toFixed(0)}%`}
+                  </text>
+                );
+              }}
             >
-              {rows.map((e, i) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} />)}
+              {rows.map((e, i) => <Cell key={e.name} fill={COLORS[i % COLORS.length]} stroke="#fff" strokeWidth={1} />)}
             </Pie>
-            <Tooltip />
+            <Tooltip formatter={(value: any, name: any) => [Number(value).toLocaleString('en-IN'), name]} />
           </PieChart>
         </ResponsiveContainer>
       </div>
-      <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2 px-1">
+      <ul className="mt-2 flex flex-wrap justify-center content-start gap-x-3 gap-y-1.5 px-1 shrink-0 max-h-[4.5rem] overflow-y-auto">
         {rows.map((e, i) => (
-          <li key={e.name} className="inline-flex items-center gap-1.5 text-xs text-graphite-700">
+          <li key={e.name} className="inline-flex items-center gap-1.5 text-[11px] text-graphite-700 max-w-full">
             <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-            <span className="leading-tight">{e.name}</span>
+            <span className="leading-tight truncate">{e.name}</span>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Compact funnel table — all columns fit without horizontal scroll. */
+function DashboardFunnelTable({
+  labelHeader,
+  rows,
+  totals,
+  emptyTitle,
+}: {
+  labelHeader: string;
+  rows: Array<{ name: string; total?: number; Meeting?: number; [k: string]: any }>;
+  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; notInt: number };
+  emptyTitle: string;
+}) {
+  const cell = 'td !px-1 !py-1.5 text-[11px] text-center align-middle leading-tight border-graphite-100';
+  const head = 'th !px-1 !py-1.5 !text-[10px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-tight font-semibold';
+  return (
+    <div className="rounded-lg border border-graphite-100 overflow-hidden h-full">
+      <table className="w-full table-fixed text-center">
+        <colgroup>
+          <col className="w-[22%]" />
+          <col className="w-[12%]" />
+          <col className="w-[13%]" />
+          <col className="w-[11%]" />
+          <col className="w-[12%]" />
+          <col className="w-[15%]" />
+          <col className="w-[15%]" />
+        </colgroup>
+        <thead>
+          <tr className="bg-[#0e7490] text-white">
+            <th className={head}>{labelHeader}</th>
+            <th className={head}>Total Leads</th>
+            <th className={head}>In Followup</th>
+            <th className={head}>Meeting</th>
+            <th className={head}>Site Visit</th>
+            <th className={head}>Quotation sent</th>
+            <th className={head}>Not Interested</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+              <td className={`${cell} !text-left !px-1.5 font-medium break-words`}>{r.name}</td>
+              <td className={`${cell} font-bold`}>{r.total ?? 0}</td>
+              <td className={cell}>{r['In Followup'] ?? 0}</td>
+              <td className={cell}>{r.Meeting ?? 0}</td>
+              <td className={cell}>{r['Site Visit'] ?? 0}</td>
+              <td className={cell}>{r['Quotation sent'] ?? 0}</td>
+              <td className={cell}>{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+            </tr>
+          ))}
+          {rows.length > 0 && (
+            <tr className="bg-graphite-100 font-bold">
+              <td className={`${cell} !text-left !px-1.5`}>TOTAL</td>
+              <td className={cell}>{totals.total}</td>
+              <td className={cell}>{totals.follow}</td>
+              <td className={cell}>{totals.meeting}</td>
+              <td className={cell}>{totals.siteVisit}</td>
+              <td className={cell}>{totals.quote}</td>
+              <td className={cell}>{totals.notInt}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      {rows.length === 0 && <EmptyState title={emptyTitle} hint="Import leads to populate the funnel." />}
+    </div>
+  );
+}
+
+/** Table + chart row: equal height cards, stack on small screens. */
+function DashboardTableChartRow({
+  title,
+  labelHeader,
+  rows,
+  totals,
+  pieRows,
+  emptyTitle,
+}: {
+  title: string;
+  labelHeader: string;
+  rows: Array<{ name: string; total?: number; Meeting?: number; [k: string]: any }>;
+  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; notInt: number };
+  pieRows: { name: string; value: number }[];
+  emptyTitle: string;
+}) {
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-stretch">
+      <Card title={title} className="min-w-0 h-full !p-4 flex flex-col">
+        <div className="flex-1 min-h-0 flex flex-col">
+          <DashboardFunnelTable labelHeader={labelHeader} rows={rows} totals={totals} emptyTitle={emptyTitle} />
+        </div>
+      </Card>
+      <Card title={title} className="min-w-0 h-full !p-4 flex flex-col">
+        <div className="flex-1 min-h-[260px] flex flex-col">
+          <DashboardPie rows={pieRows} />
+        </div>
+      </Card>
     </div>
   );
 }
@@ -293,9 +405,14 @@ export function Dashboard() {
     'Quotation sent': row.quote_sent, 'Not Interested': row.not_interested,
   }));
   const productPie = productRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
-  const productTotals = { total: products?.totals.total ?? 0, follow: products?.totals.in_followup ?? 0,
-    meeting: products?.totals.meeting ?? 0, siteVisit: products?.totals.site_visit ?? 0,
-    quote: products?.totals.quote_sent ?? 0, notInt: products?.totals.not_interested ?? 0 };
+  const productTotals = {
+    total: products?.totals?.total ?? 0,
+    follow: products?.totals?.in_followup ?? 0,
+    meeting: products?.totals?.meeting ?? 0,
+    siteVisit: products?.totals?.site_visit ?? 0,
+    quote: products?.totals?.quote_sent ?? 0,
+    notInt: products?.totals?.not_interested ?? 0,
+  };
   if (loading && !d) return <Spinner />;
   if (error && !d) {
     return (
@@ -386,101 +503,23 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-2 gap-5 items-start">
-        <Card title="Leads by Source" className="min-w-0">
-          <div className="overflow-x-auto rounded-lg border border-graphite-100">
-            <table className="w-full min-w-[560px] text-sm text-center">
-              <thead>
-                <tr className="bg-[#0e7490] text-white">
-                  <th className="th !text-white !bg-transparent !text-center">Source</th>
-                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
-                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
-                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
-                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
-                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
-                </tr>
-              </thead>
-              <tbody>
-                {srcRows.map((r: any, i: number) => (
-                  <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                    <td className="td font-medium text-center">{r.name}</td>
-                    <td className="td font-bold text-center">{r.total}</td>
-                    <td className="td text-center">{r['In Followup'] ?? 0}</td>
-                    <td className="td text-center">{r.Meeting ?? 0}</td>
-                    <td className="td text-center">{r['Site Visit'] ?? 0}</td>
-                    <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
-                    <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
-                  </tr>
-                ))}
-                {srcRows.length > 0 && (
-                  <tr className="bg-graphite-100 font-bold">
-                    <td className="td text-center">TOTAL</td>
-                    <td className="td text-center">{srcTotals.total}</td>
-                    <td className="td text-center">{srcTotals.follow}</td>
-                    <td className="td text-center">{srcTotals.meeting}</td>
-                    <td className="td text-center">{srcTotals.siteVisit}</td>
-                    <td className="td text-center">{srcTotals.quote}</td>
-                    <td className="td text-center">{srcTotals.notInt}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            {srcRows.length === 0 && <EmptyState title="No source data" hint="Import leads to populate the funnel." />}
-          </div>
-        </Card>
-        <Card title="Leads by Source" className="min-w-0">
-          <DashboardPie rows={pie} />
-        </Card>
-      </div>
+      <DashboardTableChartRow
+        title="Leads by Source"
+        labelHeader="Source"
+        rows={srcRows as any[]}
+        totals={srcTotals}
+        pieRows={pie}
+        emptyTitle="No source data"
+      />
 
-      <div className="grid lg:grid-cols-2 gap-5 items-start">
-        <Card title="Leads by Product" className="min-w-0">
-          <div className="overflow-x-auto rounded-lg border border-graphite-100">
-            <table className="w-full min-w-[560px] text-sm text-center">
-              <thead>
-                <tr className="bg-[#0e7490] text-white">
-                  <th className="th !text-white !bg-transparent !text-center">Product</th>
-                  <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                  <th className="th !text-white !bg-transparent !text-center">In Followup</th>
-                  <th className="th !text-white !bg-transparent !text-center">Meeting</th>
-                  <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
-                  <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
-                  <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
-                </tr>
-              </thead>
-              <tbody>
-                {productRows.map((r: any, i: number) => (
-                  <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-                    <td className="td font-medium text-center">{r.name}</td>
-                    <td className="td font-bold text-center">{r.total}</td>
-                    <td className="td text-center">{r['In Followup'] ?? 0}</td>
-                    <td className="td text-center">{r.Meeting ?? 0}</td>
-                    <td className="td text-center">{r['Site Visit'] ?? 0}</td>
-                    <td className="td text-center">{r['Quotation sent'] ?? 0}</td>
-                    <td className="td text-center">{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
-                  </tr>
-                ))}
-                {productRows.length > 0 && (
-                  <tr className="bg-graphite-100 font-bold">
-                    <td className="td text-center">TOTAL</td>
-                    <td className="td text-center">{productTotals.total}</td>
-                    <td className="td text-center">{productTotals.follow}</td>
-                    <td className="td text-center">{productTotals.meeting}</td>
-                    <td className="td text-center">{productTotals.siteVisit}</td>
-                    <td className="td text-center">{productTotals.quote}</td>
-                    <td className="td text-center">{productTotals.notInt}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            {productRows.length === 0 && <EmptyState title="No product data" hint="Import leads to populate the funnel." />}
-          </div>
-        </Card>
-        <Card title="Leads by Product" className="min-w-0">
-          <DashboardPie rows={productPie} />
-        </Card>
-      </div>
+      <DashboardTableChartRow
+        title="Leads by Product"
+        labelHeader="Product"
+        rows={productRows as any[]}
+        totals={productTotals}
+        pieRows={productPie}
+        emptyTitle="No product data"
+      />
       <Card title="Customer quotation values">
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
           <div className="overflow-auto max-h-96">
@@ -1928,17 +1967,16 @@ export function Leads() {
     const n = Math.round(Number(raw));
     return Number.isFinite(n) && n >= 0 ? String(n) : '';
   };
-  /** Unlock quotation form/value only when this lead's Progress is Quotation sent (selected now or saved as current status). */
+  /** Unlock quotation form/value only when Progress is Quotation sent. Admins always see values. */
   const isQuotationUnlocked = (lead: any) => {
+    if (role !== 'EMPLOYEE') return true;
     const progressName = (statusId?: string | null) => {
       if (!statusId) return '';
       return String(masters?.statuses?.find((s: any) => s.id === statusId)?.name || '').trim().toLowerCase();
     };
     const quoteSent = (statusId?: string | null) => progressName(statusId) === 'quotation sent';
-    // Currently selected in Progress dropdown (this row only)
     if (quoteSent(drafts[lead.id]?.progress)) return true;
     if ((followupForms[lead.id] || []).some((f) => quoteSent(f.progress))) return true;
-    // Saved current status is Quotation sent
     if (quoteSent(lead.status_id)) return true;
     return false;
   };
@@ -2066,12 +2104,12 @@ export function Leads() {
         </select>
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
-      <div className="card min-w-0 overflow-hidden">
+      <div className="card min-w-0">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <>
           {/* Admin mobile: stacked cards so leads stay readable on small screens */}
           {role !== 'EMPLOYEE' && (
-            <div className="md:hidden space-y-3 p-3">
+            <div className="block md:hidden space-y-3 p-3">
               {items.map((l) => (
                 <div
                   key={`m-${l.id}`}
@@ -2135,7 +2173,7 @@ export function Leads() {
               ))}
             </div>
           )}
-          <div className={`relative isolate w-full overflow-x-auto ${role !== 'EMPLOYEE' ? 'hidden md:block' : ''}`}>
+          <div className={`relative isolate w-full overflow-x-auto ${role !== 'EMPLOYEE' ? 'hidden md:block' : 'block'}`}>
             <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2100px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
@@ -3530,21 +3568,30 @@ function barRows(v: any): any[] {
 function BarCard({ title, data, x, y, onDownload }: {
   title: string; data: any[]; x: string; y: string; onDownload?: () => void;
 }) {
+  const rows = barRows(data);
   return (
     <Card title={title} action={onDownload && (
       <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={onDownload}>
         Download Excel
       </button>
     )}>
-      {barRows(data).length === 0 ? <EmptyState title="No data" /> : (
-        <div className="h-72">
+      {rows.length === 0 ? <EmptyState title="No data" /> : (
+        <div className="h-80">
           <ResponsiveContainer>
-            <BarChart data={barRows(data)} layout="vertical" margin={{ left: 8, right: 16 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} />
-              <YAxis type="category" dataKey={x} width={170} tick={{ fontSize: 12 }} />
+            <BarChart data={rows} margin={{ top: 8, right: 12, left: 8, bottom: 72 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis
+                dataKey={x}
+                type="category"
+                interval={0}
+                angle={-28}
+                textAnchor="end"
+                height={70}
+                tick={{ fontSize: 10 }}
+              />
+              <YAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey={y} fill="#65A30D" radius={[0, 6, 6, 0]} />
+              <Bar dataKey={y} fill="#65A30D" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -3569,10 +3616,11 @@ export function Reports() {
     mode: 'custom', month: defaultMonth, week: defaultWeek, fromDate: '', toDate: '',
   });
 
-  type ReportId = 'source' | 'product' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
+  type ReportId = 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with follow-up, meeting, site visit and quotation counts, plus chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Product funnel table plus product-wise lead bar chart.', accent: 'bg-[#0f766e]' },
+    { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (1 year), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
     { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product, source and period with charts.', accent: 'bg-[#3F6212]' },
     { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
     { id: 'employee', title: 'Employee Workload Report', description: 'Assigned lead count per employee.', accent: 'bg-[#334155]' },
@@ -3586,6 +3634,7 @@ export function Reports() {
   const [quoteFilter, setQuoteFilter] = useState<ReportFilter>(emptyFilter);
   const [sourceFilter, setSourceFilter] = useState<ReportFilter>(emptyFilter);
   const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
+  const [categoryFilter, setCategoryFilter] = useState<ReportFilter>(emptyFilter);
   const [monthlyFilter, setMonthlyFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
   const [detailedFilter, setDetailedFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
 
@@ -3594,6 +3643,8 @@ export function Reports() {
   const [details, setDetails] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>(null);
   const [prod, setProd] = useState<any[]>([]);
+  const [categoryDetails, setCategoryDetails] = useState<any>(null);
+  const [catRows, setCatRows] = useState<any[]>([]);
   const [emp, setEmp] = useState<any[]>([]);
   const [monthlyRows, setMonthlyRows] = useState<any[]>([]);
   const [detailedReport, setDetailedReport] = useState<any>(null);
@@ -3602,6 +3653,7 @@ export function Reports() {
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [productBusy, setProductBusy] = useState(false);
+  const [categoryBusy, setCategoryBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [empBusy, setEmpBusy] = useState(false);
   const [monthlyBusy, setMonthlyBusy] = useState(false);
@@ -3611,6 +3663,7 @@ export function Reports() {
   const [quoteErr, setQuoteErr] = useState('');
   const [sourceErr, setSourceErr] = useState('');
   const [productErr, setProductErr] = useState('');
+  const [categoryErr, setCategoryErr] = useState('');
   const [empErr, setEmpErr] = useState('');
   const [monthlyErr, setMonthlyErr] = useState('');
   const [detailedErr, setDetailedErr] = useState('');
@@ -3699,6 +3752,23 @@ export function Reports() {
     } finally { setProductBusy(false); }
   };
 
+  const loadCategory = async (f: ReportFilter = categoryFilter) => {
+    const v = validate(f);
+    if (v) { setCategoryErr(v); return; }
+    setCategoryBusy(true); setCategoryErr('');
+    try {
+      const params = toParams(f);
+      const [detailsRes, barRes] = await Promise.all([
+        api.get('/reports/category-details', { params }),
+        api.get('/reports/category-wise', { params }),
+      ]);
+      setCategoryDetails(detailsRes.data);
+      setCatRows(Array.isArray(barRes.data) ? barRes.data : []);
+    } catch (e: any) {
+      setCategoryErr(apiErr(e, 'Category report failed'));
+    } finally { setCategoryBusy(false); }
+  };
+
   const loadEmployees = async () => {
     setEmpBusy(true); setEmpErr('');
     try {
@@ -3750,6 +3820,7 @@ export function Reports() {
     if (activeReport === 'quotation') void loadQuotations();
     if (activeReport === 'source') void loadSource();
     if (activeReport === 'product') void loadProduct();
+    if (activeReport === 'category') void loadCategory();
     if (activeReport === 'employee') void loadEmployees();
     if (activeReport === 'monthly') void loadMonthly();
     if (activeReport === 'detailed') void loadDetailed();
@@ -3765,7 +3836,7 @@ export function Reports() {
   };
 
   const downloadPdf = async (
-    kind: 'source' | 'product' | 'lead_value' | 'quotation' | 'monthly' | 'detailed',
+    kind: 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed',
     f: ReportFilter | { fromMonth: string; toMonth: string },
     setErr: (s: string) => void,
   ) => {
@@ -3773,6 +3844,7 @@ export function Reports() {
     const names = {
       source: 'lead-source-report.pdf',
       product: 'product-wise-report.pdf',
+      category: 'category-wise-report.pdf',
       lead_value: 'lead-value-report.pdf',
       quotation: 'quotation-report.pdf',
       monthly: 'monthly-lead-volume.pdf',
@@ -4248,6 +4320,61 @@ export function Reports() {
             x="product"
             y="leads"
             onDownload={() => dl('/reports/product-wise/export', 'product-wise-report.xlsx', toParams(productFilter), setProductErr)}
+          />
+        </div>
+      )}
+
+      {activeReport === 'category' && (
+        <div className="space-y-4">
+          <div className="card overflow-hidden">
+            <div className="bg-[#0e7490] text-white px-5 py-3 font-semibold tracking-wide">CATEGORY WISE REPORT</div>
+            <div className="p-5 space-y-4">
+              {filterBar(
+                categoryFilter, setCategoryFilter, categoryBusy, () => loadCategory(categoryFilter),
+                () => dl('/reports/category-details/export', 'category-wise-details.xlsx', toParams(categoryFilter), setCategoryErr),
+                !categoryDetails,
+                () => downloadPdf('category', categoryFilter, setCategoryErr),
+              )}
+              {categoryErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{categoryErr}</div>}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px] text-sm text-center">
+                  <thead><tr className="bg-[#0e7490] text-white">
+                    {['Category', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {(categoryDetails?.rows || []).map((row: any, i: number) => (
+                      <tr key={row.category} className={i % 2 ? 'bg-cyan-50/70' : 'bg-white'}>
+                        <td className="td font-medium text-center">{row.category}</td>
+                        <td className="td font-bold text-center">{row.total}</td>
+                        <td className="td text-center">{row.in_followup}</td>
+                        <td className="td text-center">{row.meeting}</td>
+                        <td className="td text-center">{row.site_visit}</td>
+                        <td className="td text-center">{row.quote_sent}</td>
+                        <td className="td text-center">{row.not_interested}</td>
+                      </tr>
+                    ))}
+                    {categoryDetails?.totals && (
+                      <tr className="bg-graphite-100 font-bold">
+                        <td className="td text-center">TOTAL</td>
+                        <td className="td text-center">{categoryDetails.totals.total}</td>
+                        <td className="td text-center">{categoryDetails.totals.in_followup}</td>
+                        <td className="td text-center">{categoryDetails.totals.meeting}</td>
+                        <td className="td text-center">{categoryDetails.totals.site_visit}</td>
+                        <td className="td text-center">{categoryDetails.totals.quote_sent}</td>
+                        <td className="td text-center">{categoryDetails.totals.not_interested}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <BarCard
+            title="Category-wise leads"
+            data={catRows}
+            x="category"
+            y="leads"
+            onDownload={() => dl('/reports/category-wise/export', 'category-wise-report.xlsx', toParams(categoryFilter), setCategoryErr)}
           />
         </div>
       )}

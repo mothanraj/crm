@@ -98,7 +98,7 @@ export function Card({ title, action, children, className = '' }: { title?: stri
   return (
     <section className={`card p-5 ${className}`}>
       {(title || action) && (
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 shrink-0">
           {title && <h2 className="text-sm font-semibold uppercase tracking-wide text-graphite-500">{title}</h2>}
           {action}
         </div>

@@ -883,6 +883,61 @@ def _product_details_payload(db: Session, start: date | None, end: date | None, 
             "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
 
 
+def _normalize_customer_review(raw: str | None) -> str:
+    """Map stored customer_review into A+ / A / B / C (or Unreviewed / Other)."""
+    label = (raw or "").strip()
+    if not label:
+        return "Unreviewed"
+    label = CUSTOMER_REVIEW_ALIASES.get(label, label)
+    if label in CUSTOMER_REVIEW_ORDER:
+        return label
+    return "Other"
+
+
+def _category_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
+    """Category funnel: A+ (Immediate), A (3-6 months), B (1 year), C (Planning Stage)."""
+    rows_by_cat: dict[str, dict] = {name: {"total": 0} for name in CUSTOMER_REVIEW_ORDER}
+    query = (
+        db.query(Lead.customer_review, LeadStatus.name, func.count(Lead.id))
+        .select_from(Lead)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end, u))
+        .group_by(Lead.customer_review, LeadStatus.name)
+        .all()
+    )
+    for review, status, count in query:
+        name = _normalize_customer_review(review)
+        row = rows_by_cat.setdefault(name, {"total": 0})
+        if status:
+            row[status] = int(row.get(status, 0)) + int(count)
+        row["total"] = int(row.get("total", 0)) + int(count)
+    extras = [name for name in ("Other", "Unreviewed") if name in rows_by_cat and rows_by_cat[name].get("total", 0)]
+    ordered = list(CUSTOMER_REVIEW_ORDER) + extras
+    rows = []
+    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
+    for category in ordered:
+        data = rows_by_cat.get(category) or {"total": 0}
+        row = {
+            "category": category,
+            "total": int(data.get("total", 0)),
+            "in_followup": int(data.get(STATUS_FOLLOWUP, 0)),
+            "meeting": int(data.get("Meeting", 0)),
+            "site_visit": int(data.get("Site Visit", 0)),
+            "not_interested": int(sum(data.get(s, 0) for s in STATUS_NOT_INT)),
+            "quote_sent": int(data.get(STATUS_QUOTE, 0)),
+        }
+        rows.append(row)
+        for key in totals:
+            totals[key] += row[key]
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "rows": rows,
+        "totals": totals,
+    }
+
+
 @router.get("/dashboard/by-product")
 def by_product(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return _product_details_payload(db, None, None, "custom", u)
@@ -905,6 +960,44 @@ def product_details_export(db: Session = Depends(get_db), u: User = Depends(curr
     t = payload["totals"]
     body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
+
+
+@router.get("/reports/category-details")
+def category_details(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    return _category_details_payload(db, start, end, resolved)
+
+
+@router.get("/reports/category-details/export")
+def category_details_export(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    payload = _category_details_payload(db, start, end, resolved)
+    headers = ["Category", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    body = [
+        [r["category"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]]
+        for r in payload["rows"]
+    ]
+    t = payload["totals"]
+    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
+    return _xlsx_download("category-wise-details.xlsx", headers, body, title="Category-wise Leads")
 
 
 @router.get("/reports/source-details")
@@ -958,7 +1051,7 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product|lead_value|quotation|monthly|detailed)$"),
+    report_type: str = Query(..., pattern="^(source|product|category|lead_value|quotation|monthly|detailed)$"),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
@@ -995,7 +1088,12 @@ def report_pdf(
             content = build_report_pdf(payload, "quotation")
             filename = "quotation-report.pdf"
         else:
-            payload_builder = _product_details_payload if report_type == "product" else _source_details_payload
+            builders = {
+                "product": _product_details_payload,
+                "category": _category_details_payload,
+                "source": _source_details_payload,
+            }
+            payload_builder = builders[report_type]
             content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
             filename = f"{report_type}-report.pdf"
     return StreamingResponse(BytesIO(content), media_type="application/pdf",
@@ -1027,6 +1125,29 @@ def _product_wise_rows(db: Session, start: date | None = None, end: date | None 
         extras.append({"product": "Unmapped", "leads": int(unmapped)})
     extras.sort(key=lambda r: r["leads"], reverse=True)
     return rows + extras
+
+
+def _category_wise_rows(db: Session, start: date | None = None, end: date | None = None):
+    filters = [Lead.is_active.is_(True)]
+    if start:
+        filters.append(Lead.enquiry_date >= start)
+    if end:
+        filters.append(Lead.enquiry_date <= end)
+    raw = (
+        db.query(Lead.customer_review, func.count(Lead.id))
+        .filter(*filters)
+        .group_by(Lead.customer_review)
+        .all()
+    )
+    counts: dict[str, int] = {name: 0 for name in CUSTOMER_REVIEW_ORDER}
+    for review, count in raw:
+        name = _normalize_customer_review(review)
+        counts[name] = int(counts.get(name, 0)) + int(count or 0)
+    rows = [{"category": name, "leads": int(counts.get(name, 0) or 0)} for name in CUSTOMER_REVIEW_ORDER]
+    for extra in ("Other", "Unreviewed"):
+        if counts.get(extra):
+            rows.append({"category": extra, "leads": int(counts[extra])})
+    return rows
 
 
 def _source_wise_rows(db: Session):
@@ -1083,6 +1204,36 @@ def product_wise_export(
         ["Product", "Leads"],
         [[r["product"], r["leads"]] for r in rows],
         title="Product-wise Leads",
+    )
+
+
+@router.get("/reports/category-wise")
+def category_wise(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    mode: str = Query("custom"), month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, _ = _resolve_range(mode, month, from_date, to_date, week)
+    return _category_wise_rows(db, start, end)
+
+
+@router.get("/reports/category-wise/export")
+def category_wise_export(
+    db: Session = Depends(get_db), u: User = Depends(current_user),
+    mode: str = Query("custom"), month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, _ = _resolve_range(mode, month, from_date, to_date, week)
+    rows = _category_wise_rows(db, start, end)
+    return _xlsx_download(
+        f"category-wise-report-{start or 'all'}-to-{end or 'all'}.xlsx",
+        ["Category", "Leads"],
+        [[r["category"], r["leads"]] for r in rows],
+        title="Category-wise Leads",
     )
 
 
