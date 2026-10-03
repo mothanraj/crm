@@ -3,7 +3,7 @@
 Each active lead is counted once. Status, category, remarks, lead value, and
 quotation value are the current values stored on the lead (latest state).
 
-Quotation value is ``leads.quotation_value``:
+Quotation value is ``leads.quotation_value`` (grand total including GST from the quotation form):
 - NULL means no quotation has been saved
 - 0 is a real zero quotation
 - activity history and the quotations table are not summed into this figure

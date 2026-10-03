@@ -1923,10 +1923,24 @@ export function Leads() {
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
   const quotationFromForm = (lead: any) => {
-    const raw = lead?.quotation_form?.amount_excl ?? lead?.quotation_value;
+    const raw = lead?.quotation_form?.grand_total ?? lead?.quotation_form?.amount_excl ?? lead?.quotation_value;
     if (raw == null || String(raw).trim() === '') return '';
     const n = Math.round(Number(raw));
     return Number.isFinite(n) && n >= 0 ? String(n) : '';
+  };
+  /** Unlock quotation form/value only when this lead's Progress is Quotation sent (selected now or saved as current status). */
+  const isQuotationUnlocked = (lead: any) => {
+    const progressName = (statusId?: string | null) => {
+      if (!statusId) return '';
+      return String(masters?.statuses?.find((s: any) => s.id === statusId)?.name || '').trim().toLowerCase();
+    };
+    const quoteSent = (statusId?: string | null) => progressName(statusId) === 'quotation sent';
+    // Currently selected in Progress dropdown (this row only)
+    if (quoteSent(drafts[lead.id]?.progress)) return true;
+    if ((followupForms[lead.id] || []).some((f) => quoteSent(f.progress))) return true;
+    // Saved current status is Quotation sent
+    if (quoteSent(lead.status_id)) return true;
+    return false;
   };
   const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
   const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
@@ -1962,13 +1976,6 @@ export function Leads() {
     if (!draft.remarks.trim() || !draft.review || !actionOptions.includes(actionName)) {
       setValidationMessage('Please fill Remarks, Category, and Work Action before saving or completing this lead.');
       return;
-    }
-    if (actionName === 'Quotation sent') {
-      const qv = quotationFromForm(lead);
-      if (!qv) {
-        setValidationMessage('Open the quotation form and enter a value first. That amount is used for Quotation sent.');
-        return;
-      }
     }
     if (done && actionName === 'Converted' && !conversionConfirmed) {
       setConversionToConfirm(lead);
@@ -2019,13 +2026,6 @@ export function Leads() {
     if (!form?.remarks.trim() || !form.review || !actionOptions.includes(actionName)) {
       setValidationMessage('Please fill Remarks, Category, and Work Action for this follow-up.');
       return;
-    }
-    if (actionName === 'Quotation sent') {
-      const qv = quotationFromForm(lead);
-      if (!qv) {
-        setValidationMessage('Open the quotation form and enter a value first. That amount is used for Quotation sent.');
-        return;
-      }
     }
     setSavingId(lead.id);
     try {
@@ -2168,12 +2168,12 @@ export function Leads() {
 
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
-                      <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
-                      <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
-                      <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
+                      <div className="text-base font-semibold text-graphite-900">{l.customer_name || '—'}</div>
+                      <div className="text-base text-graphite-700 mt-1.5">{l.company_name || '—'}</div>
+                      <div className="text-base text-graphite-600 mt-1.5">{l.city || '—'}</div>
                     </td>
                     <td className="td align-top min-w-[260px]">
-                      <div className="whitespace-nowrap flex items-center gap-1.5">
+                      <div className="whitespace-nowrap flex items-center gap-1.5 text-base text-graphite-900">
                         <span>{l.contact_number || '—'}</span>
                         {role === 'EMPLOYEE' && l.contact_number && whatsappUrl(l.contact_number) && (
                           <a
@@ -2197,9 +2197,9 @@ export function Leads() {
                           </a>
                         )}
                       </div>
-                      <div className="text-xs mt-0.5 break-words [overflow-wrap:anywhere]">
+                      <div className="text-sm mt-1.5 break-words [overflow-wrap:anywhere]">
                         {l.email && role === 'EMPLOYEE'
-                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left break-words [overflow-wrap:anywhere]" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
+                          ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left text-sm break-words [overflow-wrap:anywhere]" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
                           : l.email
                             ? <span className="break-words [overflow-wrap:anywhere]">{l.email}</span>
                             : <span className="text-graphite-400">No email</span>}
@@ -2308,63 +2308,88 @@ export function Leads() {
                     <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
                     {role === 'EMPLOYEE' && (
                       <td className="td align-top text-center">
-                        <div className="flex flex-col items-center gap-1">
-                          <button
-                            type="button"
-                            className="btn-primary !px-2 !py-1 text-xs"
-                            onClick={(e) => {
-                              if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
-                              setQuoteFormLead(l);
-                            }}
-                            title={l.quotation_form?.quotation_number ? `Edit ${l.quotation_form.quotation_number}` : 'Open quotation form'}
-                          >
-                            {l.quotation_form?.quotation_number ? 'Edit' : 'Open form'}
-                          </button>
-                          {l.quotation_form?.quotation_number && (
-                            <button
-                              type="button"
-                              data-quote-pdf
-                              className="btn-secondary !px-2 !py-1 text-[10px]"
-                              title={`Download ${l.quotation_form.quotation_number} PDF`}
-                              onClick={async (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                if (isOutreachLocked(l)) { setValidationMessage(lockedLeadMessage(l)); return; }
-                                try {
-                                  const res = await api.get(`/leads/${l.id}/quotation-form/pdf`, { responseType: 'blob' });
-                                  const url = URL.createObjectURL(res.data);
-                                  const a = document.createElement('a');
-                                  a.href = url;
-                                  a.download = `${l.quotation_form.quotation_number}.pdf`;
-                                  document.body.appendChild(a);
-                                  a.click();
-                                  a.remove();
-                                  setTimeout(() => URL.revokeObjectURL(url), 2000);
-                                } catch {
-                                  if (!isOutreachLocked(l)) setQuoteFormLead(l);
-                                }
-                              }}
-                            >
-                              PDF
-                            </button>
-                          )}
-                        </div>
-                        {l.quotation_form?.quotation_number ? (
-                          <div className="text-[10px] text-graphite-600 mt-1 font-mono break-all max-w-[9rem] mx-auto" title={l.quotation_form.quotation_number}>
-                            {l.quotation_form.quotation_number}
-                            {l.quotation_form.revision ? ` · ${l.quotation_form.revision}` : ''}
-                          </div>
+                        {isQuotationUnlocked(l) ? (
+                          <>
+                            <div className="flex flex-col items-center gap-1">
+                              <button
+                                type="button"
+                                className="btn-primary !px-2 !py-1 text-xs"
+                                onClick={(e) => {
+                                  if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
+                                  setQuoteFormLead(l);
+                                }}
+                                title={l.quotation_form?.quotation_number ? `Edit ${l.quotation_form.quotation_number}` : 'Open quotation form'}
+                              >
+                                {l.quotation_form?.quotation_number ? 'Edit' : 'Open form'}
+                              </button>
+                              {l.quotation_form?.quotation_number && (
+                                <button
+                                  type="button"
+                                  data-quote-pdf
+                                  className="btn-secondary !px-2 !py-1 text-[10px]"
+                                  title={`Download ${l.quotation_form.quotation_number} PDF`}
+                                  onClick={async (e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (isOutreachLocked(l)) { setValidationMessage(lockedLeadMessage(l)); return; }
+                                    try {
+                                      const res = await api.get(`/leads/${l.id}/quotation-form/pdf`, { responseType: 'blob' });
+                                      const url = URL.createObjectURL(res.data);
+                                      const a = document.createElement('a');
+                                      a.href = url;
+                                      a.download = `${l.quotation_form.quotation_number}.pdf`;
+                                      document.body.appendChild(a);
+                                      a.click();
+                                      a.remove();
+                                      setTimeout(() => URL.revokeObjectURL(url), 2000);
+                                    } catch {
+                                      if (!isOutreachLocked(l)) setQuoteFormLead(l);
+                                    }
+                                  }}
+                                >
+                                  PDF
+                                </button>
+                              )}
+                            </div>
+                            {l.quotation_form?.quotation_number ? (
+                              <div className="text-[10px] text-graphite-600 mt-1 font-mono break-all max-w-[9rem] mx-auto" title={l.quotation_form.quotation_number}>
+                                {l.quotation_form.quotation_number}
+                                {l.quotation_form.revision ? ` · ${l.quotation_form.revision}` : ''}
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-graphite-400 mt-1">REF on assign</div>
+                            )}
+                          </>
                         ) : (
-                          <div className="text-[10px] text-graphite-400 mt-1">REF on assign</div>
+                          <span className="text-graphite-400">—</span>
                         )}
                       </td>
                     )}
                     <td className="td align-top text-right whitespace-nowrap">
-                      {l.quotation_value != null && l.quotation_value !== '' ? (
-                        <span className="inline-block max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
-                          {inr(l.quotation_value).replace(/^₹/, '')}
-                        </span>
-                      ) : <span className="text-graphite-400">—</span>}
+                      {(() => {
+                        if (!isQuotationUnlocked(l)) return <span className="text-graphite-400">—</span>;
+                        const history = (l.quotation_value_history || []).filter((h: any) => h?.quotation_value != null && h.quotation_value !== '');
+                        const rows = history.length
+                          ? history
+                          : (l.quotation_value != null && l.quotation_value !== ''
+                            ? [{ revision: l.quotation_form?.revision || 'R0', quotation_value: l.quotation_value }]
+                            : []);
+                        if (!rows.length) return <span className="text-graphite-400">—</span>;
+                        return (
+                          <div className="inline-flex flex-col items-end gap-1 max-w-full">
+                            {rows.map((h: any, idx: number) => (
+                              <span
+                                key={`${h.revision || 'R'}-${idx}`}
+                                className="inline-flex items-center gap-1.5 max-w-full overflow-x-auto rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-900"
+                                title={h.at ? `Saved ${h.at}` : undefined}
+                              >
+                                <span className="font-bold text-amber-700/80">{h.revision || `R${idx}`}</span>
+                                <span>{inr(h.quotation_value).replace(/^₹/, '')}</span>
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -2386,17 +2411,32 @@ export function Leads() {
           lead={quoteFormLead}
           onClose={() => setQuoteFormLead(null)}
           onSaved={(leadId, summary) => {
-            setItems((current) => current.map((item) => (
-              item.id === leadId
-                ? {
-                    ...item,
-                    quotation_form: summary,
-                    quotation_value: summary.amount_excl != null
-                      ? String(summary.amount_excl)
-                      : item.quotation_value,
-                  }
-                : item
-            )));
+            setItems((current) => current.map((item) => {
+              if (item.id !== leadId) return item;
+              const nextVal = summary.grand_total != null
+                ? String(summary.grand_total)
+                : summary.amount_excl != null
+                  ? String(summary.amount_excl)
+                  : item.quotation_value;
+              const rev = String(summary.revision || 'R0').toUpperCase();
+              const prevHist = Array.isArray(item.quotation_value_history) ? item.quotation_value_history : [];
+              let quotation_value_history = prevHist;
+              if (nextVal != null && nextVal !== '') {
+                const exists = prevHist.some((h: any) => String(h.revision || '').toUpperCase() === rev);
+                quotation_value_history = exists
+                  ? prevHist.map((h: any) =>
+                    String(h.revision || '').toUpperCase() === rev
+                      ? { ...h, revision: rev, quotation_value: nextVal, at: new Date().toISOString() }
+                      : h)
+                  : [...prevHist, { revision: rev, quotation_value: nextVal, at: new Date().toISOString() }];
+              }
+              return {
+                ...item,
+                quotation_form: summary,
+                quotation_value: nextVal,
+                quotation_value_history,
+              };
+            }));
           }}
         />
       )}
@@ -2554,12 +2594,12 @@ export function EmployeeLeads() {
                       <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td">
                         <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
-                        <div className="text-sm text-graphite-700 mt-0.5">{l.company_name || '—'}</div>
-                        <div className="text-sm text-graphite-600 mt-0.5">{l.city || '—'}</div>
+                        <div className="text-sm text-graphite-700 mt-1.5">{l.company_name || '—'}</div>
+                        <div className="text-sm text-graphite-600 mt-1.5">{l.city || '—'}</div>
                       </td>
                       <td className="td min-w-[260px] w-[280px]">
                         <div className="whitespace-nowrap">{l.contact_number || '—'}{l.alternate_contact ? <span className="block text-xs text-graphite-400">alt: {l.alternate_contact}</span> : null}</div>
-                        <div className="text-xs mt-0.5 break-words [overflow-wrap:anywhere]">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
+                        <div className="text-xs mt-1.5 break-words [overflow-wrap:anywhere]">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
                       </td>
                       <td className="td text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
                       <td className="td text-right whitespace-nowrap tabular-nums font-semibold">{inr(l.lead_value)}</td>
