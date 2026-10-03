@@ -29,19 +29,26 @@ export const PROGRESS_TILE_TEXT: Record<string, string> = {
   'Not Interested': 'text-white',
 };
 
-/* Category (A+ / A / B / C) tile colours — kept distinct from progress. */
+/* Category — soft mid tones (not pale), distinct from progress. */
 export const CATEGORY_HEX: Record<string, string> = {
-  'A+ (Immediate)': '#7C3AED',
-  'A (3-6 months)': '#BE185D',
-  'B (1 year)': '#0284C7',
-  'C (Planning Stage)': '#475569',
+  'A+ (Immediate)': '#D946EF',
+  'A (3-6 months)': '#EC4899',
+  'B (1 year)': '#6366F1',
+  'C (Planning Stage)': '#64748B',
 };
 
 export const CATEGORY_TILE_BG: Record<string, string> = {
-  'A+ (Immediate)': 'bg-[#7C3AED]',
-  'A (3-6 months)': 'bg-[#BE185D]',
-  'B (1 year)': 'bg-[#0284C7]',
-  'C (Planning Stage)': 'bg-[#475569]',
+  'A+ (Immediate)': 'bg-[#D946EF]',
+  'A (3-6 months)': 'bg-[#EC4899]',
+  'B (1 year)': 'bg-[#6366F1]',
+  'C (Planning Stage)': 'bg-[#64748B]',
+};
+
+export const CATEGORY_TILE_TEXT: Record<string, string> = {
+  'A+ (Immediate)': 'text-white',
+  'A (3-6 months)': 'text-white',
+  'B (1 year)': 'text-white',
+  'C (Planning Stage)': 'text-white',
 };
 
 export function categoryTileBg(label: string): string {
@@ -49,7 +56,15 @@ export function categoryTileBg(label: string): string {
   if (label.startsWith('A ')) return CATEGORY_TILE_BG['A (3-6 months)'];
   if (label.startsWith('B ')) return CATEGORY_TILE_BG['B (1 year)'];
   if (label.startsWith('C ')) return CATEGORY_TILE_BG['C (Planning Stage)'];
-  return CATEGORY_TILE_BG[label] || 'bg-[#475569]';
+  return CATEGORY_TILE_BG[label] || 'bg-[#64748B]';
+}
+
+export function categoryTileText(label: string): string {
+  if (label.startsWith('A+')) return CATEGORY_TILE_TEXT['A+ (Immediate)'];
+  if (label.startsWith('A ')) return CATEGORY_TILE_TEXT['A (3-6 months)'];
+  if (label.startsWith('B ')) return CATEGORY_TILE_TEXT['B (1 year)'];
+  if (label.startsWith('C ')) return CATEGORY_TILE_TEXT['C (Planning Stage)'];
+  return CATEGORY_TILE_TEXT[label] || 'text-white';
 }
 
 /* ---------- status / sla color maps (single source of truth for badges) ---------- */

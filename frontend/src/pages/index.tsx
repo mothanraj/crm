@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
-import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, categoryTileBg, SlaBadge, Spinner, StatusBadge } from '../components/ui';
+import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Analytics } from './analytics';
 
@@ -689,16 +689,17 @@ export function EmployeeDashboard() {
     { label: 'Not Interested', bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
   ];
   const categoryTiles = [
-    { label: 'A+ (Immediate)', bg: CATEGORY_TILE_BG['A+ (Immediate)'] },
-    { label: 'A (3-6 months)', bg: CATEGORY_TILE_BG['A (3-6 months)'] },
-    { label: 'B (1 year)', bg: CATEGORY_TILE_BG['B (1 year)'] },
-    { label: 'C (Planning Stage)', bg: CATEGORY_TILE_BG['C (Planning Stage)'] },
+    { label: 'A+ (Immediate)', bg: CATEGORY_TILE_BG['A+ (Immediate)'], text: CATEGORY_TILE_TEXT['A+ (Immediate)'] },
+    { label: 'A (3-6 months)', bg: CATEGORY_TILE_BG['A (3-6 months)'], text: CATEGORY_TILE_TEXT['A (3-6 months)'] },
+    { label: 'B (1 year)', bg: CATEGORY_TILE_BG['B (1 year)'], text: CATEGORY_TILE_TEXT['B (1 year)'] },
+    { label: 'C (Planning Stage)', bg: CATEGORY_TILE_BG['C (Planning Stage)'], text: CATEGORY_TILE_TEXT['C (Planning Stage)'] },
   ];
+  // Summary — mid tones, none shared with Progress or Category
   const tiles = [
-    { label: 'Total leads', value: d.total ?? 0, bg: 'bg-[#1e3a5f]', hint: 'Assigned to me' },
-    { label: 'Pending', value: d.needs_first_contact ?? 0, bg: 'bg-[#c0392b]', hint: 'Speak to customer' },
-    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#7b241c]', hint: 'Act now' },
-    { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#2F9E44]', hint: 'First contact recorded' },
+    { label: 'Total leads', value: d.total ?? 0, bg: 'bg-[#2563EB]', text: 'text-white', hint: 'Assigned to me' },
+    { label: 'Pending', value: d.needs_first_contact ?? 0, bg: 'bg-[#7C3AED]', text: 'text-white', hint: 'Speak to customer' },
+    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#BE185D]', text: 'text-white', hint: 'Act now' },
+    { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#312E81]', text: 'text-white', hint: 'First contact recorded' },
   ];
   return (
     <div className="space-y-5">
@@ -708,42 +709,42 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-3 mb-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Summary</div>
-          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm h-full">
+          <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-2 text-center">Summary</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm">
             <div className="grid grid-cols-2 gap-2 md:gap-3 auto-rows-fr">
               {tiles.map((t) => (
-                <div key={t.label} className={`${t.bg} text-white rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
-                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
-                  <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{t.value}</div>
-                  <div className="text-[10px] sm:text-xs opacity-85 mt-1 sm:mt-1.5 leading-tight px-0.5">{t.hint}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
+                  <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                  <div className="text-3xl sm:text-4xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-xs sm:text-sm opacity-85 mt-1 sm:mt-1.5 leading-tight px-0.5">{t.hint}</div>
                 </div>
               ))}
             </div>
           </div>
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Category</div>
-          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm h-full">
+          <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-2 text-center">Category</div>
+          <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm">
             <div className="grid grid-cols-2 gap-2 md:gap-3 auto-rows-fr">
               {categoryTiles.map((t) => (
-                <div key={t.label} className={`${t.bg} text-white rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
-                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words hyphens-auto">{t.label}</div>
-                  <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount('', t.label)}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[6.75rem] sm:min-h-[8rem] md:min-h-[9.75rem] flex flex-col items-center justify-center text-center shadow-sm px-1.5 py-2 sm:px-2 sm:py-3`}>
+                  <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight break-words hyphens-auto">{t.label}</div>
+                  <div className="text-3xl sm:text-4xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount('', t.label)}</div>
                 </div>
               ))}
             </div>
           </div>
         </div>
       </div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold text-graphite-600 uppercase tracking-wide mb-2 text-center">Progress</div>
+      <div className="min-w-0 mt-10 md:mt-14 pt-6 md:pt-8">
+        <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-3 text-center">Progress</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3 auto-rows-fr">
           {progressTiles.map((t) => (
             <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[5.75rem] sm:min-h-[7rem] lg:min-h-[8.25rem] px-2 py-2.5 sm:px-3 sm:py-4 shadow-sm text-center flex flex-col items-center justify-center`}>
-              <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
-              <div className="text-2xl sm:text-3xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
+              <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
+              <div className="text-3xl sm:text-4xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
             </div>
           ))}
         </div>
@@ -884,7 +885,7 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
           <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {(data?.category || []).map((row: any) => (
-              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#475569]'} text-white rounded-lg px-3 py-3 shadow-sm`}>
+              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#64748B]'} ${CATEGORY_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
                 <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
                 <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
               </div>
@@ -1820,6 +1821,39 @@ function QuotationFormModal({
 /* ================= LEADS ================= */
 const REPEATABLE_PROGRESS = new Set(['In Followup', 'Meeting', 'Site Visit', 'Quotation sent']);
 
+function AutoGrowRemarks({
+  value,
+  onChange,
+  className = '',
+  minHeight = 120,
+  ...rest
+}: {
+  value: string;
+  onChange: (e: { target: { value: string } }) => void;
+  className?: string;
+  minHeight?: number;
+  [key: string]: any;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(el.scrollHeight, minHeight)}px`;
+  }, [value, minHeight]);
+  return (
+    <textarea
+      {...rest}
+      ref={ref}
+      rows={3}
+      value={value}
+      onChange={onChange}
+      className={`input text-sm resize-none overflow-hidden ${className}`}
+      style={{ minHeight }}
+    />
+  );
+}
+
 function progressOrdinal(n: number) {
   const mod100 = n % 100;
   const mod10 = n % 10;
@@ -1835,7 +1869,7 @@ function formatProgressOccurrence(action: string, occurrence: number) {
   if (!action || action === '—') return '—';
   if (!REPEATABLE_PROGRESS.has(action)) return action;
   const name = shortProgressName(action);
-  return occurrence <= 1 ? name : `${progressOrdinal(occurrence)} ${name}`;
+  return `${progressOrdinal(occurrence)} ${name}`;
 }
 
 function labeledProgressHistory(history: any[] | undefined) {
@@ -1903,10 +1937,21 @@ export function Leads() {
   }, [search, status, source, city, sla, sort, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
+  const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
+  const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
+  const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
+  const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
+  /** Edit Category/Progress/Remarks only for new (no remarks yet) or after Reopen. After save, show numbered history. Use + for next progress (works for Overdue/Pending too). */
+  const canEditWorkFields = (lead: any) => {
+    if (role !== 'EMPLOYEE') return false;
+    if (isConvertedLocked(lead)) return false;
+    return !!(expandedRows[lead.id] || !lead.employee_remarks);
+  };
   const statusLabel = (lead: any) => {
     if (role === 'EMPLOYEE') {
       const draft = draftFor(lead);
-      const editing = !!(expandedRows[lead.id] || !lead.employee_remarks);
+      const editing = canEditWorkFields(lead);
       if (editing && draft.progress) {
         const action = nameOf('statuses', draft.progress);
         if (REPEATABLE_PROGRESS.has(action)) {
@@ -1920,8 +1965,6 @@ export function Leads() {
     const selectedStatus = nameOf('statuses', lead.status_id);
     return selectedStatus === 'New Lead' && lead.primary_employee_id ? 'Assigned' : selectedStatus;
   };
-  const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
-  const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
   const quotationFromForm = (lead: any) => {
     const raw = lead?.quotation_form?.grand_total ?? lead?.quotation_form?.amount_excl ?? lead?.quotation_value;
     if (raw == null || String(raw).trim() === '') return '';
@@ -1942,9 +1985,6 @@ export function Leads() {
     if (quoteSent(lead.status_id)) return true;
     return false;
   };
-  const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
-  const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
-  const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
   const lockedLeadMessage = (lead: any) => isConvertedLocked(lead)
     ? 'This lead is converted and cannot be edited.'
     : 'This lead is not interested and cannot be edited.';
@@ -1990,13 +2030,15 @@ export function Leads() {
       const stampedRemarks = done && !reopening && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
         ? (lead.employee_remarks || rawRemarks)
         : withUpdateStamp(rawRemarks);
+      // API only accepts PENDING/COMPLETED — never send OVERDUE (that caused the save popup).
+      const nextSla = done ? 'COMPLETED' : reopening ? 'PENDING' : null;
       const { data } = await api.post(`/leads/${lead.id}/status`, {
         new_status_id: draft.progress || lead.status_id,
         reason: stampedRemarks,
         method: 'Call',
         customer_review: draft.review,
         quotation_value: qv || undefined,
-        sla_state: done ? 'COMPLETED' : reopening ? 'PENDING' : lead.sla_state,
+        ...(nextSla ? { sla_state: nextSla } : {}),
       });
       setItems((current) => current.map((item) => item.id === lead.id
         ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: draft.review, quotation_value: qv || item.quotation_value, sla_state: data.sla_state, work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), at: new Date().toISOString() }] }
@@ -2031,7 +2073,13 @@ export function Leads() {
     try {
       const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
       const stampedRemarks = withUpdateStamp(form.remarks.trim());
-      await api.post(`/leads/${lead.id}/status`, { new_status_id: form.progress || lead.status_id, reason: stampedRemarks, method: 'Call', customer_review: form.review, quotation_value: qv || undefined, sla_state: lead.sla_state });
+      await api.post(`/leads/${lead.id}/status`, {
+        new_status_id: form.progress || lead.status_id,
+        reason: stampedRemarks,
+        method: 'Call',
+        customer_review: form.review,
+        quotation_value: qv || undefined,
+      });
       setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
@@ -2175,20 +2223,20 @@ export function Leads() {
                       ) : prodName(l, nameOf)}
                     </td>
                     <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                      {canEditWorkFields(l) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) && (l.sla_state === 'COMPLETED'
+                      {canEditWorkFields(l) && (l.sla_state === 'COMPLETED'
                         ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : isNotInterestedLocked(l) ? '✓ Not interested — click Reopen for email and quotation' : '✓ Completed — reopen to edit'}</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
                     <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
+                      {canEditWorkFields(l) ? (
                         <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
                           <option value="">Select progress…</option>
@@ -2212,12 +2260,23 @@ export function Leads() {
                       {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top">
-                      {role === 'EMPLOYEE' && (expandedRows[l.id] || !l.employee_remarks) ? (
-                        <textarea className="input min-h-[64px] text-xs" disabled={l.sla_state === 'COMPLETED'} placeholder="Enter customer conversation remarks…"
+                      {canEditWorkFields(l) ? (
+                        <AutoGrowRemarks
+                          disabled={l.sla_state === 'COMPLETED'}
+                          placeholder="Enter customer conversation remarks…"
                           value={draftFor(l).remarks}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))} />
+                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
+                        />
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <textarea key={`remark-${index}`} className="input min-h-[64px] text-xs mt-2" placeholder={`Follow-up ${index + 2} remarks…`} value={form.remarks} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))} />)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => (
+                        <AutoGrowRemarks
+                          key={`remark-${index}`}
+                          className="mt-2"
+                          placeholder={`Follow-up ${index + 2} remarks…`}
+                          value={form.remarks}
+                          onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
+                        />
+                      ))}
                     </td>
                     <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
                     <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
@@ -2486,8 +2545,9 @@ export function EmployeeLeads() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {reviewCounts.map((s) => {
                 const bg = categoryTileBg(s.label);
+                const text = categoryTileText(s.label);
                 return (
-                  <div key={s.label} className={`${bg} text-white rounded-lg px-3 py-4 text-center shadow-sm`}>
+                  <div key={s.label} className={`${bg} ${text} rounded-lg px-3 py-4 text-center shadow-sm`}>
                     <div className="text-3xl font-bold tabular-nums">{s.value}</div>
                     <div className="text-sm uppercase tracking-wide opacity-95 font-semibold mt-1.5 leading-tight">{s.label}</div>
                   </div>
