@@ -1,11 +1,10 @@
 """APScheduler: SLA sweeps + Brevo email (assignment batches + admin overdue digest).
 
-- Every 15 min: mark SLA-overdue leads (24h for Direct Call, 72h for
-  every other source, after assignment with no first contact) + in-app
-  notify + mail admins immediately, grouped by employee. Each lead mailed
-  once (overdue_digest_at). No fixed daily slot.
-- Hourly backstop: resend for any OVERDUE rows missed earlier (server was
-  down at deadline, or Brevo failed last time).
+- Every 15 min: mark PENDING leads past sla_deadline as OVERDUE (assignment
+  window or each follow-up window after progress updates). Converted /
+  Not Interested are excluded. Notify + mail admins; each deadline window
+  mailed once via overdue_digest_at (cleared when SLA is refreshed).
+- Hourly backstop: resend for any OVERDUE rows missed earlier.
 - Assignment retry: resend failed assignment emails (once per lead).
 Email failures only log — they never break the sweep.
 """
@@ -14,11 +13,12 @@ import math
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy import or_
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models import Lead, LeadAssignment, LeadSource, Notification, Product, User
-from app.services.lead_service import is_direct_call_name
+from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Notification, Product, User
+from app.services.lead_service import SLA_STOP_STATUSES, is_direct_call_name
 from app.services import email_service
 
 log = logging.getLogger(__name__)
@@ -46,21 +46,29 @@ def _sla_sweep():
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        overdue = db.query(Lead).filter(
-            Lead.is_active.is_(True),
-            Lead.sla_state == "PENDING",
-            Lead.sla_deadline.isnot(None),
-            Lead.sla_deadline < now,
-            Lead.first_contact_at.is_(None),
-            Lead.primary_employee_id.isnot(None),
-        ).all()
+        overdue = (
+            db.query(Lead)
+            .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+            .filter(
+                Lead.is_active.is_(True),
+                Lead.sla_state == "PENDING",
+                Lead.sla_deadline.isnot(None),
+                Lead.sla_deadline < now,
+                Lead.primary_employee_id.isnot(None),
+                # Keep ticking until Converted (Not Interested also stops the clock).
+                or_(LeadStatus.name.is_(None), ~LeadStatus.name.in_(tuple(SLA_STOP_STATUSES))),
+            )
+            .all()
+        )
         admins = _admins(db)
         for lead in overdue:
             lead.sla_state = "OVERDUE"
             owner = db.get(User, lead.primary_employee_id) if lead.primary_employee_id else None
             owner_name = owner.name if owner else "Unassigned employee"
             src = db.get(LeadSource, lead.source_id) if lead.source_id else None
-            direct = is_direct_call_name(src.name if src else "")
+            st = db.get(LeadStatus, lead.status_id) if lead.status_id else None
+            direct = is_direct_call_name(src.name if src else "") and not lead.first_contact_at
+            progress = (st.name if st else "") or "follow-up"
             if direct:
                 body = (
                     f"{owner_name} has not followed Direct Call customer "
@@ -74,12 +82,15 @@ def _sla_sweep():
                 )
             else:
                 body = (
-                    f"{owner_name} did not follow up with customer "
+                    f"{owner_name} did not update {progress} for customer "
                     f"{lead.customer_name or '—'} ({lead.enquiry_number}) within 3 days. "
                     f"Phone: {lead.contact_number or '—'}. Deadline was {lead.sla_deadline:%d-%b-%Y %H:%M}."
                 )
                 admin_title = "Employee did not follow up"
-                owner_body = f"You missed the 3-day contact and this lead is overdue for {lead.enquiry_number} ({lead.customer_name})."
+                owner_body = (
+                    f"You missed the 3-day follow-up and this lead is overdue for "
+                    f"{lead.enquiry_number} ({lead.customer_name}). Current progress: {progress}."
+                )
             for admin in admins:
                 db.add(Notification(
                     user_id=admin.id, lead_id=lead.id, kind="SLA_OVERDUE",
@@ -283,13 +294,19 @@ def _overdue_digest():
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        rows = db.query(Lead).filter(
-            Lead.is_active.is_(True),
-            Lead.sla_state == "OVERDUE",
-            Lead.first_contact_at.is_(None),
-            Lead.primary_employee_id.isnot(None),
-            Lead.overdue_digest_at.is_(None),
-        ).order_by(Lead.sla_deadline.asc()).all()
+        rows = (
+            db.query(Lead)
+            .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+            .filter(
+                Lead.is_active.is_(True),
+                Lead.sla_state == "OVERDUE",
+                Lead.primary_employee_id.isnot(None),
+                Lead.overdue_digest_at.is_(None),
+                or_(LeadStatus.name.is_(None), ~LeadStatus.name.in_(tuple(SLA_STOP_STATUSES))),
+            )
+            .order_by(Lead.sla_deadline.asc())
+            .all()
+        )
         if not rows:
             return
         _send_overdue_now(db, rows, now)

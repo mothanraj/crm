@@ -29,6 +29,23 @@ def sla_hours_for_lead(db: Session, lead: Lead) -> int:
     return 24 if is_direct_call_name(source_name_for_lead(db, lead)) else 72
 
 
+FOLLOWUP_SLA_HOURS = 72  # After each progress update until Converted
+SLA_STOP_STATUSES = frozenset({"Converted", "Not Interested", "Not Interested/Spam"})
+
+
+def refresh_followup_sla(db: Session, lead: Lead, *, hours: int | None = None) -> None:
+    """Start / restart the touch-due window. Clears prior overdue mail flag."""
+    now = datetime.now(timezone.utc)
+    lead.sla_deadline = now + timedelta(hours=hours if hours is not None else FOLLOWUP_SLA_HOURS)
+    lead.sla_state = "PENDING"
+    lead.overdue_digest_at = None
+
+
+def stop_followup_sla(lead: Lead) -> None:
+    """Converted (and Not Interested) — no more overdue count or admin digests."""
+    lead.sla_state = "COMPLETED"
+
+
 def format_enquiry_number(number: int) -> str:
     """Sheet/Excel enquiry 1 becomes ENQ-000001. Wider numbers keep every digit."""
     return f"ENQ-{int(number):06d}"
@@ -331,8 +348,8 @@ def record_first_contact(db: Session, lead: Lead, by: User, method: str, result:
     lead.first_contact_result = result
     lead.first_contact_by = by.id
     lead.first_contact_notes = notes
-    # Contacting clears overdue — late contact still counts as contact done.
-    lead.sla_state = "COMPLETED"
+    # First touch clears the assignment overdue and starts a fresh 3-day follow-up window.
+    refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=by.id, activity_type="First Contact",
         activity_at=now, notes=notes or result, outcome=result,

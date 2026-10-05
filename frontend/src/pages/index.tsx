@@ -2049,10 +2049,12 @@ export function Leads() {
   const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
   const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
   const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
-  /** Edit Category/Progress/Remarks only for new (no remarks yet) or after Reopen. After save, show numbered history. Use + for next progress (works for Overdue/Pending too). */
+  /** Edit Category/Progress/Remarks for new leads, after Reopen, or when overdue (always editable until Converted). Use + for next progress. */
   const canEditWorkFields = (lead: any) => {
     if (role !== 'EMPLOYEE') return false;
     if (isConvertedLocked(lead)) return false;
+    if (isNotInterestedLocked(lead)) return !!(expandedRows[lead.id]);
+    if (lead.sla_state === 'OVERDUE') return true;
     return !!(expandedRows[lead.id] || !lead.employee_remarks);
   };
   const statusLabel = (lead: any) => {
@@ -2136,8 +2138,10 @@ export function Leads() {
       const stampedRemarks = done && !reopening && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
         ? (lead.employee_remarks || rawRemarks)
         : withUpdateStamp(rawRemarks);
-      // API only accepts PENDING/COMPLETED — never send OVERDUE (that caused the save popup).
-      const nextSla = done ? 'COMPLETED' : reopening ? 'PENDING' : null;
+      // Only Converted / Not Interested permanently complete SLA. Other Done/Save
+      // actions restart a 3-day follow-up window (including overdue leads).
+      const terminal = actionName === 'Converted' || actionName === 'Not Interested';
+      const nextSla = (done && terminal) ? 'COMPLETED' : reopening ? 'PENDING' : null;
       const { data } = await api.post(`/leads/${lead.id}/status`, {
         new_status_id: draft.progress || lead.status_id,
         reason: stampedRemarks,
@@ -2397,20 +2401,20 @@ export function Leads() {
                     </td>
                     <td className="td align-top">
                       {canEditWorkFields(l) ? (
-                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).review}
+                        <select className="input text-xs" disabled={isOutreachLocked(l)} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
-                      {canEditWorkFields(l) && (l.sla_state === 'COMPLETED'
-                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : isNotInterestedLocked(l) ? '✓ Not interested — click Reopen for email and quotation' : '✓ Completed — reopen to edit'}</span>
+                      {canEditWorkFields(l) && (isOutreachLocked(l)
+                        ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : '✓ Not interested — click Reopen for email and quotation'}</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
                       {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
                     </td>
                     <td className="td align-top">
                       {canEditWorkFields(l) ? (
-                        <select className="input text-xs" disabled={l.sla_state === 'COMPLETED'} value={draftFor(l).progress}
+                        <select className="input text-xs" disabled={isOutreachLocked(l)} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
                           <option value="">Select progress…</option>
                           {actionOptions.map((option) => {
@@ -2430,12 +2434,12 @@ export function Leads() {
                           </select>
                         </div>
                       ))}
-                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={l.sla_state === 'COMPLETED'} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
+                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={isOutreachLocked(l)} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top">
                       {canEditWorkFields(l) ? (
                         <AutoGrowRemarks
-                          disabled={l.sla_state === 'COMPLETED'}
+                          disabled={isOutreachLocked(l)}
                           placeholder="Enter customer conversation remarks…"
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}

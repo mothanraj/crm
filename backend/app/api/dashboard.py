@@ -158,37 +158,6 @@ def _empty_progress_counts() -> dict:
     }
 
 
-def _lead_progress_history(db: Session, lead_ids: list) -> dict:
-    """Distinct progress buckets each lead has ever reached (activities + status history + current)."""
-    by_lead: dict = defaultdict(set)
-    if not lead_ids:
-        return by_lead
-    # Work Progress saves (employee progress updates)
-    for lid, outcome in (
-        db.query(LeadActivity.lead_id, LeadActivity.outcome)
-        .filter(
-            LeadActivity.lead_id.in_(lead_ids),
-            LeadActivity.activity_type == "Work Progress",
-        )
-        .all()
-    ):
-        key = _norm_progress_bucket(outcome)
-        if key:
-            by_lead[lid].add(key)
-    # Status change history
-    NewStatus = LeadStatus  # noqa: N806 — alias for join clarity
-    for lid, st_name in (
-        db.query(LeadStatusHistory.lead_id, NewStatus.name)
-        .join(NewStatus, LeadStatusHistory.new_status_id == NewStatus.id)
-        .filter(LeadStatusHistory.lead_id.in_(lead_ids))
-        .all()
-    ):
-        key = _norm_progress_bucket(st_name)
-        if key:
-            by_lead[lid].add(key)
-    return by_lead
-
-
 def _kpis(db: Session, u: User | None = None):
     emp = _emp_clauses(u)
     is_emp = _is_employee(u)
@@ -897,35 +866,22 @@ def _ordered_sources(matrix: dict) -> list[str]:
 
 
 def _source_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
-    """Lead Source report: total by enquiry month; progress columns from each lead's history."""
-    rows_q = (
-        db.query(Lead.id, LeadSource.name, LeadStatus.name)
-        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
-        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(_date_filter(start, end))
-        .all()
-    )
-    lead_ids = [lid for lid, _, _ in rows_q]
-    hist = _lead_progress_history(db, lead_ids)
-    # Include current status in history set
-    for lid, _src, st in rows_q:
-        key = _norm_progress_bucket(st)
-        if key:
-            hist[lid].add(key)
-
-    buckets: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_SOURCES}
-    for lid, src, _st in rows_q:
-        name = canonical_source(src)
-        b = buckets.setdefault(name, _empty_progress_counts())
-        b["total"] += 1
-        for key in hist.get(lid, ()):
-            b[key] = b.get(key, 0) + 1
-
+    """Lead Source report: live current-status counts (same rules as dashboard by-source)."""
+    matrix = _by_source_matrix(db, start, end)
     rows = []
     totals = _empty_progress_counts()
-    for src in _ordered_sources(buckets):
-        m = buckets[src]
-        row = {"source": src, **{k: int(m.get(k, 0)) for k in totals}}
+    for src in _ordered_sources(matrix):
+        m = matrix[src]
+        row = {
+            "source": src,
+            "total": int(m.get("total", 0)),
+            "in_followup": int(m.get(STATUS_FOLLOWUP, 0)),
+            "meeting": int(m.get(STATUS_MEETING, 0) or m.get("Meeting", 0)),
+            "site_visit": int(m.get("Site Visit", 0)),
+            "quote_sent": int(m.get(STATUS_QUOTE, 0)),
+            "converted": int(m.get(STATUS_CONVERTED, 0)),
+            "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
+        }
         rows.append(row)
         for k in totals:
             totals[k] += row[k]
@@ -938,30 +894,26 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
     }
 
 
-def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
-    """Product report: total by enquiry month; progress columns from each lead's history."""
+def _product_live_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
+    """Live product funnel: total + progress columns from each lead's *current* status only."""
     rows_by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
     query = (
-        db.query(Lead.id, Product.name, LeadStatus.name)
+        db.query(Product.name, LeadStatus.name, func.count(Lead.id))
         .select_from(Lead)
         .outerjoin(Product, Lead.product_id == Product.id)
         .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
         .filter(_date_filter(start, end, u))
+        .group_by(Product.name, LeadStatus.name)
         .all()
     )
-    lead_ids = [lid for lid, _, _ in query]
-    hist = _lead_progress_history(db, lead_ids)
-    for lid, _product, st in query:
-        key = _norm_progress_bucket(st)
-        if key:
-            hist[lid].add(key)
-
-    for lid, product, _st in query:
+    for product, status, count in query:
         name = product or "Unmapped"
         row = rows_by_product.setdefault(name, _empty_progress_counts())
-        row["total"] += 1
-        for key in hist.get(lid, ()):
-            row[key] = row.get(key, 0) + 1
+        n = int(count or 0)
+        row["total"] += n
+        key = _norm_progress_bucket(status)
+        if key:
+            row[key] = int(row.get(key, 0)) + n
 
     ordered = list(CANONICAL_PRODUCTS) + sorted(p for p in rows_by_product if p not in CANONICAL_PRODUCTS)
     rows = []
@@ -979,6 +931,11 @@ def _product_details_payload(db: Session, start: date | None, end: date | None, 
         "rows": rows,
         "totals": totals,
     }
+
+
+def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
+    """Product report: same live current-status counts as the dashboard (no progress history)."""
+    return _product_live_payload(db, start, end, mode, u)
 
 
 def _normalize_customer_review(raw: str | None) -> str:
@@ -1039,7 +996,7 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
 
 @router.get("/dashboard/by-product")
 def by_product(db: Session = Depends(get_db), u: User = Depends(current_user)):
-    return _product_details_payload(db, None, None, "custom", u)
+    return _product_live_payload(db, None, None, "custom", u)
 
 
 @router.get("/dashboard/by-category")
