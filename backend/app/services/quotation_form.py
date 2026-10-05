@@ -3,8 +3,8 @@
 REF format: EEPLCP{DDMM}Q{n}R{rev}
   EEPLCP = Estar Engineers Pvt Ltd Car Parking
   DDMM   = enquiry date day+month (e.g. 1009 for 10 Sep)
-  Qn     = global quotation sequence (1st, 22nd, 76th, …)
-  Rn     = revision (R0 on assign, then R1, R2, … on edits)
+  Qn     = quotation sequence in the order forms are first opened (1st open → Q1, 2nd → Q2, …)
+  Rn     = revision (R0 on first open, then R1, R2, … on edits)
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def build_quotation_number(
 
 
 def ensure_quotation_on_assign(db: Session, lead: Lead) -> Quotation:
-    """Create Draft quotation with REF …R0 when a lead is assigned (if none yet)."""
+    """Create Draft quotation with next Qn when the employee first opens the form."""
     existing = (
         db.query(Quotation)
         .filter_by(lead_id=lead.id)

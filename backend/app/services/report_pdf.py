@@ -18,7 +18,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 LOGO = Path(__file__).resolve().parents[1] / "assets" / "company-logo.jpg"
 NAVY = colors.HexColor("#1e3a5f")
 GREEN = colors.HexColor("#3F6212")
-KEYS = ("total", "in_followup", "meeting", "site_visit", "quote_sent", "not_interested")
+KEYS = ("total", "in_followup", "meeting", "site_visit", "quote_sent", "converted", "not_interested")
 CHART_COLORS = [
     colors.HexColor("#1971C2"),
     colors.HexColor("#65A30D"),
@@ -546,18 +546,18 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
                           alignment=1, textColor=colors.HexColor("#334155"))
     story = []
     story.append(Paragraph(title, heading))
-    headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     rows = [[Paragraph(value, header) for value in headers]]
     for row in payload["rows"]:
         rows.append([
             Paragraph(escape(str(row[field])), cell),
-            *[Paragraph(str(row[key]), cell) for key in KEYS],
+            *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS],
         ])
     if not payload["rows"]:
         rows.append([Paragraph("No leads found", cell), *[Paragraph("0", cell) for _ in KEYS]])
-    rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"][key]), cell) for key in KEYS]])
-    col_w = (width - 72) / 7
-    table = Table(rows, colWidths=[col_w] * 7, repeatRows=1, hAlign="CENTER")
+    rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"].get(key, 0)), cell) for key in KEYS]])
+    col_w = (width - 72) / 8
+    table = Table(rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style())
     story.append(table)
 
@@ -921,13 +921,14 @@ def build_quotation_pdf(payload: dict) -> bytes:
     story.append(Spacer(1, 10))
 
     headers = [
-        "S.No", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
+        "S.No", "REF", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
         "Units/Cars", "Order Value (Excl GST)", "GST", "Grand Total",
     ]
     rows = [[Paragraph(h, header) for h in headers]]
-    for i, row in enumerate(payload.get("rows") or [], start=1):
+    for row in payload.get("rows") or []:
         rows.append([
-            Paragraph(str(i), cell),
+            Paragraph(str(row.get("sno") or ""), cell),
+            Paragraph(escape(str(row.get("ref") or "—")), cell),
             Paragraph(escape(str(row.get("date") or "—")), cell),
             Paragraph(escape(str(row.get("enquiry_number") or "—")), cell),
             Paragraph(escape(str(row.get("customer_name") or "—")), cell),
@@ -939,11 +940,11 @@ def build_quotation_pdf(payload: dict) -> bytes:
             Paragraph(_inr(row.get("grand_total")), cell),
         ])
     if len(rows) == 1:
-        rows.append([Paragraph("No quotations found", cell), *[Paragraph("—", cell) for _ in range(9)]])
+        rows.append([Paragraph("No quotations found", cell), *[Paragraph("—", cell) for _ in range(10)]])
     totals = payload.get("totals") or {}
     rows.append([
         Paragraph("", cell), Paragraph("", cell), Paragraph("", cell),
-        Paragraph("", cell), Paragraph("", cell),
+        Paragraph("", cell), Paragraph("", cell), Paragraph("", cell),
         Paragraph("TOTAL", header),
         Paragraph("", cell),
         Paragraph(_inr(totals.get("order_value_excl_gst")), cell),
@@ -952,7 +953,8 @@ def build_quotation_pdf(payload: dict) -> bytes:
     ])
 
     usable = width - 56
-    weights = [0.05, 0.09, 0.10, 0.14, 0.09, 0.14, 0.08, 0.12, 0.09, 0.10]
+    # Slightly tighter REF; more room for Grand Total
+    weights = [0.04, 0.15, 0.07, 0.11, 0.10, 0.07, 0.10, 0.06, 0.10, 0.07, 0.13]
     col_w = [usable * w for w in weights]
     table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style(AMBER))

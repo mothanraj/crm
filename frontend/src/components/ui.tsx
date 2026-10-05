@@ -33,28 +33,28 @@ export const PROGRESS_TILE_TEXT: Record<string, string> = {
 export const CATEGORY_HEX: Record<string, string> = {
   'A+ (Immediate)': '#D946EF',
   'A (3-6 months)': '#EC4899',
-  'B (1 year)': '#6366F1',
+  'B (6-9 months)': '#6366F1',
   'C (Planning Stage)': '#64748B',
 };
 
 export const CATEGORY_TILE_BG: Record<string, string> = {
   'A+ (Immediate)': 'bg-[#D946EF]',
   'A (3-6 months)': 'bg-[#EC4899]',
-  'B (1 year)': 'bg-[#6366F1]',
+  'B (6-9 months)': 'bg-[#6366F1]',
   'C (Planning Stage)': 'bg-[#64748B]',
 };
 
 export const CATEGORY_TILE_TEXT: Record<string, string> = {
   'A+ (Immediate)': 'text-white',
   'A (3-6 months)': 'text-white',
-  'B (1 year)': 'text-white',
+  'B (6-9 months)': 'text-white',
   'C (Planning Stage)': 'text-white',
 };
 
 export function categoryTileBg(label: string): string {
   if (label.startsWith('A+')) return CATEGORY_TILE_BG['A+ (Immediate)'];
   if (label.startsWith('A ')) return CATEGORY_TILE_BG['A (3-6 months)'];
-  if (label.startsWith('B ')) return CATEGORY_TILE_BG['B (1 year)'];
+  if (label.startsWith('B ')) return CATEGORY_TILE_BG['B (6-9 months)'];
   if (label.startsWith('C ')) return CATEGORY_TILE_BG['C (Planning Stage)'];
   return CATEGORY_TILE_BG[label] || 'bg-[#64748B]';
 }
@@ -62,7 +62,7 @@ export function categoryTileBg(label: string): string {
 export function categoryTileText(label: string): string {
   if (label.startsWith('A+')) return CATEGORY_TILE_TEXT['A+ (Immediate)'];
   if (label.startsWith('A ')) return CATEGORY_TILE_TEXT['A (3-6 months)'];
-  if (label.startsWith('B ')) return CATEGORY_TILE_TEXT['B (1 year)'];
+  if (label.startsWith('B ')) return CATEGORY_TILE_TEXT['B (6-9 months)'];
   if (label.startsWith('C ')) return CATEGORY_TILE_TEXT['C (Planning Stage)'];
   return CATEGORY_TILE_TEXT[label] || 'text-white';
 }

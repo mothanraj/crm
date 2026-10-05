@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, Notification, Product, Quotation, SiteVisit, User
+from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 from app.services.pricing import PRODUCT_PRICES
 
@@ -29,8 +29,9 @@ STATUS_PIPELINE = "A+ - Immediate"
 STATUS_NEW = "New Lead"
 STATUS_ASSIGNED = "Assigned"
 STATUS_MEETING = "Meeting"
-CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"]
+CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (Planning Stage)"]
 CUSTOMER_REVIEW_ALIASES = {
+    "B (1 year)": "B (6-9 months)",
     "C (plan stage)": "C (Planning Stage)",
     "Planning Stage": "C (Planning Stage)",
 }
@@ -87,8 +88,8 @@ def _resolve_range(
             raise HTTPException(400, "Invalid month. Use YYYY-MM") from exc
         return start, end, "month"
     if mode_l in ("week", "weekly", "week-wise"):
-        anchor = _parse_date(week or from_date, "week") or date.today()
-        start = anchor - timedelta(days=anchor.weekday())  # Monday
+        # Chosen day → 7 calendar days (start through start+6).
+        start = _parse_date(week or from_date, "week") or date.today()
         end = start + timedelta(days=6)
         return start, end, "week"
     start = _parse_date(from_date, "from_date")
@@ -123,6 +124,69 @@ def _date_filter(start: date | None, end: date | None, u: User | None = None):
     if end:
         clauses.append(Lead.enquiry_date <= end)
     return and_(*clauses)
+
+
+def _norm_progress_bucket(name: str | None) -> str | None:
+    """Map a status/outcome name to a report progress column key."""
+    if not name:
+        return None
+    n = str(name).strip()
+    if n == STATUS_FOLLOWUP:
+        return "in_followup"
+    if n == STATUS_MEETING:
+        return "meeting"
+    if n == "Site Visit":
+        return "site_visit"
+    if n == STATUS_QUOTE:
+        return "quote_sent"
+    if n == STATUS_CONVERTED:
+        return "converted"
+    if n in STATUS_NOT_INT:
+        return "not_interested"
+    return None
+
+
+def _empty_progress_counts() -> dict:
+    return {
+        "total": 0,
+        "in_followup": 0,
+        "meeting": 0,
+        "site_visit": 0,
+        "quote_sent": 0,
+        "converted": 0,
+        "not_interested": 0,
+    }
+
+
+def _lead_progress_history(db: Session, lead_ids: list) -> dict:
+    """Distinct progress buckets each lead has ever reached (activities + status history + current)."""
+    by_lead: dict = defaultdict(set)
+    if not lead_ids:
+        return by_lead
+    # Work Progress saves (employee progress updates)
+    for lid, outcome in (
+        db.query(LeadActivity.lead_id, LeadActivity.outcome)
+        .filter(
+            LeadActivity.lead_id.in_(lead_ids),
+            LeadActivity.activity_type == "Work Progress",
+        )
+        .all()
+    ):
+        key = _norm_progress_bucket(outcome)
+        if key:
+            by_lead[lid].add(key)
+    # Status change history
+    NewStatus = LeadStatus  # noqa: N806 — alias for join clarity
+    for lid, st_name in (
+        db.query(LeadStatusHistory.lead_id, NewStatus.name)
+        .join(NewStatus, LeadStatusHistory.new_status_id == NewStatus.id)
+        .filter(LeadStatusHistory.lead_id.in_(lead_ids))
+        .all()
+    ):
+        key = _norm_progress_bucket(st_name)
+        if key:
+            by_lead[lid].add(key)
+    return by_lead
 
 
 def _kpis(db: Session, u: User | None = None):
@@ -620,38 +684,68 @@ def _as_rupee_int(v) -> int:
 
 
 def _quotation_report_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
-    """Quotation report (no Quotation Ref / Revision). Prefer quotations table; fall back to quoted leads."""
+    """Quotation report: only leads whose progress is Quotation sent, ordered by REF series (Q1…Qn)."""
     from app.services.pricing import GST_RATE
+    from app.services.quotation_form import parse_quote_seq
 
     rows: list[dict] = []
-    q = (
-        db.query(Quotation, Lead, Product)
-        .join(Lead, Quotation.lead_id == Lead.id)
+    # One row per Quotation-sent lead (latest quotation form values when present).
+    lead_q = (
+        db.query(Lead, Product, LeadStatus)
         .outerjoin(Product, Lead.product_id == Product.id)
-        .filter(Lead.is_active.is_(True))
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(
+            Lead.is_active.is_(True),
+            LeadStatus.name == STATUS_QUOTE,
+        )
     )
     if start:
-        q = q.filter(func.coalesce(Quotation.quotation_date, Lead.enquiry_date) >= start)
+        lead_q = lead_q.filter(Lead.enquiry_date >= start)
     if end:
-        q = q.filter(func.coalesce(Quotation.quotation_date, Lead.enquiry_date) <= end)
-    quote_rows = q.order_by(func.coalesce(Quotation.quotation_date, Lead.enquiry_date).desc()).all()
+        lead_q = lead_q.filter(Lead.enquiry_date <= end)
+    leads = lead_q.all()
 
-    seen_leads: set = set()
-    for quote, lead, product in quote_rows:
-        seen_leads.add(lead.id)
-        excl = quote.amount_excl
-        gst = quote.gst
-        grand = quote.grand_total
-        if excl is None and grand is not None:
+    lead_ids = [lead.id for lead, _p, _s in leads]
+    quote_by_lead: dict = {}
+    if lead_ids:
+        for quote in (
+            db.query(Quotation)
+            .filter(Quotation.lead_id.in_(lead_ids))
+            .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
+            .all()
+        ):
+            if quote.lead_id not in quote_by_lead:
+                quote_by_lead[quote.lead_id] = quote
+
+    for lead, product, _st in leads:
+        quote = quote_by_lead.get(lead.id)
+        excl = gst = grand = None
+        units = lead.quantity_num
+        dt = lead.enquiry_date
+        ref = ""
+        if quote is not None:
+            ref = (quote.quotation_number or "").strip()
+            excl = quote.amount_excl
+            gst = quote.gst
+            grand = quote.grand_total
+            if quote.units is not None:
+                units = quote.units
+            if quote.quotation_date is not None:
+                dt = quote.quotation_date
+        if excl is None and grand is None and lead.quotation_value is not None:
+            # Stored quotation_value is grand total (incl. GST) from the form.
+            grand = float(lead.quotation_value or 0)
+            excl = float(grand) / float(1 + GST_RATE) if grand else 0.0
+            gst = float(grand) - float(excl)
+        elif excl is None and grand is not None:
             excl = float(grand) / float(1 + GST_RATE)
             gst = float(grand) - float(excl)
         elif excl is not None and gst is None:
             gst = float(excl) * float(GST_RATE)
             if grand is None:
                 grand = float(excl) + float(gst)
-        units = quote.units if quote.units is not None else lead.quantity_num
-        dt = quote.quotation_date or lead.enquiry_date
         rows.append({
+            "ref": ref,
             "date": dt.isoformat() if dt else None,
             "enquiry_number": lead.enquiry_number or "",
             "customer_name": lead.customer_name or "",
@@ -663,38 +757,16 @@ def _quotation_report_payload(db: Session, start: date | None, end: date | None,
             "grand_total": _as_rupee_int(grand if grand is not None else (
                 (float(excl or 0) + float(gst or 0)) if excl is not None else 0
             )),
+            "_seq": parse_quote_seq(ref) or 10**9,
+            "_date": dt.isoformat() if dt else "",
         })
 
-    lead_q = (
-        db.query(Lead, Product, LeadStatus)
-        .outerjoin(Product, Lead.product_id == Product.id)
-        .join(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(
-            Lead.is_active.is_(True),
-            Lead.quotation_value.isnot(None),
-            LeadStatus.name == STATUS_QUOTE,
-        )
-    )
-    if start:
-        lead_q = lead_q.filter(Lead.enquiry_date >= start)
-    if end:
-        lead_q = lead_q.filter(Lead.enquiry_date <= end)
-    for lead, product, _st in lead_q.order_by(Lead.enquiry_date.desc()).all():
-        if lead.id in seen_leads:
-            continue
-        excl = float(lead.quotation_value or 0)
-        gst = excl * float(GST_RATE)
-        rows.append({
-            "date": lead.enquiry_date.isoformat() if lead.enquiry_date else None,
-            "enquiry_number": lead.enquiry_number or "",
-            "customer_name": lead.customer_name or "",
-            "state": lead.city or "",
-            "parking_type": (product.name if product else None) or lead.product_raw or "",
-            "units": float(lead.quantity_num) if lead.quantity_num is not None else None,
-            "order_value_excl_gst": _as_rupee_int(excl),
-            "gst": _as_rupee_int(gst),
-            "grand_total": _as_rupee_int(excl + gst),
-        })
+    # Series order: Q1, Q2, … then undated/no-REF last.
+    rows.sort(key=lambda r: (r["_seq"], r["_date"] or "9999", r["enquiry_number"] or ""))
+    for i, row in enumerate(rows, start=1):
+        row["sno"] = i
+        row.pop("_seq", None)
+        row.pop("_date", None)
 
     totals = {
         "order_value_excl_gst": sum(r["order_value_excl_gst"] for r in rows),
@@ -740,19 +812,19 @@ def reports_quotations_export(
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _quotation_report_payload(db, start, end, resolved)
     headers = [
-        "S.No", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
+        "S.No", "REF", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
         "No. of Units/Cars", "Order Value (Excl GST)", "GST", "Grand Total",
     ]
     body = []
-    for i, r in enumerate(payload["rows"], start=1):
+    for r in payload["rows"]:
         body.append([
-            i, r["date"] or "", r["enquiry_number"], r["customer_name"], r["state"],
+            r.get("sno") or "", r.get("ref") or "", r["date"] or "", r["enquiry_number"], r["customer_name"], r["state"],
             r["parking_type"], r["units"] if r["units"] is not None else "",
             r["order_value_excl_gst"], r["gst"], r["grand_total"],
         ])
     t = payload["totals"]
     body.append([
-        "", "", "", "", "", "TOTAL", "",
+        "", "", "", "", "", "", "TOTAL", "",
         t["order_value_excl_gst"], t["gst"], t["grand_total"],
     ])
     label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
@@ -825,22 +897,35 @@ def _ordered_sources(matrix: dict) -> list[str]:
 
 
 def _source_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
-    matrix = _by_source_matrix(db, start, end)
+    """Lead Source report: total by enquiry month; progress columns from each lead's history."""
+    rows_q = (
+        db.query(Lead.id, LeadSource.name, LeadStatus.name)
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end))
+        .all()
+    )
+    lead_ids = [lid for lid, _, _ in rows_q]
+    hist = _lead_progress_history(db, lead_ids)
+    # Include current status in history set
+    for lid, _src, st in rows_q:
+        key = _norm_progress_bucket(st)
+        if key:
+            hist[lid].add(key)
+
+    buckets: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_SOURCES}
+    for lid, src, _st in rows_q:
+        name = canonical_source(src)
+        b = buckets.setdefault(name, _empty_progress_counts())
+        b["total"] += 1
+        for key in hist.get(lid, ()):
+            b[key] = b.get(key, 0) + 1
+
     rows = []
-    totals = {
-        "total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "not_interested": 0,
-    }
-    for src in _ordered_sources(matrix):
-        m = matrix[src]
-        row = {
-            "source": src,
-            "total": int(m.get("total", 0)),
-            "in_followup": int(m.get(STATUS_FOLLOWUP, 0)),
-            "meeting": int(m.get("Meeting", 0)),
-            "site_visit": int(m.get("Site Visit", 0)),
-            "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
-            "quote_sent": int(m.get(STATUS_QUOTE, 0)),
-        }
+    totals = _empty_progress_counts()
+    for src in _ordered_sources(buckets):
+        m = buckets[src]
+        row = {"source": src, **{k: int(m.get(k, 0)) for k in totals}}
         rows.append(row)
         for k in totals:
             totals[k] += row[k]
@@ -854,33 +939,46 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
 
 
 def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
-    # Always list every canonical product (incl. zero-lead ones like Pit Stack Parking).
-    rows_by_product: dict[str, dict] = {name: {"total": 0} for name in CANONICAL_PRODUCTS}
-    query = (db.query(Product.name, LeadStatus.name, func.count(Lead.id))
-             .select_from(Lead)
-             .outerjoin(Product, Lead.product_id == Product.id)
-             .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-             .filter(_date_filter(start, end, u))
-             .group_by(Product.name, LeadStatus.name).all())
-    for product, status, count in query:
+    """Product report: total by enquiry month; progress columns from each lead's history."""
+    rows_by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
+    query = (
+        db.query(Lead.id, Product.name, LeadStatus.name)
+        .select_from(Lead)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end, u))
+        .all()
+    )
+    lead_ids = [lid for lid, _, _ in query]
+    hist = _lead_progress_history(db, lead_ids)
+    for lid, _product, st in query:
+        key = _norm_progress_bucket(st)
+        if key:
+            hist[lid].add(key)
+
+    for lid, product, _st in query:
         name = product or "Unmapped"
-        row = rows_by_product.setdefault(name, {"total": 0})
-        if status:
-            row[status] = int(count)
-        row["total"] += int(count)
+        row = rows_by_product.setdefault(name, _empty_progress_counts())
+        row["total"] += 1
+        for key in hist.get(lid, ()):
+            row[key] = row.get(key, 0) + 1
+
     ordered = list(CANONICAL_PRODUCTS) + sorted(p for p in rows_by_product if p not in CANONICAL_PRODUCTS)
     rows = []
-    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
+    totals = _empty_progress_counts()
     for product in ordered:
         data = rows_by_product[product]
-        row = {"product": product, "total": data.get("total", 0),
-               "in_followup": data.get(STATUS_FOLLOWUP, 0), "meeting": data.get("Meeting", 0),
-               "site_visit": data.get("Site Visit", 0), "not_interested": sum(data.get(s, 0) for s in STATUS_NOT_INT),
-               "quote_sent": data.get(STATUS_QUOTE, 0)}
+        row = {"product": product, **{k: int(data.get(k, 0)) for k in totals}}
         rows.append(row)
-        for key in totals: totals[key] += row[key]
-    return {"mode": mode, "effective_from": start.isoformat() if start else None,
-            "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
+        for key in totals:
+            totals[key] += row[key]
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "rows": rows,
+        "totals": totals,
+    }
 
 
 def _normalize_customer_review(raw: str | None) -> str:
@@ -895,7 +993,7 @@ def _normalize_customer_review(raw: str | None) -> str:
 
 
 def _category_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
-    """Category funnel: A+ (Immediate), A (3-6 months), B (1 year), C (Planning Stage)."""
+    """Category funnel: A+ (Immediate), A (3-6 months), B (6-9 months), C (Planning Stage)."""
     rows_by_cat: dict[str, dict] = {name: {"total": 0} for name in CUSTOMER_REVIEW_ORDER}
     query = (
         db.query(Lead.customer_review, LeadStatus.name, func.count(Lead.id))
@@ -914,7 +1012,7 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
     extras = [name for name in ("Other", "Unreviewed") if name in rows_by_cat and rows_by_cat[name].get("total", 0)]
     ordered = list(CUSTOMER_REVIEW_ORDER) + extras
     rows = []
-    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
+    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "converted": 0, "not_interested": 0}
     for category in ordered:
         data = rows_by_cat.get(category) or {"total": 0}
         row = {
@@ -923,8 +1021,9 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
             "in_followup": int(data.get(STATUS_FOLLOWUP, 0)),
             "meeting": int(data.get("Meeting", 0)),
             "site_visit": int(data.get("Site Visit", 0)),
-            "not_interested": int(sum(data.get(s, 0) for s in STATUS_NOT_INT)),
             "quote_sent": int(data.get(STATUS_QUOTE, 0)),
+            "converted": int(data.get(STATUS_CONVERTED, 0)),
+            "not_interested": int(sum(data.get(s, 0) for s in STATUS_NOT_INT)),
         }
         rows.append(row)
         for key in totals:
@@ -943,6 +1042,11 @@ def by_product(db: Session = Depends(get_db), u: User = Depends(current_user)):
     return _product_details_payload(db, None, None, "custom", u)
 
 
+@router.get("/dashboard/by-category")
+def by_category(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    return _category_details_payload(db, None, None, "custom", u)
+
+
 @router.get("/reports/product-details")
 def product_details(db: Session = Depends(get_db), u: User = Depends(current_user), mode: str = Query("custom"), month: str | None = None, week: str | None = None, from_date: str | None = None, to_date: str | None = None):
     _require_reports(u)
@@ -955,10 +1059,10 @@ def product_details_export(db: Session = Depends(get_db), u: User = Depends(curr
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _product_details_payload(db, start, end, resolved)
-    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
-    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]] for r in payload["rows"]]
+    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]] for r in payload["rows"]]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
+    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
 
 
@@ -990,13 +1094,13 @@ def category_details_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _category_details_payload(db, start, end, resolved)
-    headers = ["Category", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    headers = ["Category", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     body = [
-        [r["category"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]]
+        [r["category"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]]
         for r in payload["rows"]
     ]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
+    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
     return _xlsx_download("category-wise-details.xlsx", headers, body, title="Category-wise Leads")
 
 
@@ -1028,15 +1132,15 @@ def source_details_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _source_details_payload(db, start, end, resolved)
-    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     body = []
     for r in payload["rows"]:
         body.append([
-            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"],
+            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"],
         ])
     t = payload["totals"]
     body.append([
-        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"],
+        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"],
     ])
     # Meta sheet row for range
     label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
@@ -1073,8 +1177,8 @@ def report_pdf(
         )
         filename = "monthly-lead-volume.pdf"
     elif report_type == "detailed":
-        start, end = _resolve_month_span(from_month, to_month)
-        payload = _detailed_leads_payload(db, start, end, from_month, to_month)
+        start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
+        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
         content = build_report_pdf(payload, "detailed")
         filename = "detailed-lead-report.pdf"
     else:
@@ -1397,14 +1501,38 @@ def _numbered_lines(values: list[str]) -> str:
     return "\n".join(f"{i}. {v}" for i, v in enumerate(cleaned, 1))
 
 
+def _resolve_detailed_range(
+    mode: str | None,
+    month: str | None,
+    week: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    from_month: str | None,
+    to_month: str | None,
+) -> tuple[date | None, date | None, str]:
+    """Weekly / monthly / custom for Detailed Lead Report (falls back to from_month–to_month)."""
+    mode_l = (mode or "custom").lower().strip()
+    if mode_l in ("week", "weekly", "week-wise"):
+        return _resolve_range("week", None, from_date, to_date, week)
+    if mode_l in ("month", "monthly", "month-wise"):
+        return _resolve_range("month", month or from_month, None, None, None)
+    if from_date or to_date:
+        return _resolve_range("custom", None, from_date, to_date, None)
+    if from_month or to_month:
+        start, end = _resolve_month_span(from_month, to_month)
+        return start, end, "month"
+    return _resolve_range("custom", None, None, None, None)
+
+
 def _detailed_leads_payload(
     db: Session,
     start: date | None,
     end: date | None,
     from_month: str | None = None,
     to_month: str | None = None,
+    mode: str = "month",
 ) -> dict:
-    """Row-level lead details (same fields as the Leads page) for a month span."""
+    """Row-level lead details (same fields as the Leads page) for a date span."""
     filters = [Lead.is_active.is_(True)]
     if start:
         filters.append(Lead.enquiry_date >= start)
@@ -1486,6 +1614,7 @@ def _detailed_leads_payload(
             "quotation_value": quotation_value,
         })
     return {
+        "mode": mode,
         "from_month": from_month,
         "to_month": to_month,
         "effective_from": start.isoformat() if start else None,
@@ -1498,21 +1627,33 @@ def _detailed_leads_payload(
 @router.get("/reports/detailed-leads")
 def detailed_leads(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    from_month: str | None = None, to_month: str | None = None,
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    from_month: str | None = None,
+    to_month: str | None = None,
 ):
     _require_reports(u)
-    start, end = _resolve_month_span(from_month, to_month)
-    return _detailed_leads_payload(db, start, end, from_month, to_month)
+    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
+    return _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
 
 
 @router.get("/reports/detailed-leads/export")
 def detailed_leads_export(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    from_month: str | None = None, to_month: str | None = None,
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    from_month: str | None = None,
+    to_month: str | None = None,
 ):
     _require_reports(u)
-    start, end = _resolve_month_span(from_month, to_month)
-    payload = _detailed_leads_payload(db, start, end, from_month, to_month)
+    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
+    payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
     headers = [
         "Enquiry No", "Enquiry Date", "Customer", "Company", "City", "Contact", "Email",
         "Cars", "Product", "Source", "Current Status", "Progress", "Category", "Employee",
@@ -1527,7 +1668,7 @@ def detailed_leads_export(
     return _xlsx_download("detailed-lead-report.xlsx", headers, body, title="Detailed Lead Report")
 
 
-COMPARISON_CATEGORIES = ["A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (plan stage)"]
+COMPARISON_CATEGORIES = ["A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (plan stage)"]
 COMPARISON_ACTIONS = [
     "New Lead", "Assigned", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
 ]
