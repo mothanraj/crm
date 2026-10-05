@@ -216,7 +216,7 @@ def classify_intake_row(
     seen_phones: set[str] | None = None,
     seen_enqs: set[int] | None = None,
 ) -> dict:
-    """Shared Excel + Google Sheets rules.
+    """Shared Excel / Create Lead intake rules.
 
     A valid phone or a valid email is enough. Name, enquiry number, and the
     other columns may be blank. A supplied enquiry number must still be unique.

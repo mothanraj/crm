@@ -1,7 +1,10 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Ignore leftover .env keys (e.g. old SHEETS_* after Google Sheets removal).
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     DATABASE_URL: str = "postgresql+psycopg://crm:crm@localhost:5432/crm"
     JWT_SECRET: str = "change-me"
     JWT_ALGORITHM: str = "HS256"
@@ -21,12 +24,6 @@ class Settings(BaseSettings):
     BREVO_SENDER_EMAIL: str = ""
     BREVO_SENDER_NAME: str = "E-Star CRM"
     OVERDUE_DIGEST_HOUR: int = 9
-    # Google Sheets push sync (Apps Script -> POST /api/sheets/rows).
-    SHEETS_WEBHOOK_SECRET: str = ""
-    SHEETS_SIGNATURE_WINDOW_SEC: int = 300
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

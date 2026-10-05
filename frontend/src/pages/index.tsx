@@ -8,6 +8,7 @@ import { api } from '../services/api';
 import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Analytics } from './analytics';
+export { CreateLead } from './createLead';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
@@ -2125,7 +2126,7 @@ export function Leads() {
   };
   return (
     <div className="min-w-0 max-w-full">
-      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Excel import only · every customer auto-assigned round-robin`} />
+      <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Create Lead or Excel import · auto-assign round-robin when no employee is selected`} />
       <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
         <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <input className="input min-w-0" placeholder="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }} />
@@ -3535,8 +3536,8 @@ export function ImportPage() {
                 {batches.filter((b) => b.status === 'DONE').slice(0, 10).map((b) => (
                   <tr key={b.id} className="hover:bg-graphite-50">
                     <td className="td text-sm">
-                      <span className="text-[10px] uppercase tracking-wide text-graphite-400 mr-2">{b.source === 'sheets' ? 'Google Sheet' : 'Excel'}</span>
-                      {b.source === 'sheets' ? (b.sheet_name || 'Sheet sync') : b.file_name}
+                      <span className="text-[10px] uppercase tracking-wide text-graphite-400 mr-2">{b.source === 'sheets' ? 'Legacy' : 'Excel'}</span>
+                      {b.source === 'sheets' ? (b.sheet_name || 'Legacy sync') : b.file_name}
                       <div className="text-xs text-graphite-400">{b.source === 'sheets' ? b.file_name : b.sheet_name}</div>
                     </td>
                     <td className="td">{b.status}</td>

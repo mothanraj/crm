@@ -106,8 +106,8 @@ def choose_next_employee(db: Session, *, ignore_limit: bool = False) -> User | N
     """Next employee in the round-robin.
 
     By default only employees under the open-lead limit are eligible.
-    Sheet rows with no employee selected pass ignore_limit so the lead
-    still gets an owner when everyone is already at that limit.
+    Create Lead / import with no employee selected pass ignore_limit so the
+    lead still gets an owner when everyone is already at that limit.
     """
     all_emps = eligible_employees(db)
     if not all_emps:

@@ -19,10 +19,14 @@ from app.schemas import (
 )
 from app.services import live
 from app.services.lead_service import (
-    assign, change_status, notify_admins, open_reassignment_request,
-    record_first_contact, validate_assignee,
+    assign, auto_assign, change_status, employee_by_name, format_enquiry_number,
+    next_enquiry_number, notify_admins, open_reassignment_request,
+    record_first_contact, remember_assignment, validate_assignee,
 )
-from app.services.normalize import parse_quantity, normalize_car_count
+from app.services.normalize import (
+    allows_odd_cars, canonical_product_name, is_valid_email, is_valid_phone,
+    norm_phone, parse_quantity, normalize_car_count,
+)
 from app.services.pricing import apply_pricing_to_lead, calc_lead_value, round_money
 from app.utils.storage import get_storage
 
@@ -303,12 +307,152 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
     return {"total": total, "items": items}
 
 
+def _validate_form_cars(raw, product_name: str) -> tuple[int | None, str | None]:
+    """Create Lead cars rule.
+
+    ≥ 2 any whole number: Puzzle, Pit Puzzle, Shuttle, Car Elevator, ASRS.
+    ≥ 2 even only: Two Post, Four Post, Pit Stack, Tower.
+    Blank is allowed (optional).
+    """
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        return None, None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None, "You have entered wrong No. of Cars — must be a number"
+    if value != int(value) or value < 2:
+        return None, "You have entered wrong No. of Cars — whole number starting at 2"
+    cars = int(value)
+    product = canonical_product_name(product_name) or (product_name or "").strip()
+    if not product or allows_odd_cars(product):
+        return cars, None
+    if cars % 2 != 0:
+        return None, (
+            "You have entered wrong No. of Cars — even numbers only for "
+            "Tower / Two Post / Four Post / Pit Stack Parking"
+        )
+    return cars, None
+
+
 @router.post("")
-def create_lead(body: LeadCreate, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    raise HTTPException(
-        403,
-        "Leads can only be created by importing the Excel tracker. Use Import in the admin portal.",
+def create_lead(body: LeadCreate, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
+    """Manual Create Lead — phone or email alone is enough; other fields optional when blank."""
+    from app.api.importer import (
+        _default_status, _norm_product, _norm_source, _send_assignment_batches, parse_legacy_enq,
     )
+
+    phone = (body.contact_number or "").strip()
+    email = (body.email or "").strip()
+    name = (body.customer_name or "").strip()
+    product_name = (body.product_name or "").strip()
+    source_name = (body.source_name or "").strip()
+    cars_raw = body.number_of_cars if body.number_of_cars is not None else body.quantity_raw
+    enq_raw = str(body.enquiry_number or "").strip()
+
+    errors: list[str] = []
+    if enq_raw and not enq_raw.isdigit():
+        errors.append("You have entered wrong Enq no — numbers only")
+    if phone and not is_valid_phone(phone):
+        errors.append("You have entered wrong Contact No. — 10-digit Indian mobile starting with 6–9")
+    if email and not is_valid_email(email):
+        errors.append("You have entered wrong Email")
+    if not phone and not email:
+        errors.append("Enter a phone number or an email (either one is enough)")
+
+    cars, car_err = _validate_form_cars(cars_raw, product_name)
+    if car_err:
+        errors.append(car_err)
+
+    prod = None
+    if body.product_id or product_name:
+        prod = db.get(Product, body.product_id) if body.product_id else _norm_product(db, product_name)
+        if not prod:
+            errors.append("You have entered wrong Product / Type")
+
+    src = None
+    if body.source_id or source_name:
+        src = db.get(LeadSource, body.source_id) if body.source_id else _norm_source(db, source_name)
+        if not src:
+            errors.append("You have entered wrong Lead Source")
+
+    chosen = None
+    if body.primary_employee_id:
+        chosen = db.get(User, body.primary_employee_id)
+        try:
+            chosen = validate_assignee(chosen)
+        except ValueError:
+            errors.append("You have entered wrong Select employee")
+            chosen = None
+    elif (body.employee_name or "").strip():
+        chosen = employee_by_name(db, body.employee_name)
+        if not chosen:
+            errors.append("You have entered wrong Select employee")
+
+    phone_n = norm_phone(phone) if phone and is_valid_phone(phone) else ""
+    if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
+        errors.append("You have entered wrong Contact No. — duplicate phone already exists")
+
+    legacy = parse_legacy_enq(enq_raw) if enq_raw and enq_raw.isdigit() else None
+    if legacy is not None and (
+        db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
+        or db.query(Lead).filter_by(enquiry_number=format_enquiry_number(legacy)).first()
+    ):
+        errors.append(f"You have entered wrong Enq no — duplicate {format_enquiry_number(legacy)}")
+
+    if errors:
+        raise HTTPException(400, " · ".join(errors))
+
+    st = _default_status(db)
+    enquiry_number = format_enquiry_number(int(legacy)) if legacy is not None else next_enquiry_number(db)
+    lead = Lead(
+        enquiry_number=enquiry_number,
+        legacy_enquiry_no=legacy,
+        enquiry_date=body.enquiry_date or date.today(),
+        customer_name=name,
+        company_name=(body.company_name or "").strip(),
+        contact_number=phone,
+        contact_number_norm=phone_n,
+        alternate_contact=(body.alternate_contact or "").strip(),
+        email=email,
+        city=(body.city or body.location or "").strip(),
+        product_raw=prod.name if prod else product_name,
+        requirement=(body.requirement or "").strip(),
+        quantity_raw=str(cars) if cars is not None else "",
+        quantity_num=cars,
+        priority=(body.priority or "").strip(),
+        source_id=src.id if src else None,
+        product_id=prod.id if prod else None,
+        status_id=st.id,
+        sla_state="PENDING",
+        created_by=admin.id,
+    )
+    apply_pricing_to_lead(lead, product=prod)
+    db.add(lead)
+    db.flush()
+    db.add(LeadStatusHistory(
+        lead_id=lead.id, old_status_id=None, new_status_id=st.id,
+        changed_by=admin.id, reason="manual create lead",
+    ))
+
+    assigned = None
+    if chosen:
+        assign(db, lead, chosen)
+        remember_assignment(db, chosen)
+        assigned = chosen
+    else:
+        assigned = auto_assign(db, lead, admin, ignore_limit=True)
+
+    db.commit()
+    live.bump()
+    if assigned:
+        try:
+            _send_assignment_batches(db, {assigned.id: [lead.id]})
+        except Exception as exc:
+            log.error("create-lead assignment mail failed: %s", exc)
+
+    db.refresh(lead)
+    return _serialize(lead, db)
 
 
 @router.get("/reassignment-requests")

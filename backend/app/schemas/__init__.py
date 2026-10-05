@@ -41,6 +41,7 @@ class LeadCreate(BaseModel):
     company_name: str = ""
     location: str = ""
     city: str = ""
+    enquiry_number: str = ""
     enquiry_date: Optional[date] = None
     source_id: Optional[UUID] = None
     source_name: str = ""
@@ -48,9 +49,11 @@ class LeadCreate(BaseModel):
     product_name: str = ""
     requirement: str = ""
     quantity_raw: str = ""
+    number_of_cars: Optional[str] = None
     priority: str = ""
     status_name: str = "New Lead"
     primary_employee_id: Optional[UUID] = None
+    employee_name: str = ""
 
 
 class LeadUpdate(BaseModel):
