@@ -17,7 +17,7 @@ const FILTER_OPTIONS = [
     id: 'category',
     label: 'Category',
     kind: 'dimension' as const,
-    values: ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'],
+    values: ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'],
   },
   {
     id: 'product',

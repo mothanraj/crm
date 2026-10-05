@@ -32,10 +32,11 @@ MONTH_NAMES = (
 KNOWN_CATEGORIES = (
     "A+ (Immediate)",
     "A (3-6 months)",
-    "B (1 year)",
+    "B (6-9 months)",
     "C (Planning Stage)",
 )
 CATEGORY_ALIASES = {
+    "B (1 year)": "B (6-9 months)",
     "C (plan stage)": "C (Planning Stage)",
     "Planning Stage": "C (Planning Stage)",
 }
@@ -480,6 +481,7 @@ def _historical_category(db: Session, f: LeadFilters, scope: DateScope | None, t
     raw = func.trim(LeadActivity.customer_review)
     name = case(
         (or_(raw.is_(None), raw == ""), "Uncategorised"),
+        (raw == "B (1 year)", "B (6-9 months)"),
         (raw == "C (plan stage)", "C (Planning Stage)"),
         (raw == "Planning Stage", "C (Planning Stage)"),
         else_=raw,
@@ -1986,7 +1988,7 @@ ANALYTICS_FILTER_MENUS = {
     "category": [
         "A+ (Immediate)",
         "A (3-6 months)",
-        "B (1 year)",
+        "B (6-9 months)",
         "C (Planning Stage)",
     ],
     "progress": [

@@ -29,18 +29,6 @@ def sla_hours_for_lead(db: Session, lead: Lead) -> int:
     return 24 if is_direct_call_name(source_name_for_lead(db, lead)) else 72
 
 
-def _ensure_quote_ref(db: Session, lead: Lead) -> None:
-    """Allocate EEPLCP…QnR0 REF when lead gets a primary assignee."""
-    try:
-        from app.services.quotation_form import ensure_quotation_on_assign
-        ensure_quotation_on_assign(db, lead)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception(
-            "quotation REF on assign failed for lead %s", getattr(lead, "id", None),
-        )
-
-
 def format_enquiry_number(number: int) -> str:
     """Sheet/Excel enquiry 1 becomes ENQ-000001. Wider numbers keep every digit."""
     return f"ENQ-{int(number):06d}"
@@ -299,8 +287,7 @@ def assign(db: Session, lead: Lead, emp: User, role: str = "PRIMARY", by: User |
         # Close approved reassignment workflow after manual assign.
         if prior_owner is not None and prior_owner != emp.id:
             fulfill_accepted_reassignment(db, lead, by)
-        # Every assigned lead gets a quotation REF (EEPLCP…QnR0) for the form.
-        _ensure_quote_ref(db, lead)
+        # Quotation REF (Q1, Q2, …) is allocated when the employee first opens the form.
     elif role == "TECHNICAL":
         lead.technical_employee_id = emp.id
     elif role == "SECONDARY":
@@ -344,7 +331,8 @@ def record_first_contact(db: Session, lead: Lead, by: User, method: str, result:
     lead.first_contact_result = result
     lead.first_contact_by = by.id
     lead.first_contact_notes = notes
-    lead.sla_state = "COMPLETED" if (not lead.sla_deadline or now <= lead.sla_deadline) else "OVERDUE"
+    # Contacting clears overdue — late contact still counts as contact done.
+    lead.sla_state = "COMPLETED"
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=by.id, activity_type="First Contact",
         activity_at=now, notes=notes or result, outcome=result,

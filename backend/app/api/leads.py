@@ -63,9 +63,13 @@ def _serialize(
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
                 "category": (
-                    "C (Planning Stage)"
-                    if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
-                    else (a.customer_review or "")
+                    "B (6-9 months)"
+                    if (a.customer_review or "").strip() == "B (1 year)"
+                    else (
+                        "C (Planning Stage)"
+                        if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+                        else (a.customer_review or "")
+                    )
                 ),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
@@ -100,9 +104,13 @@ def _serialize(
         "first_contact_notes": l.first_contact_notes or "",
         "employee_remarks": l.employee_remarks or "",
         "customer_review": (
-            "C (Planning Stage)"
-            if (l.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
-            else (l.customer_review or "")
+            "B (6-9 months)"
+            if (l.customer_review or "").strip() == "B (1 year)"
+            else (
+                "C (Planning Stage)"
+                if (l.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+                else (l.customer_review or "")
+            )
         ),
         "quotation_value": _money_str(l.quotation_value),
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
@@ -235,9 +243,13 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
                 "category": (
-                    "C (Planning Stage)"
-                    if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
-                    else (a.customer_review or "")
+                    "B (6-9 months)"
+                    if (a.customer_review or "").strip() == "B (1 year)"
+                    else (
+                        "C (Planning Stage)"
+                        if (a.customer_review or "").strip() in {"C (plan stage)", "Planning Stage"}
+                        else (a.customer_review or "")
+                    )
                 ),
                 "work_action": a.outcome or "",
                 "at": a.activity_at.isoformat() if a.activity_at else None,
@@ -558,9 +570,11 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     if not status:
         raise HTTPException(400, "Invalid work progress status")
     customer_review = (body.customer_review or "").strip()
+    if customer_review in {"B (1 year)"}:
+        customer_review = "B (6-9 months)"
     if customer_review in {"C (plan stage)", "Planning Stage"}:
         customer_review = "C (Planning Stage)"
-    if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"}:
+    if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (Planning Stage)"}:
         raise HTTPException(400, "Invalid customer review")
     if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
         raise HTTPException(400, "Invalid overdue state")
@@ -589,6 +603,9 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         lead.quotation_value = rounded
     if body.sla_state is not None:
         lead.sla_state = body.sla_state
+    elif lead.sla_state == "OVERDUE":
+        # Updating progress clears overdue from the employee dashboard count.
+        lead.sla_state = "COMPLETED"
     q_for_activity = round_money(body.quotation_value) if status.name == "Quotation sent" and body.quotation_value is not None else None
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
@@ -781,7 +798,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     from app.services.quotation_form import (
         DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY, DEFAULT_INTRODUCTION,
         normalize_delivery_period,
-        build_quotation_number, calc_form_totals, clean_extra_lines,
+        build_quotation_ref, calc_form_totals, clean_extra_lines, enquiry_ddmm,
     )
 
     product = db.get(Product, lead.product_id) if lead.product_id else None
@@ -810,7 +827,8 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     if quote and quote.quotation_number:
         quotation_number = quote.quotation_number
     else:
-        quotation_number = build_quotation_number(db, lead, revision)
+        # Preview only — real Qn is allocated when the form is first opened/saved.
+        quotation_number = build_quotation_ref(enquiry_ddmm(lead), 0, revision).replace("Q0", "Q…")
     qdate = quote.quotation_date if quote and quote.quotation_date else date.today()
     totals = calc_form_totals(unit_cost, units, extra_lines)
     return {
@@ -850,7 +868,7 @@ def get_quotation_form(lid: UUID, db: Session = Depends(get_db), u: User = Depen
         .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
         .first()
     )
-    # If assigned but REF missing (legacy), create it now so employee always sees REF.
+    # First time the employee opens the form → allocate next Qn (Q1, Q2, …).
     if quote is None and lead.primary_employee_id is not None:
         from app.services.quotation_form import ensure_quotation_on_assign
         quote = ensure_quotation_on_assign(db, lead)

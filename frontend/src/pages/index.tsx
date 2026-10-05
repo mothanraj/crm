@@ -68,7 +68,7 @@ function DashboardFunnelTable({
 }: {
   labelHeader: string;
   rows: Array<{ name: string; total?: number; Meeting?: number; [k: string]: any }>;
-  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; notInt: number };
+  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   emptyTitle: string;
 }) {
   const cell = 'td !px-1 !py-1.5 text-[11px] text-center align-middle leading-tight border-graphite-100';
@@ -77,13 +77,14 @@ function DashboardFunnelTable({
     <div className="rounded-lg border border-graphite-100 overflow-hidden h-full">
       <table className="w-full table-fixed text-center">
         <colgroup>
-          <col className="w-[22%]" />
+          <col className="w-[20%]" />
+          <col className="w-[10%]" />
           <col className="w-[12%]" />
-          <col className="w-[13%]" />
+          <col className="w-[10%]" />
           <col className="w-[11%]" />
+          <col className="w-[13%]" />
           <col className="w-[12%]" />
-          <col className="w-[15%]" />
-          <col className="w-[15%]" />
+          <col className="w-[12%]" />
         </colgroup>
         <thead>
           <tr className="bg-[#0e7490] text-white">
@@ -93,6 +94,7 @@ function DashboardFunnelTable({
             <th className={head}>Meeting</th>
             <th className={head}>Site Visit</th>
             <th className={head}>Quotation sent</th>
+            <th className={head}>Converted</th>
             <th className={head}>Not Interested</th>
           </tr>
         </thead>
@@ -105,6 +107,7 @@ function DashboardFunnelTable({
               <td className={cell}>{r.Meeting ?? 0}</td>
               <td className={cell}>{r['Site Visit'] ?? 0}</td>
               <td className={cell}>{r['Quotation sent'] ?? 0}</td>
+              <td className={cell}>{r.Converted ?? r.converted ?? 0}</td>
               <td className={cell}>{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
             </tr>
           ))}
@@ -116,6 +119,7 @@ function DashboardFunnelTable({
               <td className={cell}>{totals.meeting}</td>
               <td className={cell}>{totals.siteVisit}</td>
               <td className={cell}>{totals.quote}</td>
+              <td className={cell}>{totals.converted}</td>
               <td className={cell}>{totals.notInt}</td>
             </tr>
           )}
@@ -138,7 +142,7 @@ function DashboardTableChartRow({
   title: string;
   labelHeader: string;
   rows: Array<{ name: string; total?: number; Meeting?: number; [k: string]: any }>;
-  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; notInt: number };
+  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   pieRows: { name: string; value: number }[];
   emptyTitle: string;
 }) {
@@ -361,6 +365,7 @@ export function Dashboard() {
   const [d, setD] = useState<any>(null);
   const [src, setSrc] = useState<any>(null);
   const [products, setProducts] = useState<any>(null);
+  const [categories, setCategories] = useState<any>(null);
   const [error, setError] = useState('');
   const [showLatest, setShowLatest] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -370,12 +375,15 @@ export function Dashboard() {
       api.get('/dashboard'),
       api.get('/dashboard/by-source'),
       api.get('/dashboard/by-product'),
-    ]).then(([dr, sr, pr]) => {
+      api.get('/dashboard/by-category'),
+    ]).then(([dr, sr, pr, cr]) => {
       if (dr.status === 'fulfilled') setD(dr.value.data);
       else setError(dr.reason?.response?.data?.detail || 'Failed to load dashboard. Check backend / login again.');
       if (sr.status === 'fulfilled') setSrc(sr.value.data);
       if (pr.status === 'fulfilled') setProducts(pr.value.data);
       else setError('Could not load product data. Please refresh the dashboard.');
+      if (cr.status === 'fulfilled') setCategories(cr.value.data);
+      else setError('Could not load category data. Please refresh the dashboard.');
     }).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
@@ -388,21 +396,27 @@ export function Dashboard() {
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
-    const t = { total: 0, follow: 0, meeting: 0, siteVisit: 0, quote: 0, notInt: 0 };
+    const t = { total: 0, follow: 0, meeting: 0, siteVisit: 0, quote: 0, converted: 0, notInt: 0 };
     for (const r of srcRows as any[]) {
       t.total += r.total || 0;
       t.follow += r['In Followup'] || 0;
       t.meeting += r.Meeting || 0;
       t.siteVisit += r['Site Visit'] || 0;
       t.quote += r['Quotation sent'] || 0;
+      t.converted += r.Converted || r.converted || 0;
       t.notInt += (r['Not Interested'] || 0) + (r['Not Interested/Spam'] || 0);
     }
     return t;
   }, [srcRows]);
   const productRows = (products?.rows || []).map((row: any) => ({
-    name: row.product, total: row.total, 'In Followup': row.in_followup,
-    Meeting: row.meeting, 'Site Visit': row.site_visit,
-    'Quotation sent': row.quote_sent, 'Not Interested': row.not_interested,
+    name: row.product,
+    total: row.total,
+    'In Followup': row.in_followup,
+    Meeting: row.meeting,
+    'Site Visit': row.site_visit,
+    'Quotation sent': row.quote_sent,
+    Converted: row.converted ?? 0,
+    'Not Interested': row.not_interested,
   }));
   const productPie = productRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
   const productTotals = {
@@ -411,7 +425,28 @@ export function Dashboard() {
     meeting: products?.totals?.meeting ?? 0,
     siteVisit: products?.totals?.site_visit ?? 0,
     quote: products?.totals?.quote_sent ?? 0,
+    converted: products?.totals?.converted ?? 0,
     notInt: products?.totals?.not_interested ?? 0,
+  };
+  const categoryRows = (categories?.rows || []).map((row: any) => ({
+    name: row.category,
+    total: row.total,
+    'In Followup': row.in_followup,
+    Meeting: row.meeting,
+    'Site Visit': row.site_visit,
+    'Quotation sent': row.quote_sent,
+    Converted: row.converted ?? 0,
+    'Not Interested': row.not_interested,
+  }));
+  const categoryPie = categoryRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
+  const categoryTotals = {
+    total: categories?.totals?.total ?? 0,
+    follow: categories?.totals?.in_followup ?? 0,
+    meeting: categories?.totals?.meeting ?? 0,
+    siteVisit: categories?.totals?.site_visit ?? 0,
+    quote: categories?.totals?.quote_sent ?? 0,
+    converted: categories?.totals?.converted ?? 0,
+    notInt: categories?.totals?.not_interested ?? 0,
   };
   if (loading && !d) return <Spinner />;
   if (error && !d) {
@@ -519,6 +554,15 @@ export function Dashboard() {
         totals={productTotals}
         pieRows={productPie}
         emptyTitle="No product data"
+      />
+
+      <DashboardTableChartRow
+        title="Leads by Category"
+        labelHeader="Category"
+        rows={categoryRows as any[]}
+        totals={categoryTotals}
+        pieRows={categoryPie}
+        emptyTitle="No category data"
       />
       <Card title="Customer quotation values">
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
@@ -710,6 +754,7 @@ export function EmployeeDashboard() {
   const normProgress = (name: string) => name === 'New Lead' ? 'Assigned' : (name === 'Not Interested/Spam' ? 'Not Interested' : name);
   const normCategory = (name: string) => {
     const v = (name || '').trim();
+    if (v === 'B (1 year)') return 'B (6-9 months)';
     if (v === 'C (plan stage)' || v === 'Planning Stage') return 'C (Planning Stage)';
     return v;
   };
@@ -730,7 +775,7 @@ export function EmployeeDashboard() {
   const categoryTiles = [
     { label: 'A+ (Immediate)', bg: CATEGORY_TILE_BG['A+ (Immediate)'], text: CATEGORY_TILE_TEXT['A+ (Immediate)'] },
     { label: 'A (3-6 months)', bg: CATEGORY_TILE_BG['A (3-6 months)'], text: CATEGORY_TILE_TEXT['A (3-6 months)'] },
-    { label: 'B (1 year)', bg: CATEGORY_TILE_BG['B (1 year)'], text: CATEGORY_TILE_TEXT['B (1 year)'] },
+    { label: 'B (6-9 months)', bg: CATEGORY_TILE_BG['B (6-9 months)'], text: CATEGORY_TILE_TEXT['B (6-9 months)'] },
     { label: 'C (Planning Stage)', bg: CATEGORY_TILE_BG['C (Planning Stage)'], text: CATEGORY_TILE_TEXT['C (Planning Stage)'] },
   ];
   // Summary — mid tones, none shared with Progress or Category
@@ -895,6 +940,25 @@ function reportYmd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** Add N calendar days to a YYYY-MM-DD string. */
+function addDaysYmd(ymd: string, days: number) {
+  if (!ymd) return '';
+  const d = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + days);
+  return reportYmd(d);
+}
+
+function todayYmd() {
+  return reportYmd(new Date());
+}
+
+function clampYmdToToday(ymd: string) {
+  if (!ymd) return '';
+  const today = todayYmd();
+  return ymd > today ? today : ymd;
+}
+
 function dateInYear(iso: string, year: number) {
   const [, monthText, dayText] = iso.split('-');
   const month = Number(monthText);
@@ -962,12 +1026,8 @@ function PeriodReportPage({
   const [monthYear, setMonthYear] = useState(today.getFullYear());
   const [monthIndex, setMonthIndex] = useState(today.getMonth() + 1);
   const [weekYear, setWeekYear] = useState(today.getFullYear());
-  const [weekFrom, setWeekFrom] = useState(() => reportYmd(mondayOnOrBefore(today)));
-  const [weekTo, setWeekTo] = useState(() => {
-    const start = mondayOnOrBefore(today);
-    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
-    return reportYmd(end);
-  });
+  const [weekFrom, setWeekFrom] = useState(() => reportYmd(today));
+  const [weekTo, setWeekTo] = useState(() => addDaysYmd(reportYmd(today), 6));
   const month = `${monthYear}-${String(monthIndex).padStart(2, '0')}`;
   const [monthData, setMonthData] = useState<any>(null);
   const [weekData, setWeekData] = useState<any>(null);
@@ -1116,11 +1176,8 @@ function PeriodReportPage({
                       const year = Number(e.target.value);
                       setWeekYear(year);
                       setWeekFrom((currentFrom) => {
-                        const nextFrom = dateInYear(currentFrom, year);
-                        setWeekTo((currentTo) => {
-                          const nextTo = dateInYear(currentTo, year);
-                          return nextTo < nextFrom ? nextFrom : nextTo;
-                        });
+                        const nextFrom = clampYmdToToday(dateInYear(currentFrom, year));
+                        setWeekTo(addDaysYmd(nextFrom, 6));
                         return nextFrom;
                       });
                     }}
@@ -1128,31 +1185,28 @@ function PeriodReportPage({
                     {years.map((year) => <option key={year} value={year}>{year}</option>)}
                   </select>
                 </label>
-                <label className="text-sm block w-[180px]">From date
+                <label className="text-sm block w-[180px]">Week start
                   <input
                     type="date"
                     className="input mt-1"
+                    max={reportYmd(today)}
                     value={weekFrom}
                     onChange={(e) => {
-                      const value = e.target.value;
+                      const value = clampYmdToToday(e.target.value);
                       if (!value) return;
                       setWeekFrom(value);
                       setWeekYear(Number(value.slice(0, 4)));
-                      setWeekTo((current) => (current < value ? value : current));
+                      setWeekTo(addDaysYmd(value, 6));
                     }}
                   />
                 </label>
-                <label className="text-sm block w-[180px]">To date
+                <label className="text-sm block w-[180px]">Week end (auto +6 days)
                   <input
                     type="date"
-                    className="input mt-1"
+                    className="input mt-1 bg-graphite-50"
                     value={weekTo}
-                    min={weekFrom}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (!value) return;
-                      setWeekTo(value < weekFrom ? weekFrom : value);
-                    }}
+                    readOnly
+                    title="Automatically set to 7 days from the start date"
                   />
                 </label>
               </div>
@@ -1352,6 +1406,19 @@ function QuotationFormModal({
         // Table "Edit" opens ready to change; otherwise preview last saved
         setEditing(Boolean(startInEdit) || !(alreadySaved && hasFilled));
         setDirty(false);
+        // Opening the form allocates Qn — keep the leads table REF in sync.
+        if (d.id && d.quotation_number) {
+          onSaved(lead.id, {
+            id: d.id,
+            quotation_number: d.quotation_number,
+            revision: d.revision || 'R0',
+            amount_excl: d.amount_excl,
+            gst: d.gst,
+            grand_total: d.grand_total,
+            units: d.units,
+            unit_cost: d.unit_cost,
+          });
+        }
       })
       .catch((e: any) => { if (!cancelled) setErr(e?.response?.data?.detail || 'Could not load quotation form'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -1929,7 +1996,7 @@ function countProgressAction(history: any[] | undefined, action: string) {
 
 export function Leads() {
   const role = localStorage.getItem('role') || '';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [masters, setMasters] = useState<any>(null);
@@ -2111,14 +2178,14 @@ export function Leads() {
     try {
       const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
       const stampedRemarks = withUpdateStamp(form.remarks.trim());
-      await api.post(`/leads/${lead.id}/status`, {
+      const { data } = await api.post(`/leads/${lead.id}/status`, {
         new_status_id: form.progress || lead.status_id,
         reason: stampedRemarks,
         method: 'Call',
         customer_review: form.review,
         quotation_value: qv || undefined,
       });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), at: new Date().toISOString() }] } : item));
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, sla_state: data.sla_state ?? item.sla_state, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
     finally { setSavingId(null); }
@@ -2596,7 +2663,7 @@ export function EmployeeLeads() {
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
   const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const statusOf = (l: any) => {
     const s = nameOf('statuses', l.status_id);
@@ -2613,6 +2680,7 @@ export function EmployeeLeads() {
     label,
     value: items.filter((l) => {
       const v = (l.customer_review || '').trim();
+      if (label === 'B (6-9 months)') return v === 'B (6-9 months)' || v === 'B (1 year)';
       if (label === 'C (Planning Stage)') return v === 'C (Planning Stage)' || v === 'C (plan stage)' || v === 'Planning Stage';
       return v === label;
     }).length,
@@ -3680,12 +3748,12 @@ export function Reports() {
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with progress history (follow-up, meeting, site visit, quotation, converted) and chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Leads by product with progress history counts including converted.', accent: 'bg-[#0f766e]' },
-    { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (1 year), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
+    { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (6-9 months), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
     { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product, source and period with charts.', accent: 'bg-[#3F6212]' },
-    { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
+    { id: 'quotation', title: 'Quotation Report', description: 'Only Quotation sent leads — order value, GST and grand total.', accent: 'bg-[#b45309]' },
     { id: 'employee', title: 'Employee Workload Report', description: 'Assigned lead count per employee.', accent: 'bg-[#334155]' },
     { id: 'monthly', title: 'Monthly Lead Volume', description: 'Pick a month range, view the chart and table, then download Excel or PDF.', accent: 'bg-[#4338ca]' },
-    { id: 'detailed', title: 'Detailed Lead Report', description: 'Full lead-page details for a custom month range — view table and download PDF.', accent: 'bg-[#0f172a]' },
+    { id: 'detailed', title: 'Detailed Lead Report', description: 'Full lead-page details — filter by week, month, or custom date range; view table and download Excel/PDF.', accent: 'bg-[#0f172a]' },
   ];
 
   const [activeReport, setActiveReport] = useState<ReportId | null>(null);
@@ -3696,7 +3764,11 @@ export function Reports() {
   const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
   const [categoryFilter, setCategoryFilter] = useState<ReportFilter>(emptyFilter);
   const [monthlyFilter, setMonthlyFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
-  const [detailedFilter, setDetailedFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
+  const [detailedFilter, setDetailedFilter] = useState<ReportFilter>(() => ({
+    ...emptyFilter(),
+    mode: 'month',
+    month: defaultMonth,
+  }));
 
   const [leadValueReport, setLeadValueReport] = useState<any>(null);
   const [quotationReport, setQuotationReport] = useState<any>(null);
@@ -3860,14 +3932,12 @@ export function Reports() {
     } finally { setMonthlyBusy(false); }
   };
 
-  const loadDetailed = async (f = detailedFilter) => {
-    if (f.fromMonth && f.toMonth && f.fromMonth > f.toMonth) {
-      setDetailedErr('From month must be on or before To month.');
-      return;
-    }
+  const loadDetailed = async (f: ReportFilter = detailedFilter) => {
+    const problem = validate(f);
+    if (problem) { setDetailedErr(problem); return; }
     setDetailedBusy(true); setDetailedErr('');
     try {
-      const { data } = await api.get('/reports/detailed-leads', { params: monthlyParams(f) });
+      const { data } = await api.get('/reports/detailed-leads', { params: toParams(f) });
       setDetailedReport(data);
     } catch (e: any) {
       setDetailedErr(apiErr(e, 'Detailed lead report failed'));
@@ -3911,19 +3981,19 @@ export function Reports() {
       detailed: 'detailed-lead-report.pdf',
     };
     try {
-      const params = (kind === 'monthly' || kind === 'detailed')
+      const params = kind === 'monthly'
         ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
         : { ...toParams(f as ReportFilter), report_type: kind };
-      if (kind !== 'monthly' && kind !== 'detailed') {
-        const v = validate(f as ReportFilter);
-        if (v) { setErr(v); setPdfBusy(false); return; }
-      } else {
+      if (kind === 'monthly') {
         const mf = f as { fromMonth: string; toMonth: string };
         if (mf.fromMonth && mf.toMonth && mf.fromMonth > mf.toMonth) {
           setErr('From month must be on or before To month.');
           setPdfBusy(false);
           return;
         }
+      } else {
+        const v = validate(f as ReportFilter);
+        if (v) { setErr(v); setPdfBusy(false); return; }
       }
       await downloadReport('/reports/pdf', names[kind], params);
     } catch (e: any) {
@@ -3971,10 +4041,31 @@ export function Reports() {
           <input type="month" className="input mt-1" max={today.slice(0, 7)} value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />
         </div>
       ) : f.mode === 'week' ? (
-        <div>
-          <label className="text-xs font-medium text-graphite-600">Any day in the week</label>
-          <input type="date" className="input mt-1" max={today} value={f.week} onChange={(e) => setF({ ...f, week: e.target.value > today ? today : e.target.value })} />
-        </div>
+        <>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Week start date</label>
+            <input
+              type="date"
+              className="input mt-1"
+              max={today}
+              value={f.week}
+              onChange={(e) => {
+                const start = e.target.value > today ? today : e.target.value;
+                setF({ ...f, week: start });
+              }}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-graphite-600">Week end (auto +6 days)</label>
+            <input
+              type="date"
+              className="input mt-1 bg-graphite-50"
+              value={f.week ? addDaysYmd(f.week, 6) : ''}
+              readOnly
+              title="Automatically set to 7 days from the start date"
+            />
+          </div>
+        </>
       ) : (
         <>
           <div>
@@ -4190,10 +4281,24 @@ export function Reports() {
               </div>
             )}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-sm text-center">
+              <table className="w-full min-w-[1280px] text-sm text-center table-fixed">
+                <colgroup>
+                  <col className="w-[3.5%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7.5%]" />
+                  <col className="w-[12%]" />
+                </colgroup>
                 <thead>
                   <tr className="bg-amber-300 text-graphite-900">
                     <th className="th !bg-transparent !text-center underline">S.No</th>
+                    <th className="th !bg-transparent !text-center !px-1">REF</th>
                     <th className="th !bg-transparent !text-center">Date</th>
                     <th className="th !bg-transparent !text-center">Enquiry No</th>
                     <th className="th !bg-transparent !text-center">Customer Name</th>
@@ -4202,27 +4307,28 @@ export function Reports() {
                     <th className="th !bg-transparent !text-center">No. of Units/Cars</th>
                     <th className="th !bg-transparent !text-center">Order Value (Excl GST)</th>
                     <th className="th !bg-transparent !text-center">GST</th>
-                    <th className="th !bg-transparent !text-center">Grand Total</th>
+                    <th className="th !bg-transparent !text-center !px-2">Grand Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(quotationReport?.rows || []).map((r: any, i: number) => (
-                    <tr key={`${r.enquiry_number}-${i}`} className={i % 2 ? 'bg-amber-50/50' : 'bg-white'}>
-                      <td className="td text-center">{i + 1}</td>
+                    <tr key={`${r.ref || r.enquiry_number}-${i}`} className={i % 2 ? 'bg-amber-50/50' : 'bg-white'}>
+                      <td className="td text-center">{r.sno ?? i + 1}</td>
+                      <td className="td text-center font-mono text-xs whitespace-nowrap !px-1">{r.ref || '—'}</td>
                       <td className="td text-center whitespace-nowrap">{r.date || '—'}</td>
-                      <td className="td text-center font-medium">{r.enquiry_number || '—'}</td>
+                      <td className="td text-center font-medium whitespace-nowrap px-1">{r.enquiry_number || '—'}</td>
                       <td className="td text-center">{r.customer_name || '—'}</td>
                       <td className="td text-center">{r.state || '—'}</td>
                       <td className="td text-center">{r.parking_type || '—'}</td>
                       <td className="td text-center">{r.units ?? '—'}</td>
                       <td className="td text-center tabular-nums font-medium">{inr(r.order_value_excl_gst)}</td>
                       <td className="td text-center tabular-nums">{inr(r.gst)}</td>
-                      <td className="td text-center tabular-nums font-semibold">{inr(r.grand_total)}</td>
+                      <td className="td text-center tabular-nums font-semibold !px-2 whitespace-nowrap">{inr(r.grand_total)}</td>
                     </tr>
                   ))}
                   {quotationReport?.totals && (quotationReport.rows || []).length > 0 && (
                     <tr className="bg-graphite-100 font-bold">
-                      <td className="td text-center" colSpan={6}>TOTAL</td>
+                      <td className="td text-center" colSpan={7}>TOTAL</td>
                       <td className="td text-center" />
                       <td className="td text-center tabular-nums">{inr(quotationReport.totals.order_value_excl_gst)}</td>
                       <td className="td text-center tabular-nums">{inr(quotationReport.totals.gst)}</td>
@@ -4232,7 +4338,7 @@ export function Reports() {
                 </tbody>
               </table>
               {quotationReport && !(quotationReport.rows || []).length && (
-                <EmptyState title="No quotations in this range" hint="Mark leads as Quotation sent with a value, or add quotation rows." />
+                <EmptyState title="No Quotation sent leads in this range" hint="Only leads with progress Quotation sent appear in this report." />
               )}
             </div>
           </div>
@@ -4405,7 +4511,7 @@ export function Reports() {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[900px] text-sm text-center">
                   <thead><tr className="bg-[#0e7490] text-white">
-                    {['Category', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Category', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
                   </tr></thead>
                   <tbody>
                     {(categoryDetails?.rows || []).map((row: any, i: number) => (
@@ -4416,6 +4522,7 @@ export function Reports() {
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
                         <td className="td text-center">{row.quote_sent}</td>
+                        <td className="td text-center">{row.converted ?? 0}</td>
                         <td className="td text-center">{row.not_interested}</td>
                       </tr>
                     ))}
@@ -4427,6 +4534,7 @@ export function Reports() {
                         <td className="td text-center">{categoryDetails.totals.meeting}</td>
                         <td className="td text-center">{categoryDetails.totals.site_visit}</td>
                         <td className="td text-center">{categoryDetails.totals.quote_sent}</td>
+                        <td className="td text-center">{categoryDetails.totals.converted ?? 0}</td>
                         <td className="td text-center">{categoryDetails.totals.not_interested}</td>
                       </tr>
                     )}
@@ -4581,57 +4689,31 @@ export function Reports() {
         <div className="card overflow-hidden">
           <div className="bg-[#0f172a] text-white px-5 py-3 font-semibold tracking-wide">DETAILED LEAD REPORT</div>
           <div className="p-5 space-y-4">
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <div>
-                <label className="text-xs font-medium text-graphite-600">From Month</label>
-                <input
-                  type="month"
-                  className="input mt-1"
-                  value={detailedFilter.fromMonth}
-                  onChange={(e) => setDetailedFilter((cur) => ({ ...cur, fromMonth: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-graphite-600">To Month</label>
-                <input
-                  type="month"
-                  className="input mt-1"
-                  value={detailedFilter.toMonth}
-                  onChange={(e) => setDetailedFilter((cur) => ({ ...cur, toMonth: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-wrap items-end gap-2 lg:col-span-2">
-                <button type="button" className="btn-primary" disabled={detailedBusy} onClick={() => void loadDetailed(detailedFilter)}>
-                  {detailedBusy ? 'Loading…' : 'Apply'}
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  disabled={detailedBusy || !(detailedReport?.rows || []).length}
-                  onClick={() => dl('/reports/detailed-leads/export', 'detailed-lead-report.xlsx', monthlyParams(detailedFilter), setDetailedErr)}
-                >
-                  Download Excel
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  disabled={pdfBusy || detailedBusy || !(detailedReport?.rows || []).length}
-                  onClick={() => void downloadPdf('detailed', detailedFilter, setDetailedErr)}
-                >
-                  {pdfBusy ? 'Creating PDF…' : 'Download PDF'}
-                </button>
-              </div>
-            </div>
+            {filterBar(
+              detailedFilter, setDetailedFilter, detailedBusy, () => loadDetailed(detailedFilter),
+              () => {
+                const p = toParams(detailedFilter);
+                const name = detailedFilter.mode === 'month'
+                  ? `detailed-leads-${detailedFilter.month}.xlsx`
+                  : detailedFilter.mode === 'week'
+                    ? `detailed-leads-week-${detailedFilter.week}.xlsx`
+                    : `detailed-leads-${detailedFilter.fromDate || 'all'}_to_${detailedFilter.toDate || 'all'}.xlsx`;
+                return dl('/reports/detailed-leads/export', name, p, setDetailedErr);
+              },
+              !detailedReport,
+              () => void downloadPdf('detailed', detailedFilter, setDetailedErr),
+            )}
             {detailedErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{detailedErr}</div>}
             {detailedReport && (
               <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
-                <span><b>From:</b> {detailedReport.from_month || detailedReport.effective_from || 'All'}</span>
-                <span><b>To:</b> {detailedReport.to_month || detailedReport.effective_to || 'All'}</span>
+                <span><b>From:</b> {detailedReport.effective_from || detailedReport.from_month || 'All'}</span>
+                <span><b>To:</b> {detailedReport.effective_to || detailedReport.to_month || 'All'}</span>
+                <span><b>Mode:</b> {detailedReport.mode || detailedFilter.mode}</span>
                 <span><b>Leads:</b> {detailedReport.count ?? (detailedReport.rows || []).length}</span>
               </div>
             )}
             {detailedBusy && !detailedReport ? <Spinner /> : !(detailedReport?.rows || []).length ? (
-              <EmptyState title="No leads in this month range" hint="Pick From / To month and Apply." />
+              <EmptyState title="No leads in this range" hint="Pick Weekly, Monthly, or a custom date range and Apply." />
             ) : (
               <div className="overflow-x-auto">
                 <table className="text-sm border-collapse table-auto">
@@ -4742,7 +4824,7 @@ export function EmployeesPage() {
     } finally { setLoadingEmployeeLeads(false); }
   };
   const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (1 year)', 'C (Planning Stage)'];
+  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
   const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const empLeadStatus = (lead: any) => {
     const s = leadStatusName(lead.status_id);
@@ -4759,6 +4841,7 @@ export function EmployeesPage() {
     label,
     value: employeeLeads.filter((l) => {
       const v = (l.customer_review || '').trim();
+      if (label === 'B (6-9 months)') return v === 'B (6-9 months)' || v === 'B (1 year)';
       if (label === 'C (Planning Stage)') return v === 'C (Planning Stage)' || v === 'C (plan stage)' || v === 'Planning Stage';
       return v === label;
     }).length,

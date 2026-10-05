@@ -66,7 +66,7 @@ def test_live_filters_keep_one_lead_per_total():
         assert sum(row["leads"] for row in january["by_month"] if row["month"] != 1) == 0
         assert sum(row["leads"] for row in december["by_month"] if row["month"] != 12) == 0
 
-        for category in ("A+ (Immediate)", "A (3-6 months)", "B (1 year)", "C (Planning Stage)"):
+        for category in ("A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (Planning Stage)"):
             scoped = build_summary(db, LeadFilters(categories=[category]))
             _assert_current_balance(scoped)
             assert scoped["kpi"]["leads"] <= summary["kpi"]["leads"]
