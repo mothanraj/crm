@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, Notification, Product, Quotation, SiteVisit, User
+from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 from app.services.pricing import PRODUCT_PRICES
 
@@ -123,6 +123,69 @@ def _date_filter(start: date | None, end: date | None, u: User | None = None):
     if end:
         clauses.append(Lead.enquiry_date <= end)
     return and_(*clauses)
+
+
+def _norm_progress_bucket(name: str | None) -> str | None:
+    """Map a status/outcome name to a report progress column key."""
+    if not name:
+        return None
+    n = str(name).strip()
+    if n == STATUS_FOLLOWUP:
+        return "in_followup"
+    if n == STATUS_MEETING:
+        return "meeting"
+    if n == "Site Visit":
+        return "site_visit"
+    if n == STATUS_QUOTE:
+        return "quote_sent"
+    if n == STATUS_CONVERTED:
+        return "converted"
+    if n in STATUS_NOT_INT:
+        return "not_interested"
+    return None
+
+
+def _empty_progress_counts() -> dict:
+    return {
+        "total": 0,
+        "in_followup": 0,
+        "meeting": 0,
+        "site_visit": 0,
+        "quote_sent": 0,
+        "converted": 0,
+        "not_interested": 0,
+    }
+
+
+def _lead_progress_history(db: Session, lead_ids: list) -> dict:
+    """Distinct progress buckets each lead has ever reached (activities + status history + current)."""
+    by_lead: dict = defaultdict(set)
+    if not lead_ids:
+        return by_lead
+    # Work Progress saves (employee progress updates)
+    for lid, outcome in (
+        db.query(LeadActivity.lead_id, LeadActivity.outcome)
+        .filter(
+            LeadActivity.lead_id.in_(lead_ids),
+            LeadActivity.activity_type == "Work Progress",
+        )
+        .all()
+    ):
+        key = _norm_progress_bucket(outcome)
+        if key:
+            by_lead[lid].add(key)
+    # Status change history
+    NewStatus = LeadStatus  # noqa: N806 — alias for join clarity
+    for lid, st_name in (
+        db.query(LeadStatusHistory.lead_id, NewStatus.name)
+        .join(NewStatus, LeadStatusHistory.new_status_id == NewStatus.id)
+        .filter(LeadStatusHistory.lead_id.in_(lead_ids))
+        .all()
+    ):
+        key = _norm_progress_bucket(st_name)
+        if key:
+            by_lead[lid].add(key)
+    return by_lead
 
 
 def _kpis(db: Session, u: User | None = None):
@@ -825,22 +888,35 @@ def _ordered_sources(matrix: dict) -> list[str]:
 
 
 def _source_details_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
-    matrix = _by_source_matrix(db, start, end)
+    """Lead Source report: total by enquiry month; progress columns from each lead's history."""
+    rows_q = (
+        db.query(Lead.id, LeadSource.name, LeadStatus.name)
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end))
+        .all()
+    )
+    lead_ids = [lid for lid, _, _ in rows_q]
+    hist = _lead_progress_history(db, lead_ids)
+    # Include current status in history set
+    for lid, _src, st in rows_q:
+        key = _norm_progress_bucket(st)
+        if key:
+            hist[lid].add(key)
+
+    buckets: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_SOURCES}
+    for lid, src, _st in rows_q:
+        name = canonical_source(src)
+        b = buckets.setdefault(name, _empty_progress_counts())
+        b["total"] += 1
+        for key in hist.get(lid, ()):
+            b[key] = b.get(key, 0) + 1
+
     rows = []
-    totals = {
-        "total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "not_interested": 0,
-    }
-    for src in _ordered_sources(matrix):
-        m = matrix[src]
-        row = {
-            "source": src,
-            "total": int(m.get("total", 0)),
-            "in_followup": int(m.get(STATUS_FOLLOWUP, 0)),
-            "meeting": int(m.get("Meeting", 0)),
-            "site_visit": int(m.get("Site Visit", 0)),
-            "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
-            "quote_sent": int(m.get(STATUS_QUOTE, 0)),
-        }
+    totals = _empty_progress_counts()
+    for src in _ordered_sources(buckets):
+        m = buckets[src]
+        row = {"source": src, **{k: int(m.get(k, 0)) for k in totals}}
         rows.append(row)
         for k in totals:
             totals[k] += row[k]
@@ -854,33 +930,46 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
 
 
 def _product_details_payload(db: Session, start: date | None, end: date | None, mode: str, u: User | None = None) -> dict:
-    # Always list every canonical product (incl. zero-lead ones like Pit Stack Parking).
-    rows_by_product: dict[str, dict] = {name: {"total": 0} for name in CANONICAL_PRODUCTS}
-    query = (db.query(Product.name, LeadStatus.name, func.count(Lead.id))
-             .select_from(Lead)
-             .outerjoin(Product, Lead.product_id == Product.id)
-             .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-             .filter(_date_filter(start, end, u))
-             .group_by(Product.name, LeadStatus.name).all())
-    for product, status, count in query:
+    """Product report: total by enquiry month; progress columns from each lead's history."""
+    rows_by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
+    query = (
+        db.query(Lead.id, Product.name, LeadStatus.name)
+        .select_from(Lead)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end, u))
+        .all()
+    )
+    lead_ids = [lid for lid, _, _ in query]
+    hist = _lead_progress_history(db, lead_ids)
+    for lid, _product, st in query:
+        key = _norm_progress_bucket(st)
+        if key:
+            hist[lid].add(key)
+
+    for lid, product, _st in query:
         name = product or "Unmapped"
-        row = rows_by_product.setdefault(name, {"total": 0})
-        if status:
-            row[status] = int(count)
-        row["total"] += int(count)
+        row = rows_by_product.setdefault(name, _empty_progress_counts())
+        row["total"] += 1
+        for key in hist.get(lid, ()):
+            row[key] = row.get(key, 0) + 1
+
     ordered = list(CANONICAL_PRODUCTS) + sorted(p for p in rows_by_product if p not in CANONICAL_PRODUCTS)
     rows = []
-    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "not_interested": 0, "quote_sent": 0}
+    totals = _empty_progress_counts()
     for product in ordered:
         data = rows_by_product[product]
-        row = {"product": product, "total": data.get("total", 0),
-               "in_followup": data.get(STATUS_FOLLOWUP, 0), "meeting": data.get("Meeting", 0),
-               "site_visit": data.get("Site Visit", 0), "not_interested": sum(data.get(s, 0) for s in STATUS_NOT_INT),
-               "quote_sent": data.get(STATUS_QUOTE, 0)}
+        row = {"product": product, **{k: int(data.get(k, 0)) for k in totals}}
         rows.append(row)
-        for key in totals: totals[key] += row[key]
-    return {"mode": mode, "effective_from": start.isoformat() if start else None,
-            "effective_to": end.isoformat() if end else None, "rows": rows, "totals": totals}
+        for key in totals:
+            totals[key] += row[key]
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "rows": rows,
+        "totals": totals,
+    }
 
 
 def _normalize_customer_review(raw: str | None) -> str:
@@ -955,10 +1044,10 @@ def product_details_export(db: Session = Depends(get_db), u: User = Depends(curr
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _product_details_payload(db, start, end, resolved)
-    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
-    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"]] for r in payload["rows"]]
+    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]] for r in payload["rows"]]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"]])
+    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
 
 
@@ -1028,15 +1117,15 @@ def source_details_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _source_details_payload(db, start, end, resolved)
-    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     body = []
     for r in payload["rows"]:
         body.append([
-            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["not_interested"],
+            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"],
         ])
     t = payload["totals"]
     body.append([
-        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t["not_interested"],
+        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"],
     ])
     # Meta sheet row for range
     label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"

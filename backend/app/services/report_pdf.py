@@ -18,7 +18,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 LOGO = Path(__file__).resolve().parents[1] / "assets" / "company-logo.jpg"
 NAVY = colors.HexColor("#1e3a5f")
 GREEN = colors.HexColor("#3F6212")
-KEYS = ("total", "in_followup", "meeting", "site_visit", "quote_sent", "not_interested")
+KEYS = ("total", "in_followup", "meeting", "site_visit", "quote_sent", "converted", "not_interested")
 CHART_COLORS = [
     colors.HexColor("#1971C2"),
     colors.HexColor("#65A30D"),
@@ -546,18 +546,18 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
                           alignment=1, textColor=colors.HexColor("#334155"))
     story = []
     story.append(Paragraph(title, heading))
-    headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested"]
+    headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     rows = [[Paragraph(value, header) for value in headers]]
     for row in payload["rows"]:
         rows.append([
             Paragraph(escape(str(row[field])), cell),
-            *[Paragraph(str(row[key]), cell) for key in KEYS],
+            *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS],
         ])
     if not payload["rows"]:
         rows.append([Paragraph("No leads found", cell), *[Paragraph("0", cell) for _ in KEYS]])
-    rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"][key]), cell) for key in KEYS]])
-    col_w = (width - 72) / 7
-    table = Table(rows, colWidths=[col_w] * 7, repeatRows=1, hAlign="CENTER")
+    rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"].get(key, 0)), cell) for key in KEYS]])
+    col_w = (width - 72) / 8
+    table = Table(rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style())
     story.append(table)
 

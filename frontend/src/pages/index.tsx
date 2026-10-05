@@ -3678,8 +3678,8 @@ export function Reports() {
 
   type ReportId = 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
-    { id: 'source', title: 'Lead Source Report', description: 'Leads by source with follow-up, meeting, site visit and quotation counts, plus chart.', accent: 'bg-[#1e3a5f]' },
-    { id: 'product', title: 'Product Wise Report', description: 'Product funnel table plus product-wise lead bar chart.', accent: 'bg-[#0f766e]' },
+    { id: 'source', title: 'Lead Source Report', description: 'Leads by source with progress history (follow-up, meeting, site visit, quotation, converted) and chart.', accent: 'bg-[#1e3a5f]' },
+    { id: 'product', title: 'Product Wise Report', description: 'Leads by product with progress history counts including converted.', accent: 'bg-[#0f766e]' },
     { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (1 year), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
     { id: 'lead_value', title: 'Lead Value Report', description: 'Total lead value by product, source and period with charts.', accent: 'bg-[#3F6212]' },
     { id: 'quotation', title: 'Quotation Report', description: 'Quotation rows with order value, GST and grand total.', accent: 'bg-[#b45309]' },
@@ -4265,7 +4265,7 @@ export function Reports() {
               </div>
             )}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[960px] text-sm text-center">
+              <table className="w-full min-w-[1040px] text-sm text-center">
                 <thead>
                   <tr className="bg-[#1e3a5f] text-white">
                     <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
@@ -4274,6 +4274,7 @@ export function Reports() {
                     <th className="th !text-white !bg-transparent !text-center">Meeting</th>
                     <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
                     <th className="th !text-white !bg-transparent !text-center">Quotation sent</th>
+                    <th className="th !text-white !bg-transparent !text-center">Converted</th>
                     <th className="th !text-white !bg-transparent !text-center">Not Interested</th>
                   </tr>
                 </thead>
@@ -4286,6 +4287,7 @@ export function Reports() {
                       <td className="td text-center">{r.meeting}</td>
                       <td className="td text-center">{r.site_visit}</td>
                       <td className="td text-center">{r.quote_sent}</td>
+                      <td className="td text-center">{r.converted ?? 0}</td>
                       <td className="td text-center">{r.not_interested}</td>
                     </tr>
                   ))}
@@ -4297,6 +4299,7 @@ export function Reports() {
                       <td className="td text-center">{details.totals.meeting}</td>
                       <td className="td text-center">{details.totals.site_visit}</td>
                       <td className="td text-center">{details.totals.quote_sent}</td>
+                      <td className="td text-center">{details.totals.converted ?? 0}</td>
                       <td className="td text-center">{details.totals.not_interested}</td>
                     </tr>
                   )}
@@ -4305,7 +4308,7 @@ export function Reports() {
               {!details && !sourceBusy && <EmptyState title="Apply a date range to load the report" />}
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Leads by Source</h3>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Leads by Source (progress history)</h3>
               {!(details?.rows || []).some((r: any) => r.total > 0) ? <EmptyState title="No source data to chart" /> : (
                 <div className="h-80">
                   <ResponsiveContainer>
@@ -4319,6 +4322,7 @@ export function Reports() {
                       <Bar dataKey="meeting" fill={PROGRESS_HEX.Meeting} name="Meeting" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="site_visit" fill={PROGRESS_HEX['Site Visit']} name="Site Visit" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="quote_sent" fill={PROGRESS_HEX['Quotation sent']} name="Quotation sent" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="converted" fill={PROGRESS_HEX.Converted} name="Converted" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="not_interested" fill={PROGRESS_HEX['Not Interested']} name="Not Interested" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -4342,9 +4346,9 @@ export function Reports() {
               )}
               {productErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{productErr}</div>}
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] text-sm text-center">
+                <table className="w-full min-w-[1040px] text-sm text-center">
                   <thead><tr className="bg-[#0f766e] text-white">
-                    {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
                   </tr></thead>
                   <tbody>
                     {(productDetails?.rows || []).map((row: any, i: number) => (
@@ -4355,6 +4359,7 @@ export function Reports() {
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
                         <td className="td text-center">{row.quote_sent}</td>
+                        <td className="td text-center">{row.converted ?? 0}</td>
                         <td className="td text-center">{row.not_interested}</td>
                       </tr>
                     ))}
@@ -4366,6 +4371,7 @@ export function Reports() {
                         <td className="td text-center">{productDetails.totals.meeting}</td>
                         <td className="td text-center">{productDetails.totals.site_visit}</td>
                         <td className="td text-center">{productDetails.totals.quote_sent}</td>
+                        <td className="td text-center">{productDetails.totals.converted ?? 0}</td>
                         <td className="td text-center">{productDetails.totals.not_interested}</td>
                       </tr>
                     )}
