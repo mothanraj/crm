@@ -164,7 +164,8 @@ function DashboardTableChartRow({
 }
 
 function leadRowColour(lead: any, status: string) {
-  if (lead.sla_state === 'COMPLETED' && status === 'Converted') return 'bg-emerald-50';
+  // Green only when Converted is finished with Done
+  if (lead.sla_state === 'COMPLETED' && status === 'Converted') return 'bg-emerald-100';
   if (lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(status)) return 'bg-red-100';
   return 'bg-white';
 }
@@ -368,7 +369,6 @@ export function Dashboard() {
   const [products, setProducts] = useState<any>(null);
   const [categories, setCategories] = useState<any>(null);
   const [error, setError] = useState('');
-  const [showLatest, setShowLatest] = useState(false);
   const [loading, setLoading] = useState(true);
   const load = () => {
     setLoading(true); setError('');
@@ -388,12 +388,6 @@ export function Dashboard() {
     }).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
-  useEffect(() => {
-    if (!showLatest) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowLatest(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [showLatest]);
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
@@ -470,74 +464,85 @@ export function Dashboard() {
     lead_value: Number(r.lead_value || 0),
   }));
   const tiles = [
-    { label: 'Total Leads', value: f.total ?? d.total, bg: 'bg-[#1e3a5f]', text: 'text-white' },
-    { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value), bg: 'bg-[#3F6212]', text: 'text-white', isText: true },
+    { label: 'Total Leads', value: f.total ?? d.total ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
+    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#BE185D]', text: 'text-white' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
     { label: 'Meeting', value: f.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
     { label: 'Site Visit', value: f.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
     { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
     { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
-    { label: 'New Lead', value: d.new_lead_display ?? 5, bg: 'bg-[#1c2833]', text: 'text-white' },
     { label: 'Converted', value: f.converted ?? 0, bg: PROGRESS_TILE_BG.Converted, text: PROGRESS_TILE_TEXT.Converted },
   ];
+  const categoryLabels = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
+  const categoryCountFor = (label: string) => {
+    const row = categoryRows.find((r: any) => {
+      const name = String(r.name || '');
+      if (label === 'B (6-9 months)') return name === 'B (6-9 months)' || name === 'B (1 year)';
+      if (label === 'C (Planning Stage)') return name === 'C (Planning Stage)' || name === 'C (plan stage)' || name === 'Planning Stage';
+      return name === label;
+    });
+    return Number(row?.total || 0);
+  };
+  const categoryBase = Math.max(1, Number(f.total ?? d.total ?? 0));
+  const categoryTiles = categoryLabels.map((label) => {
+    const count = categoryCountFor(label);
+    const pct = Math.round((count / categoryBase) * 100);
+    return {
+      label,
+      value: `${pct}%`,
+      hint: `${count} lead${count === 1 ? '' : 's'}`,
+      bg: CATEGORY_TILE_BG[label] || categoryTileBg(label),
+      text: CATEGORY_TILE_TEXT[label] || categoryTileText(label),
+    };
+  });
   return (
     <div className="space-y-5">
       <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and product data from live database." />
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 max-w-5xl">
-        {tiles.map((t) => (
-          t.label === 'New Lead' ? (
-            <button key={t.label} type="button" onClick={() => setShowLatest(true)} title="Click to view the 5 customers"
-              className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center cursor-pointer hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-brand-400`}>
-              <div className="text-sm uppercase tracking-wide opacity-95 font-semibold leading-tight">{t.label} ⓘ</div>
-              <div className="text-2xl font-bold mt-1 tabular-nums">{t.value}</div>
-            </button>
-          ) : (
-            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center`}>
-              <div className="text-sm uppercase tracking-wide opacity-95 font-semibold leading-tight">{t.label}</div>
-              <div className={`${(t as any).isText ? 'text-base sm:text-lg leading-tight' : 'text-2xl'} font-bold mt-1 tabular-nums`}>{t.value}</div>
+      <div className="pt-7 w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3 md:gap-4 items-stretch w-full">
+          <div className="min-w-0">
+            <div className="grid grid-cols-3 grid-rows-3 gap-2 md:gap-3 h-full min-h-[18rem] sm:min-h-[21rem]">
+              {tiles.map((t) => (
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-3 shadow-sm text-center flex flex-col items-center justify-center h-full`}>
+                  <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                  <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                </div>
+              ))}
             </div>
-          )
-        ))}
-      </div>
-      {showLatest && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowLatest(false)}>
-          <div className="card p-6 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-graphite-900">New Lead — last 5 assigned customers</h3>
-              <button type="button" className="btn-secondary !px-2 !py-1 text-xs" onClick={() => setShowLatest(false)}>✕ Close</button>
+          </div>
+          <div className="min-w-0 relative h-full">
+            <div className="absolute -top-7 left-0 right-0 text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none">
+              Category
             </div>
-            {(d.latest_assigned || []).length === 0 ? <EmptyState title="No assigned customers" /> : (
-              <div className="overflow-x-auto -mx-6 px-6">
-                <table className="w-full min-w-[640px] text-sm">
-                  <thead className="bg-graphite-50"><tr>
-                    <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th>
-                    <th className="th">Employee</th><th className="th">Assigned</th>
-                  </tr></thead>
-                  <tbody>
-                    {(d.latest_assigned || []).map((l: any) => (
-                      <tr key={l.lead_id} className="hover:bg-brand-50/50">
-                        <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.lead_id}`}>{l.enquiry_number}</Link></td>
-                        <td className="td">{l.customer_name}</td>
-                        <td className="td">
-                          <div className="whitespace-nowrap">{l.contact_number || '—'}</div>
-                          <div className="text-xs mt-0.5 break-all">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
-                        </td>
-                        <td className="td text-center">{l.quantity_raw || '—'}</td>
-                        <td className="td">{l.employee}</td>
-                        <td className="td whitespace-nowrap">{l.assigned_date}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="grid grid-cols-2 grid-rows-2 gap-2 md:gap-3 h-full min-h-[18rem] sm:min-h-[21rem]">
+              {categoryTiles.map((t) => (
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-3 shadow-sm text-center flex flex-col items-center justify-center h-full`}>
+                  <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
+                  <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-xs opacity-85 mt-1 leading-tight">{t.hint}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 w-full">
+        {[
+          { label: 'Total lead value', value: inr(d.total_lead_value ?? lv.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
+          { label: 'Total quotation value', value: inr(d.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
+          { label: 'Converted quotation value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]' },
+        ].map((t) => (
+          <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-4 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
+            <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+            <div className="text-xl sm:text-2xl font-bold mt-1.5 tabular-nums leading-tight break-words">{t.value}</div>
+          </div>
+        ))}
+      </div>
 
       <DashboardTableChartRow
         title="Leads by Source"
@@ -784,7 +789,12 @@ export function EmployeeDashboard() {
     { label: 'Total leads', value: d.total ?? 0, bg: 'bg-[#2563EB]', text: 'text-white', hint: 'Assigned to me' },
     { label: 'Pending', value: d.needs_first_contact ?? 0, bg: 'bg-[#7C3AED]', text: 'text-white', hint: 'Speak to customer' },
     { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#BE185D]', text: 'text-white', hint: 'Act now' },
-    { label: 'Contact done', value: d.contacted ?? 0, bg: 'bg-[#312E81]', text: 'text-white', hint: 'First contact recorded' },
+    { label: 'Responded', value: d.contacted ?? 0, bg: 'bg-[#312E81]', text: 'text-white', hint: 'Customer contacted' },
+  ];
+  const valueTiles = [
+    { label: 'Total lead value', value: inr(d.total_lead_value ?? d.lead_value?.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]', text: 'text-white' },
+    { label: 'Total quotation value', value: inr(d.total_quotation_value ?? 0), bg: 'bg-[#b45309]', text: 'text-white' },
+    { label: 'Converted quotation value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
@@ -824,7 +834,7 @@ export function EmployeeDashboard() {
         </div>
       </div>
       <div className="min-w-0 mt-10 md:mt-14 pt-6 md:pt-8">
-        <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-3 text-center">Progress</div>
+        <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-3 text-center">Lead progress</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3 auto-rows-fr">
           {progressTiles.map((t) => (
             <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[5.75rem] sm:min-h-[7rem] lg:min-h-[8.25rem] px-2 py-2.5 sm:px-3 sm:py-4 shadow-sm text-center flex flex-col items-center justify-center`}>
@@ -833,6 +843,14 @@ export function EmployeeDashboard() {
             </div>
           ))}
         </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 mt-6 md:mt-8">
+        {valueTiles.map((t) => (
+          <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-4 sm:py-5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
+            <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+            <div className="text-xl sm:text-2xl font-bold mt-2 tabular-nums leading-tight break-words">{t.value}</div>
+          </div>
+        ))}
       </div>
       <Card title={`My to-dos — new leads (${pending.length})`} action={
         truncated
@@ -1001,6 +1019,18 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
               <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} ${PROGRESS_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
                 <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
                 <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+            {[
+              { label: 'Total lead value', value: inr(data?.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
+              { label: 'Quotation value', value: inr(data?.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
+              { label: 'Converted quotation value', value: inr(data?.converted_quotation_value ?? 0), bg: 'bg-[#15803d]' },
+            ].map((t) => (
+              <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-4 shadow-sm text-center`}>
+                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                <div className="text-lg sm:text-xl font-bold mt-1.5 tabular-nums leading-tight break-words">{t.value}</div>
               </div>
             ))}
           </div>
@@ -1373,7 +1403,8 @@ function QuotationFormModal({
       .then((r) => {
         if (cancelled) return;
         const d = r.data || {};
-        const alreadySaved = Boolean(d.id && d.quotation_number);
+        // issued = form was saved (Q count reserved). preview = next count shown only.
+        const alreadySaved = Boolean(d.issued) && Boolean(d.id) && Boolean(d.quotation_number);
         setForm({
           to_name: d.to_name || '',
           to_address: d.to_address || '',
@@ -1399,16 +1430,11 @@ function QuotationFormModal({
           quotation_number: d.quotation_number || '',
           revision: d.revision || 'R0',
         });
-        const hasFilled = Boolean(
-          (d.amount_excl != null && Number(d.amount_excl) > 0)
-          || (d.unit_cost && Number(d.unit_cost) > 0),
-        );
-        setSavedOnce(alreadySaved && hasFilled);
-        // Table "Edit" opens ready to change; otherwise preview last saved
-        setEditing(Boolean(startInEdit) || !(alreadySaved && hasFilled));
+        setSavedOnce(alreadySaved);
+        setEditing(Boolean(startInEdit) || !alreadySaved);
         setDirty(false);
-        // Opening the form allocates Qn — keep the leads table REF in sync.
-        if (d.id && d.quotation_number) {
+        // Table REF only after Save — opening must not reserve / show count in the list.
+        if (alreadySaved) {
           onSaved(lead.id, {
             id: d.id,
             quotation_number: d.quotation_number,
@@ -1634,7 +1660,10 @@ function QuotationFormModal({
               <div className="flex items-baseline justify-between gap-4 mb-6">
                 <div className="flex items-baseline gap-2 min-w-0">
                   <span className="font-bold shrink-0">REF:</span>
-                  <span className="font-semibold text-[#1e3a5f] tracking-wide">{refShown || 'Will assign on save'}</span>
+                  <span className="font-semibold text-[#1e3a5f] tracking-wide">{refShown || '—'}</span>
+                  {!savedOnce && refShown ? (
+                    <span className="text-xs text-graphite-500 font-sans ml-1">(preview — count after Save)</span>
+                  ) : null}
                 </div>
                 <div className="flex items-baseline gap-2 shrink-0 ml-auto">
                   <span className="font-bold">Date:</span>
@@ -1740,7 +1769,7 @@ function QuotationFormModal({
                                 setDirty(true);
                               }}
                             >
-                              ×
+                              ├ù
                             </button>
                           )}
                         </div>
@@ -2138,27 +2167,32 @@ export function Leads() {
       const stampedRemarks = done && !reopening && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
         ? (lead.employee_remarks || rawRemarks)
         : withUpdateStamp(rawRemarks);
-      // Only Converted / Not Interested permanently complete SLA. Other Done/Save
-      // actions restart a 3-day follow-up window (including overdue leads).
-      const terminal = actionName === 'Converted' || actionName === 'Not Interested';
-      const nextSla = (done && terminal) ? 'COMPLETED' : reopening ? 'PENDING' : null;
+      // Only Done marks COMPLETED. Save / Reopen stay PENDING (restarts 3-day follow-up on backend).
+      const nextSla = done ? 'COMPLETED' : 'PENDING';
       const { data } = await api.post(`/leads/${lead.id}/status`, {
         new_status_id: draft.progress || lead.status_id,
         reason: stampedRemarks,
         method: 'Call',
         customer_review: draft.review,
         quotation_value: qv || undefined,
-        ...(nextSla ? { sla_state: nextSla } : {}),
+        sla_state: nextSla,
       });
       setItems((current) => current.map((item) => item.id === lead.id
-        ? { ...item, status_id: draft.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: draft.review, quotation_value: qv || item.quotation_value, sla_state: data.sla_state, work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), at: new Date().toISOString() }] }
+        ? {
+          ...item,
+          status_id: draft.progress || item.status_id,
+          employee_remarks: stampedRemarks,
+          customer_review: draft.review,
+          quotation_value: qv || item.quotation_value,
+          sla_state: data.sla_state ?? nextSla,
+          work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), at: new Date().toISOString() }],
+        }
         : item));
       setDrafts((current) => { const next = { ...current }; delete next[lead.id]; return next; });
-      setExpandedRows((current) => ({ ...current, [lead.id]: false }));
+      setExpandedRows((current) => ({ ...current, [lead.id]: reopening }));
       if (done) {
         setFollowupForms((current) => ({ ...current, [lead.id]: [] }));
       }
-      if (reopening) setExpandedRows((current) => ({ ...current, [lead.id]: true }));
     } catch (e: any) {
       setValidationMessage(e?.response?.data?.detail || 'Could not save lead remarks');
     } finally { setSavingId(null); }
@@ -2526,7 +2560,7 @@ export function Leads() {
                                 {l.quotation_form.revision ? ` · ${l.quotation_form.revision}` : ''}
                               </div>
                             ) : (
-                              <div className="text-[10px] text-graphite-400 mt-1">REF on assign</div>
+                              <div className="text-[10px] text-graphite-400 mt-1">Save form for REF</div>
                             )}
                           </>
                         ) : (
@@ -4563,7 +4597,7 @@ export function Reports() {
                 </tbody>
               </table>
               {quotationReport && !(quotationReport.rows || []).length && (
-                <EmptyState title="No Quotation sent leads in this range" hint="Only leads with progress Quotation sent appear in this report." />
+                <EmptyState title="No saved quotations in this range" hint="Only Quotation sent leads with a saved quotation form (REF) appear here." />
               )}
             </div>
           </div>

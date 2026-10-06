@@ -428,9 +428,41 @@ def build_employee_period_pdf(payload: dict) -> bytes:
 
     count_table("Category", payload.get("category") or [])
     count_table("Progress", payload.get("progress") or [])
+
+    def money(v) -> str:
+        try:
+            n = int(round(float(v or 0)))
+        except (TypeError, ValueError):
+            n = 0
+        return f"Rs. {n:,}"
+
+    story.append(Paragraph("Values", subhead))
+    value_body = [[Paragraph(h, header) for h in ("Metric", "Amount")]]
+    for label, key in (
+        ("Total lead value", "total_lead_value"),
+        ("Quotation value", "total_quotation_value"),
+        ("Converted quotation value", "converted_quotation_value"),
+    ):
+        value_body.append([
+            Paragraph(escape(label), left),
+            Paragraph(money(payload.get(key)), cell),
+        ])
+    value_table = Table(value_body, colWidths=[(width - 72) * 0.72, (width - 72) * 0.28], hAlign="CENTER")
+    value_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf4fa")]),
+        ("ALIGN", (1, 1), (1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(value_table)
     story.append(Spacer(1, 14))
     story.append(Paragraph(
-        "Category is the number of customers. Progress is each time that step was logged.",
+        "Category is the number of customers. Progress is each time that step was logged. "
+        "Values are for leads worked in this period; converted quotation uses the latest quotation value.",
         meta,
     ))
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)

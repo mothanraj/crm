@@ -101,10 +101,11 @@ export function StatusBadge({ value }: { value: string }) {
 export function SlaBadge({ value }: { value: string }) {
   const cls = SLA_STYLES[value] ?? 'bg-graphite-100 text-graphite-600 ring-graphite-200';
   const dot = value === 'OVERDUE' ? 'bg-[#E03131]' : value === 'COMPLETED' ? 'bg-[#2F9E44]' : 'bg-[#1971C2]';
+  const label = value === 'OVERDUE' ? 'Overdue' : value === 'COMPLETED' ? 'Completed' : value === 'PENDING' ? 'Pending' : (value || '—');
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ring-1 ${cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-      {(value === 'OVERDUE' ? 'Overdue' : value) || '—'}
+      {label}
     </span>
   );
 }

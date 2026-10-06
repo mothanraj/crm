@@ -293,18 +293,20 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
     items = []
     for r in rows:
         qform = None
-        if r.id in quote_by_lead:
+        qrow = quote_by_lead.get(r.id)
+        # Show REF in the table only after form Save (issued) — open/preview does not count.
+        if qrow is not None and _quotation_is_issued(qrow):
             qform = {
-                "quotation_number": quote_by_lead[r.id].quotation_number,
-                "revision": quote_by_lead[r.id].revision,
-                "amount_excl": _money_str(quote_by_lead[r.id].amount_excl),
-                "grand_total": _money_str(quote_by_lead[r.id].grand_total),
+                "quotation_number": qrow.quotation_number,
+                "revision": qrow.revision,
+                "amount_excl": _money_str(qrow.amount_excl),
+                "grand_total": _money_str(qrow.grand_total),
             }
         qhist = list(quote_value_hist_by_lead.get(r.id) or [])
         # Fallback: current form/lead value when no Quotation Form activity yet
         if not qhist:
-            cur_val = _money_str(quote_by_lead[r.id].grand_total) if r.id in quote_by_lead else _money_str(r.quotation_value)
-            cur_rev = (quote_by_lead[r.id].revision if r.id in quote_by_lead else None) or "R0"
+            cur_val = _money_str(qrow.grand_total) if qform else _money_str(r.quotation_value)
+            cur_rev = (qrow.revision if qform else None) or "R0"
             if cur_val not in (None, ""):
                 qhist = [{"revision": str(cur_rev).upper(), "quotation_value": cur_val, "at": None}]
         items.append({
@@ -732,9 +734,8 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         if rounded is None:
             raise HTTPException(400, "Quotation value must be a whole number (no decimals)")
         lead.quotation_value = rounded
-    # Converted (and Not Interested) stop overdue/email. Every other progress
-    # update — including clearing OVERDUE — restarts a 3-day follow-up window.
-    if status.name in SLA_STOP_STATUSES:
+    # Only explicit Done (sla_state=COMPLETED) stops overdue. Save restarts the 3-day window.
+    if body.sla_state == "COMPLETED":
         stop_followup_sla(lead)
     else:
         refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
@@ -919,6 +920,21 @@ def _quote_notes_payload(quote: Quotation | None) -> dict:
         return {}
 
 
+def _quotation_is_issued(quote: Quotation | None) -> bool:
+    """True only after form Save — opening alone does not reserve the Q count."""
+    if quote is None:
+        return False
+    notes = _quote_notes_payload(quote)
+    if notes.get("issued"):
+        return True
+    if quote.amount_excl is not None:
+        try:
+            return float(quote.amount_excl) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 def _next_revision(current: str | None) -> str:
     raw = (current or "R0").strip().upper()
     if raw.startswith("R") and raw[1:].isdigit():
@@ -931,6 +947,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         DEFAULT_PAYMENT_TERMS, DEFAULT_POST_WARRANTY, DEFAULT_INTRODUCTION,
         normalize_delivery_period,
         build_quotation_ref, calc_form_totals, clean_extra_lines, enquiry_ddmm,
+        next_quote_seq,
     )
 
     product = db.get(Product, lead.product_id) if lead.product_id else None
@@ -955,16 +972,17 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
     introduction = notes["introduction"] if "introduction" in notes else DEFAULT_INTRODUCTION
     extra_lines = clean_extra_lines(notes.get("extra_lines") or [])
-    revision = (quote.revision if quote else "R0") or "R0"
-    if quote and quote.quotation_number:
+    revision = (quote.revision if quote and _quotation_is_issued(quote) else "R0") or "R0"
+    issued = _quotation_is_issued(quote)
+    qdate = quote.quotation_date if quote and quote.quotation_date and issued else date.today()
+    if issued and quote and quote.quotation_number:
         quotation_number = quote.quotation_number
     else:
-        # Preview only — real Qn is allocated when the form is first opened/saved.
-        quotation_number = build_quotation_ref(enquiry_ddmm(lead), 0, revision).replace("Q0", "Q…")
-    qdate = quote.quotation_date if quote and quote.quotation_date else date.today()
+        # Preview next count only — not reserved until form Save.
+        quotation_number = build_quotation_ref(enquiry_ddmm(lead, qdate), next_quote_seq(db), revision)
     totals = calc_form_totals(unit_cost, units, extra_lines)
     return {
-        "id": str(quote.id) if quote else None,
+        "id": str(quote.id) if quote and issued else None,
         "quotation_number": quotation_number,
         "revision": revision,
         "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
@@ -979,15 +997,17 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         "unit_cost": int(round(unit_cost)) if unit_cost else 0,
         "units": units,
         "extra_lines": extra_lines,
-        "amount_excl": totals["amount_excl"],
-        "gst": totals["gst"],
-        "grand_total": totals["grand_total"],
-        "status": quote.status if quote else "Draft",
+        "amount_excl": totals["amount_excl"] if issued else 0,
+        "gst": totals["gst"] if issued else 0,
+        "grand_total": totals["grand_total"] if issued else 0,
+        "status": quote.status if quote and issued else "Draft",
         "customer_name": lead.customer_name or "",
         "company_name": lead.company_name or "",
         "city": lead.city or "",
         "enquiry_number": lead.enquiry_number or "",
         "product_name": product_name,
+        "issued": issued,
+        "preview": not issued,
     }
 
 
@@ -1000,13 +1020,8 @@ def get_quotation_form(lid: UUID, db: Session = Depends(get_db), u: User = Depen
         .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
         .first()
     )
-    # First time the employee opens the form → allocate next Qn (Q1, Q2, …).
-    if quote is None and lead.primary_employee_id is not None:
-        from app.services.quotation_form import ensure_quotation_on_assign
-        quote = ensure_quotation_on_assign(db, lead)
-        db.commit()
-        db.refresh(quote)
-    return _quotation_form_dict(db, lead, quote)
+    # Open only previews the next Q count — Save is what reserves it.
+    return _quotation_form_dict(db, lead, quote if _quotation_is_issued(quote) else None)
 
 
 @router.put("/{lid}/quotation-form")
@@ -1041,14 +1056,11 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         "extra_lines": extra_lines,
         "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
     }
-    # First save+download stays R0. The next edit that is saved becomes R1, then R2…
-    # Download itself does not change the revision. Saving the same text again does not bump.
+    # Q count is reserved on Save only. First save = R0; later changed saves bump Rn.
     if quote:
         prev_number = quote.quotation_number
         old = _quote_notes_payload(quote)
-        already_issued = bool(old.get("issued")) or bool((old.get("to_name") or "").strip()) or (
-            quote.amount_excl is not None and float(quote.amount_excl or 0) > 0
-        )
+        already_issued = _quotation_is_issued(quote)
         old_snap = {k: old.get(k) for k in snap}
         if old.get("units") is None and quote.units is not None:
             old_snap["units"] = float(quote.units)
@@ -1062,10 +1074,14 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         if already_issued and changed:
             quote.revision = _next_revision(quote.revision)
         else:
-            quote.revision = quote.revision or "R0"
-        new_number = build_quotation_number(
-            db, lead, quote.revision, existing_number=prev_number, on_date=qdate,
-        )
+            quote.revision = (quote.revision or "R0") if already_issued else "R0"
+        if already_issued:
+            new_number = build_quotation_number(
+                db, lead, quote.revision, existing_number=prev_number, on_date=qdate,
+            )
+        else:
+            # First real save — take next free Q count (open/preview never reserved it).
+            new_number = build_quotation_number(db, lead, quote.revision, on_date=qdate)
         taken = db.query(Quotation).filter(
             Quotation.quotation_number == new_number,
             Quotation.id != quote.id,
@@ -1122,7 +1138,7 @@ def download_quotation_form_pdf(lid: UUID, db: Session = Depends(get_db), u: Use
         .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
         .first()
     )
-    if not quote:
+    if not quote or not _quotation_is_issued(quote):
         raise HTTPException(400, "Save the quotation form before downloading PDF")
     payload = _quotation_form_dict(db, lead, quote)
     content = build_quotation_form_pdf(payload)

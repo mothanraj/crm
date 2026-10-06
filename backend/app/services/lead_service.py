@@ -348,7 +348,8 @@ def record_first_contact(db: Session, lead: Lead, by: User, method: str, result:
     lead.first_contact_result = result
     lead.first_contact_by = by.id
     lead.first_contact_notes = notes
-    # First touch clears the assignment overdue and starts a fresh 3-day follow-up window.
+    # First touch clears assignment overdue and starts a fresh 3-day follow-up window.
+    # Work completion is only via Done (stop_followup_sla), not first contact.
     refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=by.id, activity_type="First Contact",
