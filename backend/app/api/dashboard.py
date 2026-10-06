@@ -74,6 +74,7 @@ def _resolve_range(
     from_date: str | None = None,
     to_date: str | None = None,
     week: str | None = None,
+    year: str | None = None,
 ) -> tuple[date | None, date | None, str]:
     mode_l = (mode or "custom").lower().strip()
     if mode_l in ("month", "month-wise", "monthly"):
@@ -87,6 +88,17 @@ def _resolve_range(
         except Exception as exc:
             raise HTTPException(400, "Invalid month. Use YYYY-MM") from exc
         return start, end, "month"
+    if mode_l in ("year", "yearly", "year-wise"):
+        try:
+            y = int((year or month or str(date.today().year))[:4])
+            start = date(y, 1, 1)
+            end = date(y, 12, 31)
+        except Exception as exc:
+            raise HTTPException(400, "Invalid year. Use YYYY") from exc
+        today = date.today()
+        if end > today:
+            end = today
+        return start, end, "year"
     if mode_l in ("week", "weekly", "week-wise"):
         # Chosen day → 7 calendar days (start through start+6).
         start = _parse_date(week or from_date, "week") or date.today()
@@ -155,6 +167,223 @@ def _empty_progress_counts() -> dict:
         "quote_sent": 0,
         "converted": 0,
         "not_interested": 0,
+    }
+
+
+def _normalize_history_category(raw: str | None) -> str | None:
+    label = (raw or "").strip()
+    if not label:
+        return None
+    label = CUSTOMER_REVIEW_ALIASES.get(label, label)
+    if label in CUSTOMER_REVIEW_ORDER:
+        return label
+    return None
+
+
+def _history_events_by_lead(db: Session, lead_ids: list) -> dict:
+    """Every progress / category touch for each lead (duplicates kept).
+
+    Prefer Work Progress activities (each save counts). When a lead has none,
+    fall back to status-history rows so older leads still show history.
+    """
+    by_lead: dict = defaultdict(list)
+    if not lead_ids:
+        return by_lead
+    for lid, outcome, review in (
+        db.query(LeadActivity.lead_id, LeadActivity.outcome, LeadActivity.customer_review)
+        .filter(
+            LeadActivity.lead_id.in_(lead_ids),
+            LeadActivity.activity_type == "Work Progress",
+        )
+        .order_by(LeadActivity.activity_at.asc())
+        .all()
+    ):
+        key = _norm_progress_bucket(outcome)
+        cat = _normalize_history_category(review)
+        if key or cat:
+            by_lead[lid].append({"progress": key, "category": cat})
+    missing = [lid for lid in lead_ids if lid not in by_lead]
+    if missing:
+        NewStatus = LeadStatus  # noqa: N806
+        for lid, st_name in (
+            db.query(LeadStatusHistory.lead_id, NewStatus.name)
+            .join(NewStatus, LeadStatusHistory.new_status_id == NewStatus.id)
+            .filter(LeadStatusHistory.lead_id.in_(missing))
+            .order_by(LeadStatusHistory.changed_at.asc())
+            .all()
+        ):
+            key = _norm_progress_bucket(st_name)
+            if key:
+                by_lead[lid].append({"progress": key, "category": None})
+    return by_lead
+
+
+def _dashboard_history_payload(
+    db: Session, start: date | None, end: date | None, mode: str,
+) -> dict:
+    """Dashboard-style report using full progress/category history for leads in range."""
+    rows_q = (
+        db.query(
+            Lead.id,
+            Lead.lead_value,
+            Lead.quantity_num,
+            Lead.customer_review,
+            LeadSource.name,
+            Product.name,
+            LeadStatus.name,
+            Lead.primary_employee_id,
+            Lead.quotation_value,
+        )
+        .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
+        .outerjoin(Product, Lead.product_id == Product.id)
+        .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(_date_filter(start, end))
+        .all()
+    )
+    lead_ids = [r[0] for r in rows_q]
+    events = _history_events_by_lead(db, lead_ids)
+
+    progress_tiles = {
+        "in_followup": 0,
+        "meeting": 0,
+        "site_visit": 0,
+        "quote_sent": 0,
+        "converted": 0,
+        "not_interested": 0,
+    }
+    total_lead_value = 0.0
+    total_quotation_value = 0.0
+    total_cars = 0.0
+    assigned_count = 0
+    converted_ids: set = set()
+    converted_lead_value = 0.0
+
+    by_source: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_SOURCES}
+    by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
+    by_category: dict[str, dict] = {name: _empty_progress_counts() for name in CUSTOMER_REVIEW_ORDER}
+    category_leads: dict[str, set] = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+
+    for lid, lead_value, cars, review, src_name, prod_name, st_name, emp_id, quote_val in rows_q:
+        src = canonical_source(src_name)
+        prod = prod_name or "Unmapped"
+        src_bucket = by_source.setdefault(src, _empty_progress_counts())
+        prod_bucket = by_product.setdefault(prod, _empty_progress_counts())
+        src_bucket["total"] += 1
+        prod_bucket["total"] += 1
+
+        if emp_id is not None or st_name == STATUS_ASSIGNED:
+            assigned_count += 1
+
+        try:
+            total_lead_value += float(lead_value or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            total_quotation_value += float(quote_val or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            total_cars += float(cars or 0)
+        except (TypeError, ValueError):
+            pass
+
+        lead_events = list(events.get(lid) or [])
+        if not lead_events:
+            # No history yet — count current status / category once so new leads still appear.
+            lead_events = [{
+                "progress": _norm_progress_bucket(st_name),
+                "category": _normalize_history_category(review),
+            }]
+
+        seen_cat_for_lead: set[str] = set()
+        for ev in lead_events:
+            key = ev.get("progress")
+            cat = ev.get("category")
+            if key:
+                progress_tiles[key] = progress_tiles.get(key, 0) + 1
+                src_bucket[key] = src_bucket.get(key, 0) + 1
+                prod_bucket[key] = prod_bucket.get(key, 0) + 1
+                if key == "converted":
+                    converted_ids.add(lid)
+            if cat:
+                cat_bucket = by_category.setdefault(cat, _empty_progress_counts())
+                if cat not in seen_cat_for_lead:
+                    category_leads.setdefault(cat, set()).add(lid)
+                    seen_cat_for_lead.add(cat)
+                if key:
+                    cat_bucket[key] = cat_bucket.get(key, 0) + 1
+
+        # Current Converted status also counts as a converted lead for KPI value.
+        if st_name == STATUS_CONVERTED:
+            converted_ids.add(lid)
+
+        # If lead has a current category but no category events, attribute once.
+        cur_cat = _normalize_history_category(review)
+        if cur_cat and cur_cat not in seen_cat_for_lead:
+            category_leads.setdefault(cur_cat, set()).add(lid)
+
+    for lid, lead_value, *_rest in rows_q:
+        if lid in converted_ids:
+            try:
+                converted_lead_value += float(lead_value or 0)
+            except (TypeError, ValueError):
+                pass
+
+    def _matrix_rows(buckets: dict, label_key: str, ordered: list[str]) -> tuple[list, dict]:
+        extras = sorted(k for k in buckets if k not in ordered and buckets[k].get("total", 0))
+        labels = list(ordered) + extras
+        rows = []
+        totals = _empty_progress_counts()
+        for label in labels:
+            data = buckets.get(label) or _empty_progress_counts()
+            row = {label_key: label, **{k: int(data.get(k, 0)) for k in totals}}
+            rows.append(row)
+            for k in totals:
+                totals[k] += row[k]
+        return rows, totals
+
+    source_rows, source_totals = _matrix_rows(by_source, "source", list(CANONICAL_SOURCES))
+    product_rows, product_totals = _matrix_rows(by_product, "product", list(CANONICAL_PRODUCTS))
+
+    cat_rows = []
+    cat_totals = _empty_progress_counts()
+    for cat in CUSTOMER_REVIEW_ORDER:
+        data = by_category.get(cat) or _empty_progress_counts()
+        row = {
+            "category": cat,
+            "total": len(category_leads.get(cat) or ()),
+            "in_followup": int(data.get("in_followup", 0)),
+            "meeting": int(data.get("meeting", 0)),
+            "site_visit": int(data.get("site_visit", 0)),
+            "quote_sent": int(data.get("quote_sent", 0)),
+            "converted": int(data.get("converted", 0)),
+            "not_interested": int(data.get("not_interested", 0)),
+        }
+        cat_rows.append(row)
+        for k in cat_totals:
+            cat_totals[k] += row[k]
+
+    return {
+        "mode": mode,
+        "effective_from": start.isoformat() if start else None,
+        "effective_to": end.isoformat() if end else None,
+        "tiles": {
+            "total_leads": len(rows_q),
+            "pending": assigned_count,
+            "in_followup": int(progress_tiles["in_followup"]),
+            "meeting": int(progress_tiles["meeting"]),
+            "site_visit": int(progress_tiles["site_visit"]),
+            "quote_sent": int(progress_tiles["quote_sent"]),
+            "converted": len(converted_ids),
+            "not_interested": int(progress_tiles["not_interested"]),
+            "total_cars": int(round(total_cars)),
+            "total_lead_value": round(total_lead_value),
+            "total_quotation_value": round(total_quotation_value),
+            "converted_lead_value": round(converted_lead_value),
+        },
+        "by_source": {"rows": source_rows, "totals": source_totals},
+        "by_product": {"rows": product_rows, "totals": product_totals},
+        "by_category": {"rows": cat_rows, "totals": cat_totals},
     }
 
 
@@ -1023,6 +1252,67 @@ def product_details_export(db: Session = Depends(get_db), u: User = Depends(curr
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
 
 
+@router.get("/reports/dashboard-history")
+def dashboard_history_report(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    year: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    """Dashboard layout with full progress/category history counts for the period."""
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
+    return _dashboard_history_payload(db, start, end, resolved)
+
+
+@router.get("/reports/dashboard-history/export")
+def dashboard_history_export(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    mode: str = Query("custom"),
+    month: str | None = None,
+    week: str | None = None,
+    year: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    _require_reports(u)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
+    payload = _dashboard_history_payload(db, start, end, resolved)
+    t = payload["tiles"]
+    headers = ["Section", "Label", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    body: list[list] = [
+        ["KPI", "Total Leads", t["total_leads"], "", "", "", "", "", ""],
+        ["KPI", "Pending", t["pending"], "", "", "", "", "", ""],
+        ["KPI", "In Followup (history)", t["in_followup"], "", "", "", "", "", ""],
+        ["KPI", "Meeting (history)", t["meeting"], "", "", "", "", "", ""],
+        ["KPI", "Site Visit (history)", t["site_visit"], "", "", "", "", "", ""],
+        ["KPI", "Quotation sent (history)", t["quote_sent"], "", "", "", "", "", ""],
+        ["KPI", "Converted", t["converted"], "", "", "", "", "", ""],
+        ["KPI", "Not Interested (history)", t["not_interested"], "", "", "", "", "", ""],
+        ["KPI", "No. of Cars", t["total_cars"], "", "", "", "", "", ""],
+        ["KPI", "Total Lead Value", t["total_lead_value"], "", "", "", "", "", ""],
+        ["KPI", "Total Quotation Value", t["total_quotation_value"], "", "", "", "", "", ""],
+        ["KPI", "Total Converted Value", t["converted_lead_value"], "", "", "", "", "", ""],
+    ]
+    for r in payload["by_source"]["rows"]:
+        body.append(["Source", r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["converted"], r["not_interested"]])
+    for r in payload["by_product"]["rows"]:
+        body.append(["Product", r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["converted"], r["not_interested"]])
+    for r in payload["by_category"]["rows"]:
+        body.append(["Category", r["category"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r["converted"], r["not_interested"]])
+    return _xlsx_download(
+        f"dashboard-history-{payload['effective_from'] or 'all'}-to-{payload['effective_to'] or 'all'}.xlsx",
+        headers,
+        body,
+        title="Dashboard History",
+    )
+
+
 @router.get("/reports/category-details")
 def category_details(
     db: Session = Depends(get_db),
@@ -1112,9 +1402,13 @@ def source_details_export(
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(..., pattern="^(source|product|category|lead_value|quotation|monthly|detailed)$"),
+    report_type: str = Query(
+        ...,
+        pattern="^(source|product|category|lead_value|quotation|monthly|detailed|dashboard_history)$",
+    ),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
+    year: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
     from_month: str | None = None, to_month: str | None = None,
 ):
@@ -1139,8 +1433,12 @@ def report_pdf(
         content = build_report_pdf(payload, "detailed")
         filename = "detailed-lead-report.pdf"
     else:
-        start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
-        if report_type == "lead_value":
+        start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
+        if report_type == "dashboard_history":
+            payload = _dashboard_history_payload(db, start, end, resolved)
+            content = build_report_pdf(payload, "dashboard_history")
+            filename = "dashboard-history-report.pdf"
+        elif report_type == "lead_value":
             payload = _lead_value_for_range(db, start, end, resolved, u)
             content = build_report_pdf(payload, "lead_value")
             filename = "lead-value-report.pdf"

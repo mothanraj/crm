@@ -68,7 +68,6 @@ function validateCars(raw: string, product: string): string | null {
 }
 
 type FormState = {
-  enquiry_number: string;
   enquiry_date: string;
   customer_name: string;
   company_name: string;
@@ -82,7 +81,6 @@ type FormState = {
 };
 
 const emptyForm = (): FormState => ({
-  enquiry_number: '',
   enquiry_date: new Date().toISOString().slice(0, 10),
   customer_name: '',
   company_name: '',
@@ -116,6 +114,12 @@ export function CreateLead() {
   const [empLoadError, setEmpLoadError] = useState('');
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<{ title: string; points: string[]; ok?: boolean } | null>(null);
+  const [createdLead, setCreatedLead] = useState<{
+    id: string;
+    enquiry_number: string;
+    customer_name: string;
+    assigned_to: string;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,11 +171,7 @@ export function CreateLead() {
     const errors: string[] = [];
     const phone = f.contact_number.trim();
     const email = f.email.trim();
-    const enq = f.enquiry_number.trim();
 
-    if (enq && !/^\d+$/.test(enq)) {
-      errors.push('You have entered wrong Enq no — numbers only');
-    }
     if (phone && !isValidPhone(phone)) {
       errors.push('You have entered wrong Contact No. — 10-digit Indian mobile starting with 6–9');
     }
@@ -208,7 +208,6 @@ export function CreateLead() {
     setBusy(true);
     try {
       const payload: Record<string, string | null> = {
-        enquiry_number: form.enquiry_number.trim(),
         enquiry_date: form.enquiry_date || null,
         customer_name: form.customer_name.trim(),
         company_name: form.company_name.trim(),
@@ -223,15 +222,24 @@ export function CreateLead() {
       const { data } = await api.post('/leads', payload);
       const empName = employees.find((emp) => emp.id === data?.primary_employee_id)?.name
         || (data?.primary_employee_id ? 'selected employee' : 'round-robin');
+      const enq = String(data?.enquiry_number || '').trim() || '—';
+      const leadName = String(data?.customer_name || form.customer_name || '').trim() || '—';
       setForm(emptyForm());
+      setCreatedLead({
+        id: String(data?.id || ''),
+        enquiry_number: enq,
+        customer_name: leadName,
+        assigned_to: empName,
+      });
       setPopup({
         title: 'Lead created',
-        points: [`Lead ${data?.enquiry_number || ''} created and assigned to ${empName}.`],
+        points: [
+          `Enquiry no: ${enq}`,
+          `Lead name: ${leadName}`,
+          `Assigned to: ${empName}`,
+        ],
         ok: true,
       });
-      if (data?.id) {
-        setTimeout(() => navigate(`/leads/${data.id}`), 900);
-      }
     } catch (err: any) {
       const d = err?.response?.data?.detail;
       const points = typeof d === 'string'
@@ -258,22 +266,48 @@ export function CreateLead() {
     <div className="space-y-4">
       <PageHeader
         title="Create Lead"
-        subtitle="Phone or email alone is enough. Other fields are optional — wrong filled values show a popup."
+        subtitle="Phone or email alone is enough. Other fields are optional — wrong filled values show a popup. Enquiry number is assigned automatically after save."
         actions={<Link to="/leads" className="btn-secondary text-sm">Back to Leads</Link>}
       />
+
+      {createdLead && (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold uppercase tracking-wide text-emerald-800">Lead created — assigned enquiry number</div>
+          <div className="mt-2 grid sm:grid-cols-2 gap-2">
+            <div className="rounded-lg bg-white/80 border border-emerald-200 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-emerald-700/80 font-semibold">Enquiry no</div>
+              <div className="text-xl font-bold text-emerald-900 tabular-nums mt-0.5">{createdLead.enquiry_number}</div>
+            </div>
+            <div className="rounded-lg bg-white/80 border border-emerald-200 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-emerald-700/80 font-semibold">Lead name</div>
+              <div className="text-xl font-bold text-emerald-900 mt-0.5 break-words">{createdLead.customer_name}</div>
+            </div>
+          </div>
+          <p className="text-sm text-emerald-800 mt-2">Assigned to {createdLead.assigned_to}.</p>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {createdLead.id && (
+              <button type="button" className="btn-primary text-sm" onClick={() => navigate(`/leads/${createdLead.id}`)}>
+                Open this lead
+              </button>
+            )}
+            <button type="button" className="btn-secondary text-sm" onClick={() => setCreatedLead(null)}>
+              Create another
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={onSubmit} className="card p-4 sm:p-6 space-y-4" noValidate>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {field('Enq no', (
             <input
-              className="input w-full"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={form.enquiry_number}
-              onChange={(e) => set('enquiry_number', e.target.value.replace(/\D/g, ''))}
-              placeholder="Numbers only — auto if blank"
+              className="input w-full bg-graphite-50 text-graphite-500"
+              value="Auto-assigned"
+              readOnly
+              disabled
+              title="Enquiry number is assigned automatically"
             />
-          ))}
+          ), 'Assigned automatically when the lead is saved')}
           {field('Date Received', (
             <input type="date" className="input w-full" value={form.enquiry_date} onChange={(e) => set('enquiry_date', e.target.value)} />
           ))}
@@ -346,18 +380,17 @@ export function CreateLead() {
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setPopup(null)}>
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className={`text-lg font-semibold ${popup.ok ? 'text-emerald-800' : 'text-red-700'}`}>{popup.title}</h3>
-            {popup.ok ? (
-              <p className="text-sm text-emerald-700 mt-2">{popup.points[0]}</p>
-            ) : (
-              <ul className="mt-3 space-y-2 list-none">
-                {popup.points.map((point, i) => (
-                  <li key={`${i}-${point}`} className="flex gap-2 text-sm text-red-600 font-medium">
-                    <span className="shrink-0 text-red-600">{i + 1}.</span>
-                    <span>{point}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <ul className="mt-3 space-y-2 list-none">
+              {popup.points.map((point, i) => (
+                <li
+                  key={`${i}-${point}`}
+                  className={`flex gap-2 text-sm font-medium ${popup.ok ? 'text-emerald-800' : 'text-red-600'}`}
+                >
+                  <span className="shrink-0">{i + 1}.</span>
+                  <span>{point}</span>
+                </li>
+              ))}
+            </ul>
             <div className="flex justify-end mt-5">
               <button type="button" className="btn-primary" onClick={() => setPopup(null)}>OK</button>
             </div>

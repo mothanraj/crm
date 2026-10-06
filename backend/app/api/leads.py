@@ -20,7 +20,7 @@ from app.schemas import (
 from app.services import live
 from app.services.lead_service import (
     FOLLOWUP_SLA_HOURS, SLA_STOP_STATUSES, assign, auto_assign, change_status,
-    employee_by_name, format_enquiry_number, next_enquiry_number, notify_admins,
+    employee_by_name, next_enquiry_number, notify_admins,
     open_reassignment_request, record_first_contact, refresh_followup_sla,
     remember_assignment, stop_followup_sla, validate_assignee,
 )
@@ -352,7 +352,7 @@ def _validate_form_cars(raw, product_name: str) -> tuple[int | None, str | None]
 def create_lead(body: LeadCreate, db: Session = Depends(get_db), admin: User = Depends(admin_only)):
     """Manual Create Lead — phone or email alone is enough; other fields optional when blank."""
     from app.api.importer import (
-        _default_status, _norm_product, _norm_source, _send_assignment_batches, parse_legacy_enq,
+        _default_status, _norm_product, _norm_source, _send_assignment_batches,
     )
 
     phone = (body.contact_number or "").strip()
@@ -361,11 +361,8 @@ def create_lead(body: LeadCreate, db: Session = Depends(get_db), admin: User = D
     product_name = (body.product_name or "").strip()
     source_name = (body.source_name or "").strip()
     cars_raw = body.number_of_cars if body.number_of_cars is not None else body.quantity_raw
-    enq_raw = str(body.enquiry_number or "").strip()
 
     errors: list[str] = []
-    if enq_raw and not enq_raw.isdigit():
-        errors.append("You have entered wrong Enq no — numbers only")
     if phone and not is_valid_phone(phone):
         errors.append("You have entered wrong Contact No. — 10-digit Indian mobile starting with 6–9")
     if email and not is_valid_email(email):
@@ -406,21 +403,15 @@ def create_lead(body: LeadCreate, db: Session = Depends(get_db), admin: User = D
     if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
         errors.append("You have entered wrong Contact No. — duplicate phone already exists")
 
-    legacy = parse_legacy_enq(enq_raw) if enq_raw and enq_raw.isdigit() else None
-    if legacy is not None and (
-        db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
-        or db.query(Lead).filter_by(enquiry_number=format_enquiry_number(legacy)).first()
-    ):
-        errors.append(f"You have entered wrong Enq no — duplicate {format_enquiry_number(legacy)}")
-
     if errors:
         raise HTTPException(400, " · ".join(errors))
 
     st = _default_status(db)
-    enquiry_number = format_enquiry_number(int(legacy)) if legacy is not None else next_enquiry_number(db)
+    # Enquiry numbers are always system-assigned (1…n). Client / Excel values are ignored.
+    enquiry_number = next_enquiry_number(db)
     lead = Lead(
         enquiry_number=enquiry_number,
-        legacy_enquiry_no=legacy,
+        legacy_enquiry_no=None,
         enquiry_date=body.enquiry_date or date.today(),
         customer_name=name,
         company_name=(body.company_name or "").strip(),
@@ -628,22 +619,14 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
     data.pop("gst_amount", None)
     role = getattr(getattr(u, "role", None), "name", None)
     admin_fields = {
-        "enquiry_number", "enquiry_date", "customer_name", "company_name",
+        "enquiry_date", "customer_name", "company_name",
         "contact_number", "city", "email", "source_id",
     }
+    if "enquiry_number" in data:
+        data.pop("enquiry_number", None)
+        raise HTTPException(403, "Enquiry number is auto-assigned and cannot be changed")
     if role != "ADMIN" and any(key in data for key in admin_fields):
         raise HTTPException(403, "Only an admin can edit these lead details")
-    if "enquiry_number" in data:
-        number = str(data.pop("enquiry_number") or "").strip()
-        if not number:
-            raise HTTPException(400, "Enquiry number is required")
-        taken = db.query(Lead).filter(Lead.enquiry_number == number, Lead.id != lead.id).first()
-        if taken:
-            raise HTTPException(409, "That enquiry number is already used")
-        lead.enquiry_number = number
-        suffix = number.upper().removeprefix("ENQ-")
-        if number.upper().startswith("ENQ-") and suffix.isdigit():
-            lead.legacy_enquiry_no = int(suffix)
     if "enquiry_date" in data:
         lead.enquiry_date = data.pop("enquiry_date")
     if "source_id" in data:
