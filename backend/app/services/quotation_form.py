@@ -3,11 +3,12 @@
 REF format: EEPLCP{DDMM}Q{n}R{rev}
   EEPLCP = Estar Engineers Pvt Ltd Car Parking
   DDMM   = enquiry date day+month (e.g. 1009 for 10 Sep)
-  Qn     = quotation sequence in the order forms are first opened (1st open → Q1, 2nd → Q2, …)
-  Rn     = revision (R0 on first open, then R1, R2, … on edits)
+  Qn     = quotation sequence reserved on form Save (open only previews the next count)
+  Rn     = revision (R0 on first save, then R1, R2, … on later edits)
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime
 from io import BytesIO
@@ -85,11 +86,31 @@ def parse_quote_seq(quotation_number: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _quotation_row_is_issued(notes: str | None, amount_excl) -> bool:
+    """Q count is reserved only after a real form save (issued), not on open/preview."""
+    if amount_excl is not None:
+        try:
+            if float(amount_excl) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    raw = (notes or "").strip()
+    if not raw.startswith("{"):
+        return False
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return False
+    return bool(isinstance(data, dict) and data.get("issued"))
+
+
 def next_quote_seq(db: Session) -> int:
-    """Next global Q number = max existing Q in REF + 1 (or 1 if none)."""
-    rows = db.query(Quotation.quotation_number).all()
+    """Next global Q number = max issued Q in REF + 1 (open/preview does not count)."""
+    rows = db.query(Quotation.quotation_number, Quotation.notes, Quotation.amount_excl).all()
     mx = 0
-    for (num,) in rows:
+    for num, notes, amount in rows:
+        if not _quotation_row_is_issued(notes, amount):
+            continue
         seq = parse_quote_seq(num)
         if seq is not None and seq > mx:
             mx = seq

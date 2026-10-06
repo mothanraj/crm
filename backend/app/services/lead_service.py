@@ -331,8 +331,9 @@ def record_first_contact(db: Session, lead: Lead, by: User, method: str, result:
     lead.first_contact_result = result
     lead.first_contact_by = by.id
     lead.first_contact_notes = notes
-    # Contacting clears overdue — late contact still counts as contact done.
-    lead.sla_state = "COMPLETED"
+    # Contacting clears overdue/pending contact SLA. Work completion is only via Done.
+    if lead.sla_state != "COMPLETED":
+        lead.sla_state = "PENDING"
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=by.id, activity_type="First Contact",
         activity_at=now, notes=notes or result, outcome=result,

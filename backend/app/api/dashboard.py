@@ -249,6 +249,20 @@ def _kpis(db: Session, u: User | None = None):
                 "quotation_value": str(int(round(float(lead.quotation_value)))),
             })
     lead_value = _lead_value_analytics(db, u)
+    total_quotation_value = _as_rupee(
+        db.query(func.coalesce(func.sum(Lead.quotation_value), 0))
+        .filter(Lead.is_active.is_(True), *emp)
+        .scalar()
+        or 0
+    )
+    # Converted box uses each converted lead's latest quotation value (not lead_value).
+    total_converted_lead_value = _as_rupee(
+        db.query(func.coalesce(func.sum(Lead.quotation_value), 0))
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), LeadStatus.name == STATUS_CONVERTED, *emp)
+        .scalar()
+        or 0
+    )
     status_category = []
     for status_name, review, n in (
         db.query(LeadStatus.name, Lead.customer_review, func.count(Lead.id))
@@ -269,6 +283,8 @@ def _kpis(db: Session, u: User | None = None):
         "total": total,
         "lead_value": lead_value,
         "total_lead_value": lead_value["total_lead_value"],
+        "total_quotation_value": total_quotation_value,
+        "total_converted_lead_value": total_converted_lead_value,
         "by_status": by_status,
         "funnel": {
             "total": total,
@@ -381,14 +397,29 @@ def _employee_period_payload(
     )
     progress = {name: 0 for name in PERIOD_PROGRESS}
     category_leads = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+    period_lead_ids: set = set()
+    converted_lead_ids: set = set()
     for outcome, review, lead_id in rows:
         label = _PROGRESS_ALIASES.get((outcome or "").strip(), (outcome or "").strip())
         if label in progress:
             progress[label] += 1
+        if lead_id:
+            period_lead_ids.add(lead_id)
+            if label == STATUS_CONVERTED:
+                converted_lead_ids.add(lead_id)
         cat = (review or "").strip()
         cat = CUSTOMER_REVIEW_ALIASES.get(cat, cat)
         if cat in category_leads and lead_id:
             category_leads[cat].add(lead_id)
+    total_lead_value = 0
+    total_quotation_value = 0
+    converted_quotation_value = 0
+    if period_lead_ids:
+        for lead in db.query(Lead).filter(Lead.id.in_(period_lead_ids)).all():
+            total_lead_value += _as_rupee(lead.lead_value)
+            total_quotation_value += _as_rupee(lead.quotation_value)
+            if lead.id in converted_lead_ids:
+                converted_quotation_value += _as_rupee(lead.quotation_value)
     return {
         "employee_id": str(subject.id),
         "employee": subject.name or "Employee",
@@ -397,6 +428,9 @@ def _employee_period_payload(
         "to": end.isoformat(),
         "progress": [{"label": name, "count": progress[name]} for name in PERIOD_PROGRESS],
         "category": [{"label": name, "count": len(category_leads[name])} for name in CUSTOMER_REVIEW_ORDER],
+        "total_lead_value": total_lead_value,
+        "total_quotation_value": total_quotation_value,
+        "converted_quotation_value": converted_quotation_value,
     }
 
 
@@ -724,7 +758,24 @@ def _quotation_report_payload(db: Session, start: date | None, end: date | None,
         dt = lead.enquiry_date
         ref = ""
         if quote is not None:
-            ref = (quote.quotation_number or "").strip()
+            # REF only after the form was saved (issued).
+            notes_issued = False
+            try:
+                import json
+                notes = json.loads(quote.notes) if quote.notes and str(quote.notes).strip().startswith("{") else {}
+                notes_issued = bool(isinstance(notes, dict) and notes.get("issued"))
+            except Exception:
+                notes_issued = False
+            has_amount = False
+            try:
+                has_amount = (
+                    (quote.amount_excl is not None and float(quote.amount_excl or 0) > 0)
+                    or (quote.grand_total is not None and float(quote.grand_total or 0) > 0)
+                )
+            except (TypeError, ValueError):
+                has_amount = False
+            if notes_issued or has_amount:
+                ref = (quote.quotation_number or "").strip()
             excl = quote.amount_excl
             gst = quote.gst
             grand = quote.grand_total
@@ -744,6 +795,9 @@ def _quotation_report_payload(db: Session, start: date | None, end: date | None,
             gst = float(excl) * float(GST_RATE)
             if grand is None:
                 grand = float(excl) + float(gst)
+        # Count only after quotation form was saved (has REF) — open/preview alone does not count.
+        if not ref:
+            continue
         rows.append({
             "ref": ref,
             "date": dt.isoformat() if dt else None,
