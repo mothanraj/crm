@@ -19,9 +19,10 @@ from app.schemas import (
 )
 from app.services import live
 from app.services.lead_service import (
-    assign, auto_assign, change_status, employee_by_name, format_enquiry_number,
-    next_enquiry_number, notify_admins, open_reassignment_request,
-    record_first_contact, remember_assignment, validate_assignee,
+    FOLLOWUP_SLA_HOURS, SLA_STOP_STATUSES, assign, auto_assign, change_status,
+    employee_by_name, format_enquiry_number, next_enquiry_number, notify_admins,
+    open_reassignment_request, record_first_contact, refresh_followup_sla,
+    remember_assignment, stop_followup_sla, validate_assignee,
 )
 from app.services.normalize import (
     allows_odd_cars, canonical_product_name, is_valid_email, is_valid_phone,
@@ -733,10 +734,13 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         and (body.quotation_value is None or body.quotation_value == lead.quotation_value)
     )
     if completion_only:
-        lead.sla_state = body.sla_state
+        if status.name in SLA_STOP_STATUSES or body.sla_state == "COMPLETED":
+            stop_followup_sla(lead)
+        else:
+            refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
         db.commit()
         return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": False}
-    # First talk after assignment also completes the 3-day contact SLA
+    # First talk after assignment records contact and starts a fresh follow-up window
     if not lead.first_contact_at and lead.primary_employee_id == u.id:
         record_first_contact(db, lead, u, body.method or "Call", status.name, remarks)
     change_status(db, lead, body.new_status_id, u, remarks)
@@ -747,12 +751,11 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         if rounded is None:
             raise HTTPException(400, "Quotation value must be a whole number (no decimals)")
         lead.quotation_value = rounded
-    if body.sla_state is not None:
-        # Only an explicit Done (COMPLETED) completes the lead; Save sends PENDING.
-        lead.sla_state = body.sla_state
-    elif lead.sla_state in {"OVERDUE", "COMPLETED"}:
-        # Progress save without Done must not leave the lead completed/overdue.
-        lead.sla_state = "PENDING"
+    # Only explicit Done (sla_state=COMPLETED) stops overdue. Save restarts the 3-day window.
+    if body.sla_state == "COMPLETED":
+        stop_followup_sla(lead)
+    else:
+        refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
     q_for_activity = round_money(body.quotation_value) if status.name == "Quotation sent" and body.quotation_value is not None else None
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
