@@ -2987,11 +2987,9 @@ export function LeadDetail({ id }: { id: string }) {
   };
   const saveDetails = async () => {
     if (role !== 'ADMIN' || detailsBusy) return;
-    if (!details.enquiry_number.trim()) { setErr('Enquiry number is required'); return; }
     setDetailsBusy(true); setErr(''); setOkMsg('');
     try {
       const { data } = await api.put(`/leads/${id}`, {
-        enquiry_number: details.enquiry_number.trim(),
         enquiry_date: details.enquiry_date || null,
         customer_name: details.customer_name.trim(),
         company_name: details.company_name.trim(),
@@ -3045,7 +3043,13 @@ export function LeadDetail({ id }: { id: string }) {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-medium text-graphite-600">Enq no</label>
-              <input className="input mt-1" value={details.enquiry_number} onChange={(e) => setDetails((cur) => ({ ...cur, enquiry_number: e.target.value }))} />
+              <input
+                className="input mt-1 bg-graphite-50 text-graphite-500"
+                value={details.enquiry_number}
+                readOnly
+                disabled
+                title="Enquiry number is auto-assigned and cannot be changed"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-graphite-600">Date Received</label>
@@ -3336,6 +3340,7 @@ export function ImportPage() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'duplicates' | 'invalid' | 'ready'>('duplicates');
   const [importMasters, setImportMasters] = useState<any>(null);
+  const [createdLeads, setCreatedLeads] = useState<Array<{ lead_id?: string; enquiry_number: string; customer_name: string }>>([]);
   const errMsg = (e: any) => {
     if (e?.code === 'ECONNABORTED') return 'The import took too long for the page to wait. Refresh Leads — the rows may already be saved.';
     const detail = e?.response?.data?.detail;
@@ -3361,7 +3366,7 @@ export function ImportPage() {
 
   const up = async (withSheet?: string) => {
     if (!file) return;
-    setBusy(true); setDone(null); setError(''); setOkMsg(''); setErrors([]);
+    setBusy(true); setDone(null); setCreatedLeads([]); setError(''); setOkMsg(''); setErrors([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -3408,6 +3413,7 @@ export function ImportPage() {
         return;
       }
       setDone(data);
+      setCreatedLeads(Array.isArray(data.created_leads) ? data.created_leads : []);
       setErrors(data.errors || []);
       setRes(null);
       setImportProgress('');
@@ -3417,7 +3423,7 @@ export function ImportPage() {
   };
 
   const pickFile = (f: File | null) => {
-    setFile(f); setSheets([]); setSheet(''); setRes(null); setDone(null); setErrors([]); setError(''); setOkMsg('');
+    setFile(f); setSheets([]); setSheet(''); setRes(null); setDone(null); setCreatedLeads([]); setErrors([]); setError(''); setOkMsg('');
   };
 
   const openEdit = (row: any) => {
@@ -3453,7 +3459,13 @@ export function ImportPage() {
     try {
       const { data } = await api.post(`/import/errors/${id}/promote`, { force });
       setErrors((prev) => prev.filter((e) => e.id !== id));
-      setOkMsg(`Added as ${data.enquiry_number}${data.assigned ? ' (assigned)' : ' (pending assignment)'}`);
+      const enq = data.enquiry_number || '—';
+      const name = data.customer_name || '—';
+      setOkMsg(`Added as ${enq} — ${name}${data.assigned ? ' (assigned)' : ' (pending assignment)'}`);
+      setCreatedLeads((prev) => [
+        { lead_id: data.lead_id, enquiry_number: enq, customer_name: name },
+        ...prev,
+      ]);
       loadBatches();
     } catch (e: any) { setError(errMsg(e)); } finally { setBusy(false); }
   };
@@ -3520,7 +3532,7 @@ export function ImportPage() {
     <div className="space-y-5 max-w-6xl">
       <PageHeader
         title="Import from Excel"
-        subtitle="Columns: Enq no, Received date, Name, Company (optional), Contact no, Email, City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
+        subtitle="Columns: Enq no (ignored — auto-assigned), Received date, Name, Company (optional), Contact no, Email, City, No. of cars, Lead source, Product/type. Admin can view duplicates/invalid and Add to leads or Delete."
       />
       {error && <div className="bg-[#E03131]/10 border border-[#E03131]/40 text-[#B32727] text-sm rounded-xl px-4 py-3">❌ {error}</div>}
       {okMsg && <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 text-[#237A35] text-sm rounded-xl px-4 py-3">✓ {okMsg}</div>}
@@ -3606,9 +3618,48 @@ export function ImportPage() {
         </>
       )}
 
-      {done && (
-        <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 rounded-xl p-5 text-sm">
-          <b>Import complete:</b> {done.imported} imported · {done.assigned ?? 0} assigned · {done.pending ?? 0} pending · {done.duplicates} duplicates · {done.invalid} invalid.
+      {(done || createdLeads.length > 0) && (
+        <div className="bg-[#2F9E44]/10 border border-[#2F9E44]/40 rounded-xl p-5 text-sm space-y-3">
+          {done && (
+            <div>
+              <b>Import complete:</b> {done.imported} imported · {done.assigned ?? 0} assigned · {done.pending ?? 0} pending · {done.duplicates} duplicates · {done.invalid} invalid.
+            </div>
+          )}
+          {createdLeads.length > 0 && (
+            <div>
+              <div className="font-semibold text-emerald-900 mb-2">
+                Assigned enquiry numbers ({createdLeads.length})
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-emerald-200 bg-white">
+                <table className="w-full min-w-[420px] text-sm">
+                  <thead className="bg-emerald-50">
+                    <tr>
+                      <th className="th text-left">#</th>
+                      <th className="th text-left">Enquiry no</th>
+                      <th className="th text-left">Lead name</th>
+                      <th className="th text-right">Open</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {createdLeads.map((row, i) => (
+                      <tr key={`${row.enquiry_number}-${row.lead_id || i}`} className={i % 2 ? 'bg-emerald-50/40' : 'bg-white'}>
+                        <td className="td">{i + 1}</td>
+                        <td className="td font-semibold tabular-nums text-emerald-900">{row.enquiry_number}</td>
+                        <td className="td">{row.customer_name || '—'}</td>
+                        <td className="td text-right">
+                          {row.lead_id ? (
+                            <Link className="text-brand-700 hover:underline font-medium" to={`/leads/${row.lead_id}`}>
+                              View
+                            </Link>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3619,7 +3670,7 @@ export function ImportPage() {
           </button>
         }>
           <p className="text-sm text-graphite-500 mb-3">
-            View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. A duplicate enquiry number is rejected. <b>Delete</b> removes it from this list.
+            View skipped rows below. <b>Correct</b> fields if needed, then <b>Add to leads</b>. Enquiry numbers from Excel are ignored — the system assigns the next number. <b>Delete</b> removes it from this list.
           </p>
           <div className="flex gap-2 mb-3 text-sm font-medium">
             <button type="button" onClick={() => setTab('duplicates')} className={`px-3 py-1.5 rounded-lg ${tab === 'duplicates' ? 'bg-amber-100 text-amber-900' : 'bg-graphite-100 text-graphite-600'}`}>
@@ -3677,8 +3728,14 @@ export function ImportPage() {
                 <input className="input mt-1" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
               </div>
               <div>
-                <label className="text-xs font-medium text-graphite-600">Enquiry no</label>
-                <input className="input mt-1" value={editForm.enq} onChange={(e) => setEditForm({ ...editForm, enq: e.target.value })} />
+                <label className="text-xs font-medium text-graphite-600">Enquiry no (ignored)</label>
+                <input
+                  className="input mt-1 bg-graphite-50 text-graphite-500"
+                  value={editForm.enq}
+                  readOnly
+                  disabled
+                  title="Excel enquiry numbers are ignored — system assigns the next number"
+                />
               </div>
               <div>
                 <label className="text-xs font-medium text-graphite-600">Received date</label>
@@ -3774,9 +3831,10 @@ function BarCard({ title, data, x, y, onDownload }: {
 }
 
 type ReportFilter = {
-  mode: 'custom' | 'week' | 'month';
+  mode: 'custom' | 'week' | 'month' | 'year';
   month: string;
   week: string;
+  year: string;
   fromDate: string;
   toDate: string;
 };
@@ -3785,12 +3843,14 @@ export function Reports() {
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
   const defaultWeek = today.toISOString().slice(0, 10);
+  const defaultYear = String(today.getFullYear());
   const emptyFilter = (): ReportFilter => ({
-    mode: 'custom', month: defaultMonth, week: defaultWeek, fromDate: '', toDate: '',
+    mode: 'custom', month: defaultMonth, week: defaultWeek, year: defaultYear, fromDate: '', toDate: '',
   });
 
-  type ReportId = 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
+  type ReportId = 'dashboard_history' | 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
+    { id: 'dashboard_history', title: 'Dashboard History Report', description: 'Dashboard tiles + source/product/category tables & charts with full progress and category history counts.', accent: 'bg-[#0f766e]' },
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with progress history (follow-up, meeting, site visit, quotation, converted) and chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Leads by product with progress history counts including converted.', accent: 'bg-[#0f766e]' },
     { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (6-9 months), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
@@ -3808,6 +3868,12 @@ export function Reports() {
   const [sourceFilter, setSourceFilter] = useState<ReportFilter>(emptyFilter);
   const [productFilter, setProductFilter] = useState<ReportFilter>(emptyFilter);
   const [categoryFilter, setCategoryFilter] = useState<ReportFilter>(emptyFilter);
+  const [dashHistFilter, setDashHistFilter] = useState<ReportFilter>(() => ({
+    ...emptyFilter(),
+    mode: 'month',
+    month: defaultMonth,
+    year: defaultYear,
+  }));
   const [monthlyFilter, setMonthlyFilter] = useState({ fromMonth: defaultMonth, toMonth: defaultMonth });
   const [detailedFilter, setDetailedFilter] = useState<ReportFilter>(() => ({
     ...emptyFilter(),
@@ -3822,6 +3888,7 @@ export function Reports() {
   const [prod, setProd] = useState<any[]>([]);
   const [categoryDetails, setCategoryDetails] = useState<any>(null);
   const [catRows, setCatRows] = useState<any[]>([]);
+  const [dashHistory, setDashHistory] = useState<any>(null);
   const [emp, setEmp] = useState<any[]>([]);
   const [monthlyRows, setMonthlyRows] = useState<any[]>([]);
   const [detailedReport, setDetailedReport] = useState<any>(null);
@@ -3831,6 +3898,7 @@ export function Reports() {
   const [sourceBusy, setSourceBusy] = useState(false);
   const [productBusy, setProductBusy] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
+  const [dashHistBusy, setDashHistBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [empBusy, setEmpBusy] = useState(false);
   const [monthlyBusy, setMonthlyBusy] = useState(false);
@@ -3841,6 +3909,7 @@ export function Reports() {
   const [sourceErr, setSourceErr] = useState('');
   const [productErr, setProductErr] = useState('');
   const [categoryErr, setCategoryErr] = useState('');
+  const [dashHistErr, setDashHistErr] = useState('');
   const [empErr, setEmpErr] = useState('');
   const [monthlyErr, setMonthlyErr] = useState('');
   const [detailedErr, setDetailedErr] = useState('');
@@ -3859,6 +3928,7 @@ export function Reports() {
 
   const toParams = (f: ReportFilter): Record<string, string> => {
     if (f.mode === 'month') return { mode: 'month', month: f.month || defaultMonth };
+    if (f.mode === 'year') return { mode: 'year', year: f.year || defaultYear };
     if (f.mode === 'week') return { mode: 'week', week: f.week || defaultWeek };
     const p: Record<string, string> = { mode: 'custom' };
     if (f.fromDate) p.from_date = f.fromDate;
@@ -3872,6 +3942,9 @@ export function Reports() {
     }
     if (f.mode === 'month' && !/^\d{4}-\d{2}$/.test(f.month || '')) {
       return 'Select a valid month.';
+    }
+    if (f.mode === 'year' && !/^\d{4}$/.test(f.year || '')) {
+      return 'Select a valid year.';
     }
     return null;
   };
@@ -3946,6 +4019,18 @@ export function Reports() {
     } finally { setCategoryBusy(false); }
   };
 
+  const loadDashHistory = async (f: ReportFilter = dashHistFilter) => {
+    const v = validate(f);
+    if (v) { setDashHistErr(v); return; }
+    setDashHistBusy(true); setDashHistErr('');
+    try {
+      const { data } = await api.get('/reports/dashboard-history', { params: toParams(f) });
+      setDashHistory(data);
+    } catch (e: any) {
+      setDashHistErr(apiErr(e, 'Dashboard history report failed'));
+    } finally { setDashHistBusy(false); }
+  };
+
   const loadEmployees = async () => {
     setEmpBusy(true); setEmpErr('');
     try {
@@ -3996,6 +4081,7 @@ export function Reports() {
     if (activeReport === 'source') void loadSource();
     if (activeReport === 'product') void loadProduct();
     if (activeReport === 'category') void loadCategory();
+    if (activeReport === 'dashboard_history') void loadDashHistory();
     if (activeReport === 'employee') void loadEmployees();
     if (activeReport === 'monthly') void loadMonthly();
     if (activeReport === 'detailed') void loadDetailed();
@@ -4011,7 +4097,7 @@ export function Reports() {
   };
 
   const downloadPdf = async (
-    kind: 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed',
+    kind: 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed' | 'dashboard_history',
     f: ReportFilter | { fromMonth: string; toMonth: string },
     setErr: (s: string) => void,
   ) => {
@@ -4024,6 +4110,7 @@ export function Reports() {
       quotation: 'quotation-report.pdf',
       monthly: 'monthly-lead-volume.pdf',
       detailed: 'detailed-lead-report.pdf',
+      dashboard_history: 'dashboard-history-report.pdf',
     };
     try {
       const params = kind === 'monthly'
@@ -4056,6 +4143,13 @@ export function Reports() {
     } finally { setPdfBusy(false); }
   };
 
+  const filterYearOptions = useMemo(() => {
+    const current = new Date().getFullYear();
+    const years: string[] = [];
+    for (let y = current; y >= 2020; y -= 1) years.push(String(y));
+    return years;
+  }, []);
+
   const filterBar = (
     f: ReportFilter,
     setF: (next: ReportFilter) => void,
@@ -4077,13 +4171,27 @@ export function Reports() {
         >
           <option value="custom">From date → To date</option>
           <option value="week">Weekly</option>
-          <option value="month">Monthly</option>
+          <option value="month">Monthly (with year)</option>
+          <option value="year">Year wise</option>
         </select>
       </div>
       {f.mode === 'month' ? (
         <div>
           <label className="text-xs font-medium text-graphite-600">Select Month</label>
-          <input type="month" className="input mt-1" max={today.slice(0, 7)} value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />
+          <input type="month" className="input mt-1" max={today.slice(0, 7)} value={f.month} onChange={(e) => setF({ ...f, month: e.target.value, year: (e.target.value || '').slice(0, 4) || f.year })} />
+        </div>
+      ) : f.mode === 'year' ? (
+        <div>
+          <label className="text-xs font-medium text-graphite-600">Select Year</label>
+          <select
+            className="input mt-1"
+            value={f.year || defaultYear}
+            onChange={(e) => setF({ ...f, year: e.target.value })}
+          >
+            {filterYearOptions.map((year) => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
         </div>
       ) : f.mode === 'week' ? (
         <>
@@ -4188,6 +4296,118 @@ export function Reports() {
           </button>
         }
       />
+
+      {activeReport === 'dashboard_history' && (() => {
+        const t = dashHistory?.tiles || {};
+        const mapRows = (rows: any[], nameKey: string) => (rows || []).map((row: any) => ({
+          name: row[nameKey],
+          total: row.total,
+          'In Followup': row.in_followup,
+          Meeting: row.meeting,
+          'Site Visit': row.site_visit,
+          'Quotation sent': row.quote_sent,
+          Converted: row.converted ?? 0,
+          'Not Interested': row.not_interested,
+        }));
+        const mapTotals = (totals: any) => ({
+          total: totals?.total ?? 0,
+          follow: totals?.in_followup ?? 0,
+          meeting: totals?.meeting ?? 0,
+          siteVisit: totals?.site_visit ?? 0,
+          quote: totals?.quote_sent ?? 0,
+          converted: totals?.converted ?? 0,
+          notInt: totals?.not_interested ?? 0,
+        });
+        const srcRowsH = mapRows(dashHistory?.by_source?.rows, 'source');
+        const prodRowsH = mapRows(dashHistory?.by_product?.rows, 'product');
+        const catRowsH = mapRows(dashHistory?.by_category?.rows, 'category');
+        const histCountTiles = [
+          { label: 'Total Leads', value: t.total_leads ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
+          { label: 'Pending', value: t.pending ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
+          { label: 'In Followup', value: t.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
+          { label: 'Meeting', value: t.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
+          { label: 'Site Visit', value: t.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
+          { label: 'Quotation Sent', value: t.quote_sent ?? 0, bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
+          { label: 'Converted', value: t.converted ?? 0, bg: PROGRESS_TILE_BG.Converted, text: PROGRESS_TILE_TEXT.Converted },
+          { label: 'Not Interested', value: t.not_interested ?? 0, bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
+          { label: 'No. of Cars', value: t.total_cars ?? 0, bg: 'bg-[#0369a1]', text: 'text-white' },
+        ];
+        const histValueTiles = [
+          { label: 'Total Lead Value', value: inr(t.total_lead_value), bg: 'bg-[#3F6212]', text: 'text-white' },
+          { label: 'Total Quotation Value', value: inr(t.total_quotation_value), bg: 'bg-[#b45309]', text: 'text-white' },
+          { label: 'Total Converted Value', value: inr(t.converted_lead_value), bg: 'bg-[#166534]', text: 'text-white' },
+        ];
+        return (
+          <div className="space-y-5">
+            <div className="card overflow-hidden">
+              <div className="bg-[#0f766e] text-white px-5 py-3 font-semibold tracking-wide">DASHBOARD HISTORY REPORT</div>
+              <div className="p-5 space-y-4">
+                {filterBar(
+                  dashHistFilter, setDashHistFilter, dashHistBusy, () => loadDashHistory(dashHistFilter),
+                  () => dl('/reports/dashboard-history/export', 'dashboard-history.xlsx', toParams(dashHistFilter), setDashHistErr),
+                  !dashHistory,
+                  () => void downloadPdf('dashboard_history', dashHistFilter, setDashHistErr),
+                )}
+                {dashHistErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{dashHistErr}</div>}
+                {dashHistBusy && !dashHistory ? <Spinner /> : (
+                  <>
+                    <p className="text-xs text-graphite-500">
+                      Progress tiles count every history event (each follow-up, site visit, etc.). Pending / Converted are lead counts.
+                      {dashHistory?.effective_from || dashHistory?.effective_to
+                        ? ` Period: ${dashHistory?.effective_from || 'All'} → ${dashHistory?.effective_to || 'All'}.`
+                        : ''}
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
+                      {histCountTiles.map((tile) => (
+                        <div key={tile.label} className={`${tile.bg} ${tile.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center`}>
+                          <div className="text-[11px] sm:text-xs uppercase tracking-wide opacity-95 font-semibold leading-tight">{tile.label}</div>
+                          <div className="text-xl sm:text-2xl font-bold mt-1 tabular-nums">{tile.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {histValueTiles.map((tile) => (
+                        <div key={tile.label} className={`${tile.bg} ${tile.text} rounded-lg px-3 py-3 shadow-sm text-center`}>
+                          <div className="text-xs uppercase tracking-wide opacity-95 font-semibold leading-tight">{tile.label}</div>
+                          <div className="text-base sm:text-lg font-bold mt-1 tabular-nums leading-tight">{tile.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            {dashHistory && (
+              <>
+                <DashboardTableChartRow
+                  title="Leads by Source (history)"
+                  labelHeader="Source"
+                  rows={srcRowsH}
+                  totals={mapTotals(dashHistory?.by_source?.totals)}
+                  pieRows={srcRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
+                  emptyTitle="No source history in this range"
+                />
+                <DashboardTableChartRow
+                  title="Leads by Product (history)"
+                  labelHeader="Product"
+                  rows={prodRowsH}
+                  totals={mapTotals(dashHistory?.by_product?.totals)}
+                  pieRows={prodRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
+                  emptyTitle="No product history in this range"
+                />
+                <DashboardTableChartRow
+                  title="Leads by Category (history)"
+                  labelHeader="Category"
+                  rows={catRowsH}
+                  totals={mapTotals(dashHistory?.by_category?.totals)}
+                  pieRows={catRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
+                  emptyTitle="No category history in this range"
+                />
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {activeReport === 'lead_value' && (
         <div className="card overflow-hidden">

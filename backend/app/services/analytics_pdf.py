@@ -224,8 +224,13 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         "period": "From–to vs From–to",
     }.get(payload.get("mode"), payload.get("mode") or "")
 
-    scope = payload.get("filter_value")
-    scope_text = f"{payload.get('dimension_label')}: {scope}" if scope else "All leads"
+    if payload.get("group_by"):
+        scope_text = payload.get("dimension_label") or (
+            "Category group wise" if payload.get("group_by") == "category" else "Product group wise"
+        )
+    else:
+        scope = payload.get("filter_value")
+        scope_text = f"{payload.get('dimension_label')}: {scope}" if scope else "All leads"
     metric_label = payload.get("metric_label") or "Value"
 
     subtitle = Paragraph(
@@ -280,40 +285,70 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
-    rows = [["Label", metric_label]]
-    if period_mode:
+    group_keys = [str(k) for k in (payload.get("group_keys") or []) if k]
+    if period_mode and group_keys:
+        rows = [["Group", "Period A", "Period B"]]
+        map_a = {str(r.get("key")): r.get("value") for r in ((payload.get("period_a") or {}).get("series") or [])}
+        map_b = {str(r.get("key")): r.get("value") for r in ((payload.get("period_b") or {}).get("series") or [])}
+        for key in group_keys:
+            rows.append([key, _fmt(map_a.get(key), money), _fmt(map_b.get(key), money)])
+        change = payload.get("change")
+        rows.append([
+            "TOTAL / Change",
+            _fmt((payload.get("period_a") or {}).get("total"), money),
+            ("—" if change is None else f"{change:+.1f}%") + f"  ({_fmt((payload.get('period_b') or {}).get('total'), money)})",
+        ])
+    elif period_mode:
         rows = [["Period", "Total"]]
         for row in payload.get("rows") or []:
             rows.append([str(row.get("label") or ""), _fmt(row.get("value"), money)])
         change = payload.get("change")
         rows.append(["Change (A vs B)", "—" if change is None else f"{change:+.1f}%"])
+    elif group_keys:
+        short = [((k[:14] + "…") if len(k) > 15 else k) for k in group_keys]
+        rows = [["Label", *short, "Total"]]
+        for row in payload.get("rows") or payload.get("series") or []:
+            rows.append([
+                str(row.get("label") or ""),
+                *[_fmt(row.get(k), money) for k in group_keys],
+                _fmt(row.get("value"), money),
+            ])
+        col_totals = []
+        body_rows = payload.get("rows") or payload.get("series") or []
+        for k in group_keys:
+            col_totals.append(_fmt(sum(int(r.get(k) or 0) for r in body_rows), money))
+        rows.append(["Total", *col_totals, _fmt(payload.get("total"), money)])
     else:
+        rows = [["Label", metric_label]]
         for row in payload.get("rows") or payload.get("series") or []:
             rows.append([str(row.get("label") or ""), _fmt(row.get("value"), money)])
         rows.append(["Total", _fmt(payload.get("total"), money)])
 
     # Keep comparison table compact on one page
-    if len(rows) > 10:
+    if len(rows) > 12 and not group_keys:
         head, body, tail = rows[0], rows[1:-1], rows[-1:]
         step = max(1, len(body) // 8)
         body = body[::step][:8]
         rows = [head, *body, *tail]
 
-    table = Table(rows, colWidths=[page_w * 0.58, page_w * 0.42])
+    col_count = max(2, len(rows[0]))
+    first_w = page_w * (0.28 if col_count > 3 else 0.58)
+    rest_w = (page_w - first_w) / max(1, col_count - 1)
+    table = Table(rows, colWidths=[first_w] + [rest_w] * (col_count - 1))
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e8eef5")),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTSIZE", (0, 0), (-1, -1), 7 if col_count > 4 else 9),
         ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
         ("GRID", (0, 0), (-1, -1), 0.5, BORDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4 if col_count > 4 else 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4 if col_count > 4 else 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
 

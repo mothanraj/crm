@@ -1981,6 +1981,7 @@ def build_overview(
 # ---------------------------------------------------------------------------
 
 COMPARE_MODES = ("year", "month", "date", "period")
+GROUP_BY_OPTIONS = ("category", "product")
 
 # Fixed menus for the Analytics page (CRM field names).
 # Category = customer_review; Progress = work status.
@@ -2045,6 +2046,10 @@ def analytics_meta(db: Session) -> dict:
             {"id": "date", "label": "Date wise"},
             {"id": "period", "label": "From–to vs From–to"},
         ],
+        "group_by_options": [
+            {"id": "category", "label": "Category group wise"},
+            {"id": "product", "label": "Product group wise"},
+        ],
         "years": available_years(db),
         "months": [{"id": i + 1, "label": MONTH_SHORT[i]} for i in range(12)],
     }
@@ -2056,6 +2061,90 @@ def _metric_total(q, metric: str) -> int:
     return _rupee0(value) if money else _int(value)
 
 
+def _group_expr_and_labels(group_by: str):
+    if group_by == "category":
+        return category_expr(), list(ANALYTICS_FILTER_MENUS["category"]), "Category group wise"
+    if group_by == "product":
+        return product_expr(), list(ANALYTICS_FILTER_MENUS["product"]), "Product group wise"
+    raise ValueError("group_by")
+
+
+def _pack_group_points(found: dict[str, int], ordered: list[str], fallback: str) -> tuple[list[str], list[dict]]:
+    extras = sorted(k for k in found if k not in ordered and found.get(k))
+    labels = list(ordered) + extras
+    points = [{"key": label, "label": label, "value": int(found.get(label, 0))} for label in labels]
+    return labels, points
+
+
+def _group_breakdown(q, metric: str, money: bool, group_by: str) -> tuple[list[str], list[dict], int]:
+    expr, ordered, _label = _group_expr_and_labels(group_by)
+    fallback = "Uncategorised" if group_by == "category" else "Unmapped"
+    rows = (
+        q.with_entities(expr.label("bucket"), _metric_agg(metric).label("value"))
+        .group_by(expr)
+        .all()
+    )
+    found: dict[str, int] = {}
+    for row in rows:
+        name = str(row.bucket or "").strip() or fallback
+        found[name] = _rupee0(row.value) if money else _int(row.value)
+    labels, points = _pack_group_points(found, ordered, fallback)
+    total = sum(int(p["value"]) for p in points)
+    return labels, points, total
+
+
+def _time_group_matrix(
+    q,
+    *,
+    metric: str,
+    money: bool,
+    group_by: str,
+    time_expr,
+    time_keys: list,
+    key_fn,
+    label_fn,
+) -> tuple[list[str], list[dict], int]:
+    """Rows keyed by time; each row has one field per group label."""
+    gexpr, ordered, _label = _group_expr_and_labels(group_by)
+    fallback = "Uncategorised" if group_by == "category" else "Unmapped"
+    # Avoid label "t" — SQLAlchemy Row.t is reserved and shadows the column.
+    rows = (
+        q.with_entities(
+            time_expr.label("time_bucket"),
+            gexpr.label("group_bucket"),
+            _metric_agg(metric).label("metric_value"),
+        )
+        .group_by(time_expr, gexpr)
+        .all()
+    )
+    cell: dict[tuple, int] = {}
+    seen_groups: set[str] = set()
+    for row in rows:
+        time_raw = row.time_bucket
+        if time_raw is None:
+            continue
+        tkey = key_fn(time_raw)
+        gname = str(row.group_bucket or "").strip() or fallback
+        seen_groups.add(gname)
+        cell[(tkey, gname)] = _rupee0(row.metric_value) if money else _int(row.metric_value)
+
+    extras = sorted(g for g in seen_groups if g not in ordered)
+    group_keys = list(ordered) + extras
+    points = []
+    total = 0
+    for t in time_keys:
+        row = {"key": str(t), "label": label_fn(t), "value": 0}
+        row_total = 0
+        for g in group_keys:
+            v = int(cell.get((t, g), 0))
+            row[g] = v
+            row_total += v
+        row["value"] = row_total
+        total += row_total
+        points.append(row)
+    return group_keys, points, total
+
+
 def build_selection_compare(
     db: Session,
     *,
@@ -2063,6 +2152,7 @@ def build_selection_compare(
     filter_type: str | None = None,
     filter_value: str | None = None,
     mode: str,
+    group_by: str | None = None,
     years: list[int] | None = None,
     year: int | None = None,
     months: list[int] | None = None,
@@ -2071,11 +2161,12 @@ def build_selection_compare(
     period_a: tuple[date, date] | None = None,
     period_b: tuple[date, date] | None = None,
 ) -> dict:
-    """Compare one metric (optionally scoped by dimension) under year/month/date/period modes."""
+    """Compare one metric under year/month/date/period; optional category/product group_by."""
     if metric not in DASHBOARD_METRICS:
         raise ValueError("metric")
     use_type = (filter_type or "").strip() or None
     use_value = (filter_value or "").strip() or None
+    use_group = (group_by or "").strip() or None
     if use_type:
         if use_type not in FILTER_TYPES:
             raise ValueError("filter_type")
@@ -2085,6 +2176,12 @@ def build_selection_compare(
         raise ValueError("filter_type")
     if mode not in COMPARE_MODES:
         raise ValueError("mode")
+    if use_group and use_group not in GROUP_BY_OPTIONS:
+        raise ValueError("group_by")
+    # Group-wise already splits by category/product — don't also filter to one value of the same dim.
+    if use_group and use_type == use_group:
+        use_type = None
+        use_value = None
 
     money = DASHBOARD_METRICS[metric]["money"]
     q, day = _scoped_leads(db, use_type, use_value)
@@ -2094,21 +2191,26 @@ def build_selection_compare(
         "progress": "Progress",
         "source": "Source",
     }.get(use_type or "", "All leads")
+    if use_group:
+        dim_label = "Category group wise" if use_group == "category" else "Product group wise"
 
-    def pack_series(points: list[dict]) -> dict:
+    def pack_series(points: list[dict], *, group_keys: list[str] | None = None) -> dict:
         total = sum(int(p.get("value") or 0) for p in points)
-        return {
+        out = {
             "metric": metric,
             "metric_label": DASHBOARD_METRICS[metric]["label"],
             "money": money,
             "filter_type": use_type,
             "filter_value": use_value,
+            "group_by": use_group,
+            "group_keys": group_keys or [],
             "dimension_label": dim_label,
             "mode": mode,
             "series": points,
             "rows": points,
             "total": total,
         }
+        return out
 
     if mode == "year":
         selected = sorted({int(y) for y in (years or []) if y})
@@ -2117,15 +2219,31 @@ def build_selection_compare(
         if len(selected) > 8:
             raise ValueError("years_limit")
         bucket = cast(func.extract("year", day), Integer)
-        rows = (
-            q.filter(bucket.in_(selected))
-            .with_entities(bucket.label("bucket"), _metric_agg(metric).label("value"))
-            .group_by(bucket)
-            .all()
-        )
-        found = {int(row.bucket): (_rupee0(row.value) if money else _int(row.value)) for row in rows if row.bucket is not None}
-        points = [{"key": str(y), "label": str(y), "value": found.get(y, 0)} for y in selected]
-        out = pack_series(points)
+        scoped = q.filter(bucket.in_(selected))
+        if use_group:
+            group_keys, points, _total = _time_group_matrix(
+                scoped,
+                metric=metric,
+                money=money,
+                group_by=use_group,
+                time_expr=bucket,
+                time_keys=selected,
+                key_fn=lambda t: int(t),
+                label_fn=lambda t: str(t),
+            )
+            out = pack_series(points, group_keys=group_keys)
+        else:
+            rows = (
+                scoped.with_entities(bucket.label("bucket"), _metric_agg(metric).label("value"))
+                .group_by(bucket)
+                .all()
+            )
+            found = {
+                int(row.bucket): (_rupee0(row.value) if money else _int(row.value))
+                for row in rows if row.bucket is not None
+            }
+            points = [{"key": str(y), "label": str(y), "value": found.get(y, 0)} for y in selected]
+            out = pack_series(points)
         out["years"] = selected
         out["x_title"] = "Year"
         return out
@@ -2138,18 +2256,37 @@ def build_selection_compare(
             raise ValueError("months")
         month_bucket = cast(func.extract("month", day), Integer)
         year_bucket = cast(func.extract("year", day), Integer)
-        rows = (
-            q.filter(year_bucket == int(year), month_bucket.in_(selected_months))
-            .with_entities(month_bucket.label("bucket"), _metric_agg(metric).label("value"))
-            .group_by(month_bucket)
-            .all()
-        )
-        found = {int(row.bucket): (_rupee0(row.value) if money else _int(row.value)) for row in rows if row.bucket is not None}
-        points = [
-            {"key": f"{year}-{m:02d}", "label": MONTH_SHORT[m - 1], "month": m, "value": found.get(m, 0)}
-            for m in selected_months
-        ]
-        out = pack_series(points)
+        scoped = q.filter(year_bucket == int(year), month_bucket.in_(selected_months))
+        if use_group:
+            group_keys, points, _total = _time_group_matrix(
+                scoped,
+                metric=metric,
+                money=money,
+                group_by=use_group,
+                time_expr=month_bucket,
+                time_keys=selected_months,
+                key_fn=lambda t: int(t),
+                label_fn=lambda t: MONTH_SHORT[int(t) - 1],
+            )
+            for p, m in zip(points, selected_months):
+                p["key"] = f"{year}-{m:02d}"
+                p["month"] = m
+            out = pack_series(points, group_keys=group_keys)
+        else:
+            rows = (
+                scoped.with_entities(month_bucket.label("bucket"), _metric_agg(metric).label("value"))
+                .group_by(month_bucket)
+                .all()
+            )
+            found = {
+                int(row.bucket): (_rupee0(row.value) if money else _int(row.value))
+                for row in rows if row.bucket is not None
+            }
+            points = [
+                {"key": f"{year}-{m:02d}", "label": MONTH_SHORT[m - 1], "month": m, "value": found.get(m, 0)}
+                for m in selected_months
+            ]
+            out = pack_series(points)
         out["year"] = int(year)
         out["months"] = selected_months
         out["x_title"] = f"Month ({year})"
@@ -2162,35 +2299,51 @@ def build_selection_compare(
             raise ValueError("date_range")
         if (to_date - from_date).days > 366:
             raise ValueError("date_span")
-        rows = (
-            q.filter(day >= from_date, day <= to_date)
-            .with_entities(day.label("bucket"), _metric_agg(metric).label("value"))
-            .group_by(day)
-            .order_by(day)
-            .all()
-        )
-        found: dict[date, int] = {}
-        for row in rows:
-            if row.bucket is None:
-                continue
-            stamp = row.bucket if type(row.bucket) is date else row.bucket.date()
-            found[stamp] = _rupee0(row.value) if money else _int(row.value)
-        points = []
+        scoped = q.filter(day >= from_date, day <= to_date)
+        time_keys: list[date] = []
         cursor = from_date
         while cursor <= to_date:
-            points.append({
-                "key": cursor.isoformat(),
-                "label": cursor.strftime("%d %b"),
-                "value": found.get(cursor, 0),
-            })
+            time_keys.append(cursor)
             cursor += timedelta(days=1)
-        out = pack_series(points)
+        if use_group:
+            group_keys, points, _total = _time_group_matrix(
+                scoped,
+                metric=metric,
+                money=money,
+                group_by=use_group,
+                time_expr=day,
+                time_keys=time_keys,
+                key_fn=lambda t: t if type(t) is date else t.date(),
+                label_fn=lambda t: t.strftime("%d %b"),
+            )
+            for p, d in zip(points, time_keys):
+                p["key"] = d.isoformat()
+            out = pack_series(points, group_keys=group_keys)
+        else:
+            rows = (
+                scoped.with_entities(day.label("bucket"), _metric_agg(metric).label("value"))
+                .group_by(day)
+                .order_by(day)
+                .all()
+            )
+            found_d: dict[date, int] = {}
+            for row in rows:
+                if row.bucket is None:
+                    continue
+                stamp = row.bucket if type(row.bucket) is date else row.bucket.date()
+                found_d[stamp] = _rupee0(row.value) if money else _int(row.value)
+            points = [{
+                "key": d.isoformat(),
+                "label": d.strftime("%d %b"),
+                "value": found_d.get(d, 0),
+            } for d in time_keys]
+            out = pack_series(points)
         out["from_date"] = from_date.isoformat()
         out["to_date"] = to_date.isoformat()
         out["x_title"] = "Date"
         return out
 
-    # period A vs period B — separate series so each side keeps its own dates
+    # period A vs period B
     if not period_a or not period_b:
         raise ValueError("period")
     a_start, a_end = period_a
@@ -2227,6 +2380,54 @@ def build_selection_compare(
             cursor += timedelta(days=1)
         return points, total
 
+    if use_group:
+        _, points_a, a_total = _group_breakdown(
+            q.filter(day >= a_start, day <= a_end), metric, money, use_group,
+        )
+        group_keys, points_b, b_total = _group_breakdown(
+            q.filter(day >= b_start, day <= b_end), metric, money, use_group,
+        )
+        # Align keys from both periods.
+        _, _, dim_name = _group_expr_and_labels(use_group)
+        all_keys = list(dict.fromkeys(
+            [p["key"] for p in points_a] + [p["key"] for p in points_b]
+        ))
+        map_a = {p["key"]: p["value"] for p in points_a}
+        map_b = {p["key"]: p["value"] for p in points_b}
+        aligned_a = [{"key": k, "label": k, "value": int(map_a.get(k, 0))} for k in all_keys]
+        aligned_b = [{"key": k, "label": k, "value": int(map_b.get(k, 0))} for k in all_keys]
+        return {
+            "metric": metric,
+            "metric_label": DASHBOARD_METRICS[metric]["label"],
+            "money": money,
+            "filter_type": use_type,
+            "filter_value": use_value,
+            "group_by": use_group,
+            "group_keys": all_keys,
+            "dimension_label": dim_name,
+            "mode": mode,
+            "x_title": "Category" if use_group == "category" else "Product",
+            "period_a": {
+                "from": a_start.isoformat(),
+                "to": a_end.isoformat(),
+                "total": a_total,
+                "series": aligned_a,
+            },
+            "period_b": {
+                "from": b_start.isoformat(),
+                "to": b_end.isoformat(),
+                "total": b_total,
+                "series": aligned_b,
+            },
+            "change": percent_change(a_total, b_total),
+            "series": [],
+            "rows": [
+                {"key": "period_a", "label": f"Period A ({a_start.isoformat()} – {a_end.isoformat()})", "value": a_total},
+                {"key": "period_b", "label": f"Period B ({b_start.isoformat()} – {b_end.isoformat()})", "value": b_total},
+            ],
+            "total": a_total + b_total,
+        }
+
     series_a, a_total = daily_series(a_start, a_end)
     series_b, b_total = daily_series(b_start, b_end)
 
@@ -2236,6 +2437,8 @@ def build_selection_compare(
         "money": money,
         "filter_type": use_type,
         "filter_value": use_value,
+        "group_by": None,
+        "group_keys": [],
         "dimension_label": dim_label,
         "mode": mode,
         "x_title": "Date",

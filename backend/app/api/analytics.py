@@ -16,6 +16,7 @@ from app.services.analytics import (
     COMPARE_MODES,
     DASHBOARD_METRICS,
     FILTER_TYPES,
+    GROUP_BY_OPTIONS,
     analytics_meta,
     build_selection_compare,
 )
@@ -59,6 +60,7 @@ def _run_compare(
     filter_type: str | None,
     filter_value: str | None,
     mode: str,
+    group_by: str | None,
     years: str | None,
     year: int | None,
     months: str | None,
@@ -73,6 +75,7 @@ def _run_compare(
         raise HTTPException(400, "Choose a metric")
     use_type = (filter_type or "").strip() or None
     value = (filter_value or "").strip() or None
+    use_group = (group_by or "").strip() or None
     if use_type:
         if use_type not in FILTER_TYPES:
             raise HTTPException(400, "Filter type must be category, product, progress, or source")
@@ -83,6 +86,8 @@ def _run_compare(
             raise HTTPException(400, "Choose a valid filter value")
     elif value:
         raise HTTPException(400, "Choose a filter type with the value")
+    if use_group and use_group not in GROUP_BY_OPTIONS:
+        raise HTTPException(400, "Group by must be category or product")
     if mode not in COMPARE_MODES:
         raise HTTPException(400, "Choose year, month, date, or period compare mode")
 
@@ -94,6 +99,7 @@ def _run_compare(
                 filter_type=use_type,
                 filter_value=value,
                 mode=mode,
+                group_by=use_group,
                 years=_parse_int_list(years),
             )
         if mode == "month":
@@ -105,6 +111,7 @@ def _run_compare(
                 filter_type=use_type,
                 filter_value=value,
                 mode=mode,
+                group_by=use_group,
                 year=year,
                 months=_parse_int_list(months),
             )
@@ -119,6 +126,7 @@ def _run_compare(
                 filter_type=use_type,
                 filter_value=value,
                 mode=mode,
+                group_by=use_group,
                 from_date=start,
                 to_date=end,
             )
@@ -134,6 +142,7 @@ def _run_compare(
             filter_type=use_type,
             filter_value=value,
             mode=mode,
+            group_by=use_group,
             period_a=(start_a, end_a),
             period_b=(start_b, end_b),
         )
@@ -151,6 +160,7 @@ def _run_compare(
             "period": "Choose both periods",
             "filter_type": "Choose a filter type",
             "filter_value": "Choose a filter value",
+            "group_by": "Choose category or product group wise",
         }
         raise HTTPException(400, messages.get(code, "Invalid analytics compare request")) from exc
 
@@ -172,6 +182,7 @@ def analytics_compare(
     filter_type: str | None = Query(None, alias="type"),
     filter_value: str | None = Query(None, alias="value"),
     mode: str = "year",
+    group_by: str | None = None,
     years: str | None = None,
     year: int | None = None,
     months: str | None = None,
@@ -189,6 +200,7 @@ def analytics_compare(
         filter_type=filter_type,
         filter_value=filter_value,
         mode=mode,
+        group_by=group_by,
         years=years,
         year=year,
         months=months,
@@ -209,6 +221,7 @@ def analytics_compare_pdf(
     filter_type: str | None = Query(None, alias="type"),
     filter_value: str | None = Query(None, alias="value"),
     mode: str = "year",
+    group_by: str | None = None,
     years: str | None = None,
     year: int | None = None,
     months: str | None = None,
@@ -226,6 +239,7 @@ def analytics_compare_pdf(
         filter_type=filter_type,
         filter_value=filter_value,
         mode=mode,
+        group_by=group_by,
         years=years,
         year=year,
         months=months,

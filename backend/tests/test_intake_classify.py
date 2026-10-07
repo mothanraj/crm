@@ -1,6 +1,7 @@
 """Unit tests for shared Excel + Sheets intake classification."""
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from app.api.importer import classify_intake_row
 
@@ -37,13 +38,15 @@ def test_duplicate_phone_in_db():
     assert "duplicate phone" in out["dups"]
 
 
-def test_duplicate_enq_in_batch():
+def test_excel_enquiry_number_is_ignored_for_duplicates():
+    """Excel enquiry numbers are display-only; duplicates must not block import."""
     out = classify_intake_row(_db(), name="A", phone="9840098400", enq=10, email="", seen_enqs={10})
-    assert out["reason"] == "DUPLICATE"
-    assert "duplicate enquiry no" in out["dups"][0]
+    assert out["reason"] == "OK"
+    assert out["dups"] == []
+    assert out["legacy_enq"] == 10
 
 
-def test_same_upload_rejects_second_copy_of_enquiry():
+def test_same_upload_allows_repeated_excel_enquiry_numbers():
     seen: set[int] = set()
     first = classify_intake_row(_db(), name="A", phone="9840098400", enq="ENQ-000225", email="", seen_enqs=seen)
     assert first["reason"] == "OK"
@@ -51,33 +54,37 @@ def test_same_upload_rejects_second_copy_of_enquiry():
     seen.add(first["legacy_enq"])
     second = classify_intake_row(_db(), name="B", phone="9840098401", enq=225, email="", seen_enqs=seen)
     third = classify_intake_row(_db(), name="C", phone="9840098402", enq="ENQ-225", email="", seen_enqs=seen)
-    other = classify_intake_row(_db(), name="D", phone="9840098403", enq=226, email="", seen_enqs=seen)
-    assert second["reason"] == "DUPLICATE"
-    assert "ENQ-000225" in second["dups"][0]
-    assert third["reason"] == "DUPLICATE"
-    assert other["reason"] == "OK"
-    assert other["legacy_enq"] == 226
+    assert second["reason"] == "OK"
+    assert third["reason"] == "OK"
 
 
-def test_force_add_cannot_reuse_enquiry_number():
-    from uuid import uuid4
-    from fastapi import HTTPException
+def test_create_ignores_excel_enquiry_and_auto_assigns():
     from app.api.importer import _create_lead_from_raw
 
     db = _db(enqs={225, "ENQ-000225"})
-    try:
-        _create_lead_from_raw(
+    db.begin_nested.return_value.__enter__ = MagicMock()
+    db.begin_nested.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("app.api.importer.next_enquiry_number", return_value="ENQ-000999"), \
+         patch("app.api.importer._default_status", return_value=SimpleNamespace(id=uuid4())), \
+         patch("app.api.importer._norm_source", return_value=None), \
+         patch("app.api.importer._norm_product", return_value=None), \
+         patch("app.api.importer.normalize_car_count", return_value=(2, None)), \
+         patch("app.api.importer.apply_pricing_to_lead"), \
+         patch("app.api.importer.auto_assign"), \
+         patch("app.api.importer.Lead") as LeadMock, \
+         patch("app.api.importer.LeadStatusHistory"):
+        lead_inst = SimpleNamespace(id=uuid4(), enquiry_number="ENQ-000999")
+        LeadMock.return_value = lead_inst
+        lead = _create_lead_from_raw(
             db,
             {"name": "A", "phone": "9840098400", "enq": "ENQ-225"},
             SimpleNamespace(id=uuid4()),
             force=True,
         )
-        raised = False
-    except HTTPException as exc:
-        raised = True
-        assert exc.status_code == 400
-        assert "ENQ-000225" in exc.detail
-    assert raised
+        assert lead.enquiry_number == "ENQ-000999"
+        kwargs = LeadMock.call_args.kwargs
+        assert kwargs["enquiry_number"] == "ENQ-000999"
+        assert kwargs["legacy_enquiry_no"] is None
 
 
 def test_phone_alone_is_enough():

@@ -22,7 +22,7 @@ from app.models import (
     Product, ProductAlias, User,
 )
 from app.services import email_service, live
-from app.services.lead_service import auto_assign, format_enquiry_number, next_enquiry_number
+from app.services.lead_service import auto_assign, next_enquiry_number
 from app.services.pricing import apply_pricing_to_lead
 
 log = logging.getLogger(__name__)
@@ -219,14 +219,13 @@ def classify_intake_row(
     """Shared Excel / Create Lead intake rules.
 
     A valid phone or a valid email is enough. Name, enquiry number, and the
-    other columns may be blank. A supplied enquiry number must still be unique.
-    A duplicate phone is rejected. When the phone is valid, an unusable email
-    is stored and does not block the row.
+    other columns may be blank. Excel enquiry numbers are ignored (system
+    assigns the next number). A duplicate phone is rejected. When the phone
+    is valid, an unusable email is stored and does not block the row.
     """
     seen_phones = seen_phones or set()
-    seen_enqs = seen_enqs or set()
     phone_n = norm_phone(phone or "")
-    legacy = parse_legacy_enq(enq)
+    legacy = parse_legacy_enq(enq)  # display only — never used as system enquiry no
     email_v = (email or "").strip()
     phone_present = bool(str(phone or "").strip())
     phone_ok = is_valid_phone(phone or "")
@@ -244,12 +243,6 @@ def classify_intake_row(
             errs.append("invalid email")
         else:
             errs.append("missing phone or email")
-    if legacy is not None and (
-        legacy in seen_enqs
-        or db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
-        or db.query(Lead).filter_by(enquiry_number=format_enquiry_number(legacy)).first()
-    ):
-        dups.append(f"duplicate enquiry no {format_enquiry_number(legacy)}")
     return {
         "phone_norm": phone_n if phone_ok else "",
         "legacy_enq": legacy,
@@ -418,19 +411,8 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
     if phone_ok and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
         raise HTTPException(400, "Phone already exists on another lead — correct the phone first")
 
-    legacy = raw.get("legacy_enq")
-    if legacy is None:
-        legacy = parse_legacy_enq(raw.get("enq"))
-    if legacy is None:
-        enquiry_number = next_enquiry_number(db)
-        legacy = None
-    else:
-        enquiry_number = format_enquiry_number(int(legacy))
-        if (
-            db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
-            or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
-        ):
-            raise HTTPException(400, f"Enquiry number {enquiry_number} already exists")
+    # Excel / form enquiry numbers are ignored — always auto-assign next system number.
+    enquiry_number = next_enquiry_number(db)
 
     company = str(raw.get("company") or "").strip()
     city = str(raw.get("city") or "").strip()
@@ -446,7 +428,7 @@ def _create_lead_from_raw(db: Session, raw: dict, admin: User, *, force: bool = 
         with db.begin_nested():
             lead = Lead(
                 enquiry_number=enquiry_number,
-                legacy_enquiry_no=legacy,
+                legacy_enquiry_no=None,
                 enquiry_date=parse_excel_date(raw.get("date")),
                 customer_name=name,
                 company_name=company,
@@ -517,7 +499,6 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
             "Please select the tracker sheet.")
 
     preview, duplicates, invalids = [], [], []
-    seen_enqs: set[int] = set()
     seen_phones: set[str] = set()
     cols = _resolve_cols(header)
     for i, r in enumerate(rows[1:], start=2):
@@ -549,7 +530,7 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
         rec["product_unmapped"] = bool((rec.get("product") or "").strip()) and _norm_product(db, rec["product"]) is None
         classified = classify_intake_row(
             db, name=rec["name"], phone=rec["phone"], enq=rec["enq"], email=rec["email"],
-            seen_phones=seen_phones, seen_enqs=seen_enqs,
+            seen_phones=seen_phones,
         )
         rec["legacy_enq"] = classified["legacy_enq"]
         rec["phone_norm"] = classified["phone_norm"]
@@ -571,8 +552,6 @@ async def upload_excel(file: UploadFile = File(...), sheet: str = Form(""),
                 rec["cars"] = str(count)
                 if classified["phone_norm"]:
                     seen_phones.add(classified["phone_norm"])
-                if classified["legacy_enq"] is not None:
-                    seen_enqs.add(classified["legacy_enq"])
         preview.append(rec)
 
     safe_preview = [_json_safe_rec({**r, "dup": r.get("dup"), "errors": r.get("errors")}) for r in preview]
@@ -635,6 +614,7 @@ def _run_import_job(bid: str, admin_id: str) -> None:
             return
         st = _default_status(db)
         ok = assigned = pending = 0
+        created_leads: list[dict] = []
         new_by_emp: dict = {}
         commit_every = 25
         for rec in rows:
@@ -646,21 +626,7 @@ def _run_import_job(bid: str, admin_id: str) -> None:
                     reason="DUPLICATE" if rec.get("dup") else "INVALID",
                 ))
                 continue
-            legacy = rec.get("legacy_enq")
-            if legacy is None:
-                enquiry_number = next_enquiry_number(db)
-            else:
-                enquiry_number = format_enquiry_number(int(legacy))
-                if (
-                    db.query(Lead).filter_by(legacy_enquiry_no=legacy).first()
-                    or db.query(Lead).filter_by(enquiry_number=enquiry_number).first()
-                ):
-                    db.add(ImportError(
-                        batch_id=batch.id, row_number=int(rec.get("row") or 0), raw=_json_safe_rec(rec),
-                        error=f"duplicate enquiry no {enquiry_number}", reason="DUPLICATE",
-                    ))
-                    batch.duplicates = (batch.duplicates or 0) + 1
-                    continue
+            enquiry_number = next_enquiry_number(db)
             phone = str(rec.get("phone") or "")
             phone_n = rec.get("phone_norm") or norm_phone(phone)
             if phone_n and db.query(Lead).filter_by(contact_number_norm=phone_n).first():
@@ -685,7 +651,7 @@ def _run_import_job(bid: str, admin_id: str) -> None:
                 with db.begin_nested():
                     lead = Lead(
                         enquiry_number=enquiry_number,
-                        legacy_enquiry_no=legacy,
+                        legacy_enquiry_no=None,
                         enquiry_date=parse_excel_date(rec.get("date")),
                         customer_name=str(rec.get("name") or ""),
                         company_name=str(rec.get("company") or ""),
@@ -728,16 +694,23 @@ def _run_import_job(bid: str, admin_id: str) -> None:
             else:
                 pending += 1
             ok += 1
+            created_leads.append({
+                "lead_id": str(lead.id),
+                "enquiry_number": lead.enquiry_number,
+                "customer_name": (lead.customer_name or "").strip() or "—",
+            })
             if ok % commit_every == 0:
                 batch.imported = ok
                 batch.assigned_count = assigned
                 batch.pending_count = pending
+                batch.preview_rows = created_leads
                 db.commit()
         batch.imported = ok
         batch.assigned_count = assigned
         batch.pending_count = pending
         batch.status = "DONE"
-        batch.preview_rows = None
+        # Keep assigned enquiry numbers + names so the Import page can show them.
+        batch.preview_rows = created_leads
         batch.error_message = ""
         db.commit()
         PENDING.pop(bid, None)
@@ -767,6 +740,7 @@ def confirm(bid: UUID, background: BackgroundTasks, db: Session = Depends(get_db
         raise HTTPException(404, "Batch not found — re-upload")
     if batch.status == "DONE":
         errors = db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
+        created = batch.preview_rows if isinstance(batch.preview_rows, list) else []
         return {
             "batch_id": str(bid),
             "status": "DONE",
@@ -778,6 +752,10 @@ def confirm(bid: UUID, background: BackgroundTasks, db: Session = Depends(get_db
             "invalid": batch.invalid,
             "skipped": len(errors),
             "errors": [_serialize_error(e) for e in errors],
+            "created_leads": [
+                r for r in created
+                if isinstance(r, dict) and r.get("enquiry_number")
+            ],
         }
     if batch.status == "IMPORTING":
         return {
@@ -835,6 +813,12 @@ def import_status(bid: UUID, db: Session = Depends(get_db), _: User = Depends(ad
             _serialize_error(e)
             for e in db.query(ImportError).filter_by(batch_id=bid).order_by(ImportError.row_number).all()
         ]
+    created = []
+    if batch.status == "DONE" and isinstance(batch.preview_rows, list):
+        created = [
+            r for r in batch.preview_rows
+            if isinstance(r, dict) and r.get("enquiry_number")
+        ]
     return {
         "batch_id": str(bid),
         "status": batch.status,
@@ -847,6 +831,7 @@ def import_status(bid: UUID, db: Session = Depends(get_db), _: User = Depends(ad
         "skipped": len(errors),
         "error_message": batch.error_message or "",
         "errors": errors,
+        "created_leads": created,
     }
 
 
@@ -940,6 +925,7 @@ def promote_error(eid: UUID, body: PromoteIn | None = None, db: Session = Depend
         "ok": True,
         "lead_id": str(lead.id),
         "enquiry_number": lead.enquiry_number,
+        "customer_name": (lead.customer_name or "").strip() or "—",
         "assigned": bool(lead.primary_employee_id),
     }
 

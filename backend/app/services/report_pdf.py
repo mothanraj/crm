@@ -482,6 +482,7 @@ def _vertical_bar_chart(
     chart_width: float,
     title: str,
     bar_color=None,
+    show_values: bool = True,
 ) -> Drawing | None:
     """Category names on X, counts on Y — roomy bottom labels so text never hits bars."""
     if not labels or not values:
@@ -515,7 +516,7 @@ def _vertical_bar_chart(
     chart.bars[0].strokeColor = fill
 
     chart.valueAxis.valueMin = 0
-    chart.valueAxis.valueMax = peak * 1.18
+    chart.valueAxis.valueMax = peak * 1.22
     chart.valueAxis.valueSteps = None
     chart.valueAxis.labels.fontSize = 8
     chart.valueAxis.labels.fontName = "Helvetica"
@@ -532,12 +533,188 @@ def _vertical_bar_chart(
     chart.categoryAxis.labels.fontName = "Helvetica"
     chart.categoryAxis.strokeColor = colors.HexColor("#94a3b8")
 
+    if show_values:
+        chart.barLabels.nudge = 6
+        chart.barLabelFormat = "%d"
+        chart.barLabels.fontName = "Helvetica-Bold"
+        chart.barLabels.fontSize = 8
+        chart.barLabels.fillColor = NAVY
+
     drawing.add(chart)
     drawing.add(String(left_pad, drawing_h - 14, title, fontSize=10, fillColor=NAVY))
     return drawing
 
 
+def build_dashboard_history_pdf(payload: dict) -> bytes:
+    """KPI tiles + source/product/category tables and charts for Dashboard History."""
+    title = "Dashboard History Report"
+    buffer = BytesIO()
+    width, height = landscape(A4)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=(width, height), leftMargin=36,
+        rightMargin=36, topMargin=122, bottomMargin=42,
+        title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=13,
+        textColor=colors.HexColor("#0f766e"), spaceAfter=8, keepWithNext=True, alignment=1,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
+    meta = ParagraphStyle(
+        "meta", fontName="Helvetica", fontSize=9, leading=12,
+        alignment=1, textColor=colors.HexColor("#334155"),
+    )
+    kpi_val = ParagraphStyle(
+        "kpi_val", fontName="Helvetica-Bold", fontSize=11, leading=14, alignment=1, textColor=NAVY,
+    )
+    kpi_lbl = ParagraphStyle(
+        "kpi_lbl", fontName="Helvetica", fontSize=8, leading=10, alignment=1, textColor=colors.HexColor("#475569"),
+    )
+
+    t = payload.get("tiles") or {}
+    story = []
+    story.append(Paragraph(title, heading))
+    rng = (
+        f"{payload.get('effective_from') or 'All'} → {payload.get('effective_to') or 'All'}"
+        f"  ·  Mode: {payload.get('mode') or 'custom'}"
+    )
+    story.append(Paragraph(escape(rng), meta))
+    story.append(Spacer(1, 8))
+
+    count_items = [
+        ("Total Leads", str(t.get("total_leads") or 0)),
+        ("Pending", str(t.get("pending") or 0)),
+        ("In Followup", str(t.get("in_followup") or 0)),
+        ("Meeting", str(t.get("meeting") or 0)),
+        ("Site Visit", str(t.get("site_visit") or 0)),
+        ("Quotation Sent", str(t.get("quote_sent") or 0)),
+        ("Converted", str(t.get("converted") or 0)),
+        ("Not Interested", str(t.get("not_interested") or 0)),
+        ("No. of Cars", str(t.get("total_cars") or 0)),
+    ]
+    count_table = Table(
+        [
+            [Paragraph(lbl, kpi_lbl) for lbl, _ in count_items],
+            [Paragraph(val, kpi_val) for _, val in count_items],
+        ],
+        colWidths=[(width - 72) / 9] * 9,
+        hAlign="CENTER",
+    )
+    count_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f0fdfa")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#0f766e")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#99f6e4")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(count_table)
+    story.append(Spacer(1, 10))
+
+    value_items = [
+        ("Total Lead Value", _inr(t.get("total_lead_value"))),
+        ("Total Quotation Value", _inr(t.get("total_quotation_value"))),
+        ("Total Converted Value", _inr(t.get("converted_lead_value"))),
+    ]
+    value_table = Table(
+        [
+            [Paragraph(lbl, kpi_lbl) for lbl, _ in value_items],
+            [Paragraph(val, kpi_val) for _, val in value_items],
+        ],
+        colWidths=[(width - 72) / 3] * 3,
+        hAlign="CENTER",
+    )
+    value_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ecfdf3")),
+        ("BOX", (0, 0), (-1, -1), 0.6, GREEN),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bbf7d0")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    story.append(value_table)
+
+    sections = [
+        ("by_source", "source", "Leads by Source (history)", colors.HexColor("#1e3a5f")),
+        ("by_product", "product", "Leads by Product (history)", colors.HexColor("#0f766e")),
+        ("by_category", "category", "Leads by Category (history)", colors.HexColor("#0e7490")),
+    ]
+    usable = width - 72
+    for section_key, field, section_title, bar_color in sections:
+        block = payload.get(section_key) or {}
+        rows_data = block.get("rows") or []
+        totals = block.get("totals") or {}
+
+        story.append(PageBreak())
+        story.append(Paragraph(section_title, heading))
+        headers = [
+            section_title.split("(")[0].replace("Leads by ", "").strip() or field.title(),
+            "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
+        ]
+        # Cleaner label headers
+        label_headers = {
+            "source": "Source",
+            "product": "Product",
+            "category": "Category",
+        }
+        headers[0] = label_headers.get(field, field.title())
+        table_rows = [[Paragraph(h, header) for h in headers]]
+        for row in rows_data:
+            table_rows.append([
+                Paragraph(escape(str(row.get(field) or "—")), cell),
+                *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS],
+            ])
+        if not rows_data:
+            table_rows.append([Paragraph("No data", cell), *[Paragraph("0", cell) for _ in KEYS]])
+        table_rows.append([
+            Paragraph("TOTAL", header),
+            *[Paragraph(str(totals.get(key, 0)), cell) for key in KEYS],
+        ])
+        col_w = usable / 8
+        table = Table(table_rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
+        table.setStyle(_centered_table_style(bar_color))
+        story.append(table)
+
+        paired = [
+            (str(row.get(field) or ""), float(row.get("total") or 0))
+            for row in rows_data
+            if float(row.get("total") or 0) > 0
+        ]
+        story.append(PageBreak())
+        story.append(Paragraph(f"{section_title} — Chart", heading))
+        story.append(Paragraph("X-axis: names · Y-axis: lead count (values shown on bars)", meta))
+        story.append(Spacer(1, 8))
+        if paired:
+            chart = _vertical_bar_chart(
+                [lab for lab, _ in paired],
+                [val for _, val in paired],
+                usable,
+                section_title,
+                bar_color=bar_color,
+                show_values=True,
+            )
+            if chart is not None:
+                story.append(chart)
+            else:
+                story.append(Paragraph("No chart data for this selection.", meta))
+        else:
+            story.append(Paragraph("No chart data for this selection.", meta))
+
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
+
+
 def build_report_pdf(payload: dict, report_type: str) -> bytes:
+    if report_type == "dashboard_history":
+        return build_dashboard_history_pdf(payload)
     if report_type == "lead_value":
         return build_lead_value_pdf(payload)
     if report_type == "quotation":
