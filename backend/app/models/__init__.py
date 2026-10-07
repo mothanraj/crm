@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean, Date, DateTime, ForeignKey, Integer, Numeric, Text, UniqueConstraint, func,
@@ -115,6 +115,8 @@ class Lead(Base):
     first_contact_notes: Mapped[str] = mapped_column(Text, default="")
     employee_remarks: Mapped[str] = mapped_column(Text, default="")
     customer_review: Mapped[str] = mapped_column(Text, default="")
+    reminder_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    reminder_done: Mapped[bool] = mapped_column(Boolean, default=False)
     quotation_value: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sla_state: Mapped[str] = mapped_column(Text, default="PENDING")
@@ -163,6 +165,8 @@ class LeadActivity(Base):
     outcome: Mapped[str] = mapped_column(Text, default="")
     customer_review: Mapped[str] = mapped_column(Text, default="")
     quotation_value: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    reminder_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    reminder_done: Mapped[bool] = mapped_column(Boolean, default=False)
     next_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _ts()
 

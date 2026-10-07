@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.schemas import (
     ActivityIn, AssignIn, ContactIn, LeadCreate, LeadUpdate, LeadValueCalcIn,
-    QuoteFormIn, QuoteIn, ReassignDecisionIn, ReassignRequestIn, StatusChange, VisitIn,
+    QuoteFormIn, QuoteIn, ReassignDecisionIn, ReassignRequestIn, ReminderDoneIn, StatusChange, VisitIn,
 )
 from app.services import live
 from app.services.lead_service import (
@@ -65,6 +65,7 @@ def _serialize(
     if work_history is None:
         work_history = [
             {
+                "id": str(a.id),
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
                 "category": (
@@ -77,6 +78,8 @@ def _serialize(
                     )
                 ),
                 "work_action": a.outcome or "",
+                "reminder_date": a.reminder_date.isoformat() if a.reminder_date else None,
+                "reminder_done": bool(getattr(a, "reminder_done", False)),
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             }
             for a in db.query(LeadActivity).filter_by(lead_id=l.id).order_by(LeadActivity.activity_at.asc()).all()
@@ -118,6 +121,8 @@ def _serialize(
             )
         ),
         "quotation_value": _money_str(l.quotation_value),
+        "reminder_date": l.reminder_date.isoformat() if l.reminder_date else None,
+        "reminder_done": bool(getattr(l, "reminder_done", False)),
         "next_followup_at": l.next_followup_at.isoformat() if l.next_followup_at else None,
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
         "pending_assignment": l.primary_employee_id is None,
@@ -245,6 +250,7 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         )
         for a in acts:
             hist_by_lead.setdefault(a.lead_id, []).append({
+                "id": str(a.id),
                 "quotation_value": _money_str(a.quotation_value),
                 "remarks": a.notes or "",
                 "category": (
@@ -257,6 +263,8 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                     )
                 ),
                 "work_action": a.outcome or "",
+                "reminder_date": a.reminder_date.isoformat() if a.reminder_date else None,
+                "reminder_done": bool(getattr(a, "reminder_done", False)),
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             })
         # One value per revision (R0, R1, R2…) from quotation form saves.
@@ -581,7 +589,7 @@ def get_lead(lid: UUID, db: Session = Depends(get_db), u: User = Depends(current
     visits = db.query(SiteVisit).filter_by(lead_id=lid).all()
     docs = db.query(LeadDocument).filter_by(lead_id=lid).all()
     d = _serialize(lead, db)
-    d["activities"] = [{"id": str(a.id), "type": a.activity_type, "notes": a.notes, "at": a.activity_at.isoformat() if a.activity_at else None} for a in acts]
+    d["activities"] = [{"id": str(a.id), "type": a.activity_type, "notes": a.notes, "reminder_date": a.reminder_date.isoformat() if getattr(a, "reminder_date", None) else None, "reminder_done": bool(getattr(a, "reminder_done", False)), "at": a.activity_at.isoformat() if a.activity_at else None} for a in acts]
     d["history"] = [{"id": str(h.id), "old": str(h.old_status_id) if h.old_status_id else None, "new": str(h.new_status_id), "reason": h.reason} for h in hist]
     d["quotations"] = [{"id": str(x.id), "number": x.quotation_number, "total": float(x.grand_total) if x.grand_total else None} for x in quotes]
     d["visits"] = [{"id": str(v.id), "status": v.visit_status, "notes": v.notes} for v in visits]
@@ -645,6 +653,15 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
             data[key] = data[key].strip()
 
     pricing_changed = False
+    if "reminder_date" in data:
+        rd = data.pop("reminder_date")
+        if rd is not None and rd < date.today():
+            raise HTTPException(400, "Reminder date cannot be in the past")
+        if rd != lead.reminder_date:
+            lead.reminder_done = False
+        lead.reminder_date = rd
+    if "reminder_done" in data:
+        lead.reminder_done = bool(data.pop("reminder_done"))
     if "product_id" in data:
         pid = data.pop("product_id")
         if pid is None:
@@ -706,6 +723,8 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         customer_review = "C (Planning Stage)"
     if customer_review and customer_review not in {"A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (Planning Stage)"}:
         raise HTTPException(400, "Invalid customer review")
+    if body.reminder_date is not None and body.reminder_date < date.today():
+        raise HTTPException(400, "Reminder date cannot be in the past")
     if body.sla_state is not None and body.sla_state not in {"PENDING", "COMPLETED"}:
         raise HTTPException(400, "Invalid overdue state")
     completion_only = (
@@ -715,20 +734,33 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         and (lead.employee_remarks or "").strip() == remarks
         and (lead.customer_review or "").strip() == customer_review
         and (body.quotation_value is None or body.quotation_value == lead.quotation_value)
+        and (body.reminder_date is None or lead.reminder_date is None or lead.reminder_date == body.reminder_date)
     )
     if completion_only:
+        # Blank reminder means "leave unchanged" — only an explicitly picked date overwrites.
+        if body.reminder_date is not None:
+            if body.reminder_date != lead.reminder_date:
+                lead.reminder_done = False
+            lead.reminder_date = body.reminder_date
         if status.name in SLA_STOP_STATUSES or body.sla_state == "COMPLETED":
             stop_followup_sla(lead)
         else:
             refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
         db.commit()
-        return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": False}
+        return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": False,
+                "reminder_date": str(lead.reminder_date) if lead.reminder_date else None,
+                "reminder_done": bool(getattr(lead, "reminder_done", False))}
     # First talk after assignment records contact and starts a fresh follow-up window
     if not lead.first_contact_at and lead.primary_employee_id == u.id:
         record_first_contact(db, lead, u, body.method or "Call", status.name, remarks)
     change_status(db, lead, body.new_status_id, u, remarks)
     lead.employee_remarks = remarks
     lead.customer_review = customer_review
+    # Blank reminder means "leave unchanged" — only an explicitly picked date overwrites.
+    if body.reminder_date is not None:
+        if body.reminder_date != lead.reminder_date:
+            lead.reminder_done = False
+        lead.reminder_date = body.reminder_date
     if status.name == "Quotation sent" and body.quotation_value is not None:
         rounded = round_money(body.quotation_value)
         if rounded is None:
@@ -743,10 +775,13 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
         notes=remarks, outcome=status.name, customer_review=customer_review,
-        quotation_value=q_for_activity,
+        quotation_value=q_for_activity, reminder_date=body.reminder_date,
+        reminder_done=False,
     ))
     db.commit()
-    return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": True}
+    return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": True,
+            "reminder_date": str(lead.reminder_date) if lead.reminder_date else None,
+            "reminder_done": bool(getattr(lead, "reminder_done", False))}
 
 
 @router.post("/{lid}/assign")
@@ -886,6 +921,23 @@ def add_activity(lid: UUID, body: ActivityIn, db: Session = Depends(get_db), u: 
         lead.next_followup_at = body.next_followup_at
     db.commit()
     return {"id": str(a.id)}
+
+
+@router.post("/{lid}/activities/{aid}/reminder-done")
+def set_activity_reminder_done(lid: UUID, aid: UUID, body: ReminderDoneIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    """Tick/untick a single work-history entry's reminder date."""
+    _require_lead_write(u)
+    lead = _owned_lead(db, lid, u)
+    a = db.get(LeadActivity, aid)
+    if not a or a.lead_id != lead.id:
+        raise HTTPException(404, "Activity not found")
+    if u.role and u.role.name == "EMPLOYEE" and lead.sla_state == "COMPLETED":
+        status = db.get(LeadStatus, lead.status_id)
+        if status and status.name in ("Converted", "Not Interested", "Not Interested/Spam"):
+            raise HTTPException(403, "This lead cannot be edited or reopened")
+    a.reminder_done = bool(body.done)
+    db.commit()
+    return {"ok": True, "reminder_done": a.reminder_done}
 
 
 @router.post("/{lid}/site-visits")

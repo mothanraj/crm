@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { EmployeeLoginPopup } from '../components/LoginPopup';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'EMPLOYEE'] },
@@ -52,6 +53,7 @@ export function AppShell() {
     localStorage.removeItem('role');
     localStorage.removeItem('user_id');
     localStorage.removeItem('user_name');
+    try { sessionStorage.removeItem('crm:login-popup'); } catch { /* private mode */ }
     navigate('/login', { replace: true });
   };
   return (
@@ -126,6 +128,7 @@ export function AppShell() {
             <Outlet />
           </div>
         </main>
+        {role === 'EMPLOYEE' && <EmployeeLoginPopup />}
       </div>
     </div>
   );

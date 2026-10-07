@@ -67,6 +67,8 @@ class LeadUpdate(BaseModel):
     source_id: Optional[UUID] = None
     requirement: Optional[str] = None
     next_followup_at: Optional[datetime] = None
+    reminder_date: Optional[date] = None
+    reminder_done: Optional[bool] = None
     customer_review: Optional[str] = None
     product_id: Optional[UUID] = None
     quantity_raw: Optional[str] = None
@@ -88,6 +90,7 @@ class StatusChange(BaseModel):
     reason: str = ""  # remarks — required when employee updates work progress
     method: str = "Call"  # used if this is also the first contact
     customer_review: str = ""
+    reminder_date: Optional[date] = None  # optional work-progress reminder (today or future)
     sla_state: Optional[str] = None
 
 
@@ -96,6 +99,10 @@ class AssignIn(BaseModel):
     role: str = "PRIMARY"
     # Admin leads page: pick any employee. Detail-page reassignment stays request-gated.
     manual: bool = False
+
+
+class ReminderDoneIn(BaseModel):
+    done: bool = False
 
 
 class ReassignRequestIn(BaseModel):
