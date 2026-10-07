@@ -50,6 +50,10 @@
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { @apply bg-graphite-300 rounded-full; }
 
+/* grab-and-move horizontal scroll for wide tables */
+.drag-scroll { cursor: grab; overscroll-behavior-x: contain; }
+.drag-scroll.is-dragging { cursor: grabbing; user-select: none; }
+
 /* employee to-do queue: animated strike-through for contacted leads */
 .todo-strike {
   position: relative;

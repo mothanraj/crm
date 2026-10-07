@@ -311,7 +311,7 @@ export function CreateLead() {
           {field('Date Received', (
             <input type="date" className="input w-full" value={form.enquiry_date} onChange={(e) => set('enquiry_date', e.target.value)} />
           ))}
-          {field('Lead Name / Full Name', (
+          {field('Full Name', (
             <input className="input w-full" value={form.customer_name} onChange={(e) => set('customer_name', e.target.value)} />
           ))}
           {field('Company / Organisation', (

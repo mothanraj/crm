@@ -126,12 +126,12 @@ export function Card({ title, action, children, className = '' }: { title?: stri
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-      <div>
-        <h1 className="text-2xl font-bold text-graphite-900">{title}</h1>
-        {subtitle && <p className="text-sm text-graphite-500 mt-1">{subtitle}</p>}
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-4 sm:mb-6">
+      <div className="min-w-0">
+        <h1 className="text-xl sm:text-2xl font-bold text-graphite-900 break-words">{title}</h1>
+        {subtitle && <p className="text-[13px] sm:text-sm text-graphite-500 mt-1 break-words">{subtitle}</p>}
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap gap-2 w-full sm:w-auto">{actions}</div>}
     </div>
   );
 }

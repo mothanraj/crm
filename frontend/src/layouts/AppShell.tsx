@@ -106,15 +106,15 @@ export function AppShell() {
           <button onClick={logout} className="whitespace-nowrap text-graphite-200 underline underline-offset-2">Sign out</button>
         </div>
         {/* topbar */}
-        <header className="bg-white border-b border-graphite-200 px-6 py-3 flex items-center justify-between shrink-0 z-10">
-          <div className="flex items-center gap-3">
+        <header className="bg-white border-b border-graphite-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-2 shrink-0 z-10">
+          <div className="flex items-center gap-3 min-w-0">
             <img src="/estar-logo.png" alt="E-Star" className="hidden md:block h-12 w-auto max-w-[170px] rounded object-contain" />
-            <div className="text-sm text-graphite-500">
+            <div className="text-xs sm:text-sm text-graphite-500 truncate">
               {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            {role === 'EMPLOYEE' && <span className="text-sm font-semibold text-graphite-700">{userName}</span>}
+          <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+            {role === 'EMPLOYEE' && <span className="text-sm font-semibold text-graphite-700 truncate max-w-[140px] sm:max-w-none">{userName}</span>}
             <Link to="/notifications" className="relative text-xl" title="Notifications">
               🔔
               {unread > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#E03131] rounded-full" title={`${unread} unread`} />}

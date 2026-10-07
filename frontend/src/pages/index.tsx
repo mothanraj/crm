@@ -5,6 +5,7 @@ import {
   ResponsiveContainer, Legend,
 } from 'recharts';
 import { api } from '../services/api';
+import { useDragScroll } from '../hooks/useDragScroll';
 import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Analytics } from './analytics';
@@ -72,8 +73,8 @@ function DashboardFunnelTable({
   totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   emptyTitle: string;
 }) {
-  const cell = 'td !px-1 !py-1.5 text-[11px] text-center align-middle leading-tight border-graphite-100';
-  const head = 'th !px-1 !py-1.5 !text-[10px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-tight font-semibold';
+  const cell = 'td !px-0.5 sm:!px-1 !py-1.5 text-[10px] sm:text-[11px] text-center align-middle leading-snug break-words [overflow-wrap:anywhere] border-graphite-100 tabular-nums';
+  const head = 'th !px-0.5 sm:!px-1 !py-1.5 !text-[9px] sm:!text-[10px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-snug font-semibold break-words [overflow-wrap:anywhere]';
   return (
     <div className="rounded-lg border border-graphite-100 overflow-hidden h-full">
       <table className="w-full table-fixed text-center">
@@ -502,26 +503,29 @@ export function Dashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="pt-7 w-full">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3 md:gap-4 items-stretch w-full">
+      <div className="w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5 lg:gap-4 items-start w-full">
           <div className="min-w-0">
-            <div className="grid grid-cols-3 grid-rows-3 gap-2 md:gap-3 h-full min-h-[18rem] sm:min-h-[21rem]">
+            <div className="hidden lg:block text-lg font-bold text-transparent uppercase tracking-wide text-center leading-none mb-2 select-none" aria-hidden="true">
+              Status
+            </div>
+            <div className="grid grid-cols-3 grid-rows-3 gap-2 md:gap-3 min-h-[18rem] sm:min-h-[21rem]">
               {tiles.map((t) => (
-                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-3 shadow-sm text-center flex flex-col items-center justify-center h-full`}>
-                  <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
+                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
                   <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
                 </div>
               ))}
             </div>
           </div>
-          <div className="min-w-0 relative h-full">
-            <div className="absolute -top-7 left-0 right-0 text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none">
+          <div className="min-w-0">
+            <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Category
             </div>
-            <div className="grid grid-cols-2 grid-rows-2 gap-2 md:gap-3 h-full min-h-[18rem] sm:min-h-[21rem]">
+            <div className="grid grid-cols-2 grid-rows-2 gap-2 md:gap-3 min-h-[14rem] sm:min-h-[21rem]">
               {categoryTiles.map((t) => (
-                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2.5 py-3 shadow-sm text-center flex flex-col items-center justify-center h-full`}>
-                  <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
+                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
                   <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
                   <div className="text-xs opacity-85 mt-1 leading-tight">{t.hint}</div>
                 </div>
@@ -570,15 +574,15 @@ export function Dashboard() {
         pieRows={categoryPie}
         emptyTitle="No category data"
       />
-      <Card title="Customer quotation values">
+      <Card title="Customer quotation values" className="min-w-0">
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
-          <div className="overflow-auto max-h-96">
-            <table className="w-full text-sm">
-              <thead><tr><th className="th">Enquiry Number</th><th className="th">Customer name</th><th className="th">Employee</th><th className="th text-right">Quotation value</th></tr></thead>
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 overflow-y-auto max-h-96">
+            <table className="w-full min-w-[560px] text-xs sm:text-sm">
+              <thead><tr><th className="th whitespace-nowrap">Enquiry Number</th><th className="th">Customer name</th><th className="th">Employee</th><th className="th text-right whitespace-nowrap">Quotation value</th></tr></thead>
               <tbody>{d.quoted_customers.map((lead: any) => <tr key={lead.lead_id}>
-                <td className="td"><Link className="text-brand-700 hover:underline" to={`/leads/${lead.lead_id}`}>{lead.enquiry_number}</Link></td>
-                <td className="td">{lead.customer_name}</td><td className="td">{lead.employee || '—'}</td>
-                <td className="td text-right">{inr(lead.quotation_value)}</td>
+                <td className="td whitespace-nowrap"><Link className="text-brand-700 hover:underline" to={`/leads/${lead.lead_id}`}>{lead.enquiry_number}</Link></td>
+                <td className="td break-words">{lead.customer_name}</td><td className="td break-words">{lead.employee || '—'}</td>
+                <td className="td text-right whitespace-nowrap tabular-nums">{inr(lead.quotation_value)}</td>
               </tr>)}</tbody>
             </table>
           </div>
@@ -1636,10 +1640,10 @@ function QuotationFormModal({
             : 'Preview — Download PDF keeps this revision. Click Edit, change, and Save to move R0 to R1.'}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 sm:px-8 py-5">
+        <div className="flex-1 overflow-auto px-3 sm:px-8 py-5">
           {loading ? <div className="flex justify-center py-16"><Spinner /></div> : (
             <div
-              className="mx-auto bg-white shadow-lg w-full max-w-[210mm] min-h-[297mm] px-[14mm] pt-[10mm] pb-[8mm] text-[15px] text-slate-800 relative"
+              className="mx-auto bg-white shadow-lg w-full max-w-[210mm] min-w-[280px] min-h-[297mm] px-4 sm:px-[14mm] pt-[10mm] pb-[8mm] text-[15px] text-slate-800 relative"
               style={{ fontFamily: '"Times New Roman", Times, Georgia, serif' }}
             >
               {err && <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 font-sans">{err}</div>}
@@ -2026,6 +2030,7 @@ function countProgressAction(history: any[] | undefined, action: string) {
 
 export function Leads() {
   const role = localStorage.getItem('role') || '';
+  const tableScroll = useDragScroll<HTMLDivElement>();
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -2232,26 +2237,26 @@ export function Leads() {
   return (
     <div className="min-w-0 max-w-full">
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Create Lead or Excel import · auto-assign round-robin when no employee is selected`} />
-      <div className="card p-4 mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
-        <input className="input min-w-0" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-        <input className="input min-w-0" placeholder="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }} />
-        <select className="input min-w-0" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
+      <div className="card p-3 sm:p-4 mb-4 grid grid-cols-1 gap-2 sm:gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
+        <input className="input min-w-0 min-h-[44px] text-base sm:text-sm" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        <input className="input min-w-0 min-h-[44px] text-base sm:text-sm" placeholder="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }} />
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">Status</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <select className="input min-w-0" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
           <option value="">Sources</option>
           {masters?.sources?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select className="input min-w-0" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={sla} onChange={(e) => { setSla(e.target.value); setPage(1); }}>
           <option value="">Lead status</option>
           <option value="PENDING">Pending</option>
           <option value="COMPLETED">Completed</option>
           <option value="NOT_INTERESTED">Not Interested</option>
         </select>
-        <select className="input min-w-0" value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}>
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}>
           <option value="">Sort: Recent</option>
           <option value="lead_value_desc">Lead High</option>
           <option value="lead_value">Lead Low</option>
@@ -2261,8 +2266,8 @@ export function Leads() {
       <div className="card min-w-0">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <>
-          {/* Admin mobile: stacked cards so leads stay readable on small screens */}
-          {role !== 'EMPLOYEE' && (
+          {/* Mobile: stacked read-only cards for all roles, same as admin */}
+          {(
             <div className="block md:hidden space-y-3 p-3">
               {items.map((l) => (
                 <div
@@ -2327,7 +2332,8 @@ export function Leads() {
               ))}
             </div>
           )}
-          <div className={`relative isolate w-full overflow-x-auto ${role !== 'EMPLOYEE' ? 'hidden md:block' : 'block'}`}>
+          <div ref={tableScroll.ref} className={`relative isolate w-full overflow-x-auto drag-scroll hidden md:block ${tableScroll.dragging ? 'is-dragging' : ''}`}>
+            <div className="text-[11px] text-graphite-400 mb-1 hidden md:block select-none" aria-hidden="true">⇔ Drag to see more columns</div>
             <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2100px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
@@ -2601,11 +2607,11 @@ export function Leads() {
           </div>
           </>
         )}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-3 border-t border-graphite-100 text-sm">
-          <span className="text-graphite-500">Page {page} of {Math.max(1, Math.ceil(total / size))}</span>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center justify-between gap-2 px-3 sm:px-4 py-3 border-t border-graphite-100 text-sm">
+          <span className="text-graphite-500 text-center sm:text-left">Page {page} of {Math.max(1, Math.ceil(total / size))}</span>
           <div className="flex gap-2">
-            <button className="btn-secondary !px-3 !py-1" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Prev</button>
-            <button className="btn-secondary !px-3 !py-1" disabled={page * size >= total} onClick={() => setPage((p) => p + 1)}>Next →</button>
+            <button className="btn-secondary !px-4 !py-2 min-h-[44px] flex-1 sm:flex-none" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Prev</button>
+            <button className="btn-secondary !px-4 !py-2 min-h-[44px] flex-1 sm:flex-none" disabled={page * size >= total} onClick={() => setPage((p) => p + 1)}>Next →</button>
           </div>
         </div>
       </div>
@@ -2644,23 +2650,23 @@ export function Leads() {
         />
       )}
       {conversionToConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setConversionToConfirm(null)}>
-          <div role="dialog" aria-modal="true" aria-labelledby="confirm-conversion-title" className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') setConversionToConfirm(null); }}>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)]" onClick={() => setConversionToConfirm(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="confirm-conversion-title" className="card w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') setConversionToConfirm(null); }}>
             <h3 id="confirm-conversion-title" className="text-lg font-semibold text-graphite-900">Complete converted lead?</h3>
             <p className="text-sm text-graphite-600 mt-2">Once completed, this converted lead cannot be edited or reopened. Select Cancel to recheck the details, or OK to complete it.</p>
             <div className="flex justify-end gap-2 mt-5">
-              <button type="button" className="btn-secondary" autoFocus onClick={() => setConversionToConfirm(null)}>Cancel</button>
-              <button type="button" className="btn-primary" onClick={() => saveLead(conversionToConfirm, true, true)}>OK</button>
+              <button type="button" className="btn-secondary min-h-[44px]" autoFocus onClick={() => setConversionToConfirm(null)}>Cancel</button>
+              <button type="button" className="btn-primary min-h-[44px]" onClick={() => saveLead(conversionToConfirm, true, true)}>OK</button>
             </div>
           </div>
         </div>
       )}
       {validationMessage && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setValidationMessage('')}>
-          <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)]" onClick={() => setValidationMessage('')}>
+          <div className="card w-full max-w-md max-h-[90dvh] overflow-y-auto p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-graphite-900">{validationMessage.includes('cannot be edited') ? 'Cannot edit this lead' : validationMessage.toLowerCase().includes('car') ? 'Check the car count' : 'Complete the lead details'}</h3>
-            <p className="text-sm text-graphite-600 mt-2">{validationMessage}</p>
-            <div className="flex justify-end mt-5"><button type="button" className="btn-primary" onClick={() => setValidationMessage('')}>OK</button></div>
+            <p className="text-sm text-graphite-600 mt-2 break-words">{validationMessage}</p>
+            <div className="flex justify-end mt-5"><button type="button" className="btn-primary min-h-[44px] px-6" onClick={() => setValidationMessage('')}>OK</button></div>
           </div>
         </div>
       )}
@@ -2670,6 +2676,7 @@ export function Leads() {
 
 /* ================= EMPLOYEE LEADS ================= */
 export function EmployeeLeads() {
+  const tableScroll = useDragScroll<HTMLDivElement>();
   const [masters, setMasters] = useState<any>(null);
   const [empId, setEmpId] = useState('');
   const [items, setItems] = useState<any[]>([]);
@@ -2784,7 +2791,8 @@ export function EmployeeLeads() {
             </div>
           </div>
           <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
+            <div ref={tableScroll.ref} className={`overflow-x-auto drag-scroll ${tableScroll.dragging ? 'is-dragging' : ''}`}>
+              <div className="text-[11px] text-graphite-400 px-4 pt-2 select-none" aria-hidden="true">⇔ Drag to see more columns</div>
               <table className="w-full min-w-[1280px]">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer details</th>
@@ -3002,11 +3010,11 @@ export function LeadDetail({ id }: { id: string }) {
   };
   return (
     <div className="space-y-5">
-      <div className="card p-6">
+      <div className="card p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-2xl font-bold text-graphite-900">{l.enquiry_number}</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-graphite-900 break-words">{l.enquiry_number}</h1>
               {l.legacy_enquiry_no != null && <span className="text-sm text-graphite-500">Excel #{l.legacy_enquiry_no}</span>}
               <StatusBadge value={nameOf('statuses', l.status_id)} />
               {role === 'EMPLOYEE' ? <SlaBadge value={l.sla_state} /> : <SlaBadge value={l.pending_assignment ? 'PENDING' : l.sla_state} />}
