@@ -466,7 +466,7 @@ export function Dashboard() {
   }));
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
-    { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
+    { label: 'Pending', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
     { label: 'Meeting', value: f.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
     { label: 'Site Visit', value: f.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
@@ -485,7 +485,8 @@ export function Dashboard() {
     });
     return Number(row?.total || 0);
   };
-  const categoryBase = Math.max(1, Number(f.total ?? d.total ?? 0));
+  // Category percentages use the current live lead population as the 100% base.
+  const categoryBase = Math.max(1, Number(d.total ?? f.total ?? 0));
   const categoryTiles = categoryLabels.map((label) => {
     const count = categoryCountFor(label);
     const pct = Math.round((count / categoryBase) * 100);
@@ -497,6 +498,12 @@ export function Dashboard() {
       text: CATEGORY_TILE_TEXT[label] || categoryTileText(label),
     };
   });
+  // Conversion is based on current live statuses: Converted / Quotation Sent.
+  const quotationSentCount = Number(d.quotation_sent_history_count ?? d.by_status?.['Quotation sent'] ?? f.quotation_sent ?? 0);
+  const convertedCount = Number(d.converted_from_quotation ?? d.by_status?.Converted ?? f.converted ?? 0);
+  const conversionRatio = quotationSentCount > 0
+    ? `${((convertedCount / quotationSentCount) * 100).toFixed(1)}%`
+    : '0%';
   return (
     <div className="space-y-5">
       <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and product data from live database." />
@@ -506,9 +513,10 @@ export function Dashboard() {
       <div className="w-full">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5 lg:gap-4 items-start w-full">
           <div className="min-w-0">
-            <div className="hidden lg:block text-lg font-bold text-transparent uppercase tracking-wide text-center leading-none mb-2 select-none" aria-hidden="true">
+            <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Status
             </div>
+            <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
             <div className="grid grid-cols-3 grid-rows-3 gap-2 md:gap-3 min-h-[18rem] sm:min-h-[21rem]">
               {tiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
@@ -517,11 +525,13 @@ export function Dashboard() {
                 </div>
               ))}
             </div>
+            </div>
           </div>
           <div className="min-w-0">
             <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Category
             </div>
+            <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-50/60 p-2 sm:p-2.5 md:p-3 shadow-sm">
             <div className="grid grid-cols-2 grid-rows-2 gap-2 md:gap-3 min-h-[14rem] sm:min-h-[21rem]">
               {categoryTiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
@@ -531,21 +541,24 @@ export function Dashboard() {
                 </div>
               ))}
             </div>
+            </div>
           </div>
         </div>
       </div>
 
+      <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 w-full">
         {[
           { label: 'Total lead value', value: inr(d.total_lead_value ?? lv.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
           { label: 'Total quotation value', value: inr(d.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
-          { label: 'Converted quotation value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]' },
+          { label: 'Total converted value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]' },
         ].map((t) => (
           <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-4 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
             <div className="text-xs sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
             <div className="text-xl sm:text-2xl font-bold mt-1.5 tabular-nums leading-tight break-words">{t.value}</div>
           </div>
         ))}
+      </div>
       </div>
 
       <DashboardTableChartRow
@@ -588,16 +601,15 @@ export function Dashboard() {
           </div>
         )}
       </Card>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
         {[
-          { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value) },
-          { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN') },
-          { label: 'Average Lead Value', value: inr(lv.average_lead_value) },
-          { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0 },
+          { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN'), bg: 'bg-[#0e7490] border-[#0e7490] text-white' },
+          { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0, bg: 'bg-[#15803d] border-[#15803d] text-white' },
+          { label: 'Conversion Ratio', value: conversionRatio, bg: 'bg-[#7c3aed] border-[#7c3aed] text-white' },
         ].map((k) => (
-          <div key={k.label} className="card p-4 text-center">
-            <div className="text-lg sm:text-xl font-bold text-graphite-900 tabular-nums">{k.value}</div>
-            <div className="text-xs text-graphite-500 uppercase tracking-wide mt-1">{k.label}</div>
+          <div key={k.label} className={`card p-4 text-center border ${k.bg}`}>
+            <div className="text-2xl sm:text-3xl font-bold tabular-nums">{k.value}</div>
+            <div className="text-sm sm:text-base uppercase tracking-wide mt-1 opacity-90 font-semibold">{k.label}</div>
           </div>
         ))}
       </div>
@@ -798,7 +810,7 @@ export function EmployeeDashboard() {
   const valueTiles = [
     { label: 'Total lead value', value: inr(d.total_lead_value ?? d.lead_value?.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]', text: 'text-white' },
     { label: 'Total quotation value', value: inr(d.total_quotation_value ?? 0), bg: 'bg-[#b45309]', text: 'text-white' },
-    { label: 'Converted quotation value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]', text: 'text-white' },
+    { label: 'Total converted value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]', text: 'text-white' },
   ];
   return (
     <div className="space-y-5">
@@ -850,9 +862,9 @@ export function EmployeeDashboard() {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 mt-6 md:mt-8">
         {valueTiles.map((t) => (
-          <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-4 sm:py-5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
-            <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
-            <div className="text-xl sm:text-2xl font-bold mt-2 tabular-nums leading-tight break-words">{t.value}</div>
+          <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-3 py-4 sm:py-5 shadow-sm text-center flex flex-col items-center justify-center min-h-[7.5rem] sm:min-h-[8rem]`}>
+            <div className="text-base sm:text-lg uppercase tracking-wide opacity-95 font-bold leading-tight">{t.label}</div>
+            <div className="text-2xl sm:text-3xl font-bold mt-2 tabular-nums leading-tight break-words">{t.value}</div>
           </div>
         ))}
       </div>
@@ -1030,11 +1042,11 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
             {[
               { label: 'Total lead value', value: inr(data?.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
               { label: 'Quotation value', value: inr(data?.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
-              { label: 'Converted quotation value', value: inr(data?.converted_quotation_value ?? 0), bg: 'bg-[#15803d]' },
+              { label: 'Total converted value', value: inr(data?.converted_quotation_value ?? 0), bg: 'bg-[#15803d]' },
             ].map((t) => (
               <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-4 shadow-sm text-center`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
-                <div className="text-lg sm:text-xl font-bold mt-1.5 tabular-nums leading-tight break-words">{t.value}</div>
+                <div className="text-xs sm:text-sm uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
+                <div className="text-xl sm:text-2xl font-bold mt-1.5 tabular-nums leading-tight break-words">{t.value}</div>
               </div>
             ))}
           </div>
@@ -2093,7 +2105,10 @@ export function Leads() {
   const canEditWorkFields = (lead: any) => {
     if (role !== 'EMPLOYEE') return false;
     if (isConvertedLocked(lead)) return false;
-    if (isNotInterestedLocked(lead)) return !!(expandedRows[lead.id]);
+    // Once a conversation has been recorded, its original progress, category,
+    // and remarks stay read-only even after Reopen. New work goes into a follow-up.
+    if (lead.work_history?.length) return false;
+    if (isNotInterestedLocked(lead)) return false;
     if (lead.sla_state === 'OVERDUE') return true;
     return !!(expandedRows[lead.id] || !lead.employee_remarks);
   };
@@ -2175,9 +2190,13 @@ export function Leads() {
       const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
       const rawRemarks = draft.remarks.trim() || 'Lead completed';
       const stripStamp = (s: string) => s.replace(/\n?\[[^\]]*\]\s*$/u, '').trim();
-      const stampedRemarks = done && !reopening && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
+      // Reopen only restarts the SLA window. Reuse the exact saved conversation
+      // so the API's completion-only path does not append it as a new activity.
+      const stampedRemarks = reopening
         ? (lead.employee_remarks || rawRemarks)
-        : withUpdateStamp(rawRemarks);
+        : (done && stripStamp(rawRemarks) === stripStamp(lead.employee_remarks || '')
+          ? (lead.employee_remarks || rawRemarks)
+          : withUpdateStamp(rawRemarks));
       // Only Done marks COMPLETED. Save / Reopen stay PENDING (restarts 3-day follow-up on backend).
       const nextSla = done ? 'COMPLETED' : 'PENDING';
       const { data } = await api.post(`/leads/${lead.id}/status`, {
@@ -4331,7 +4350,6 @@ export function Reports() {
         const catRowsH = mapRows(dashHistory?.by_category?.rows, 'category');
         const histCountTiles = [
           { label: 'Total Leads', value: t.total_leads ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
-          { label: 'Pending', value: t.pending ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
           { label: 'In Followup', value: t.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
           { label: 'Meeting', value: t.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
           { label: 'Site Visit', value: t.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
@@ -4365,7 +4383,7 @@ export function Reports() {
                         ? ` Period: ${dashHistory?.effective_from || 'All'} → ${dashHistory?.effective_to || 'All'}.`
                         : ''}
                     </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-8 gap-2">
                       {histCountTiles.map((tile) => (
                         <div key={tile.label} className={`${tile.bg} ${tile.text} rounded-lg px-2.5 py-2.5 shadow-sm text-center`}>
                           <div className="text-[11px] sm:text-xs uppercase tracking-wide opacity-95 font-semibold leading-tight">{tile.label}</div>

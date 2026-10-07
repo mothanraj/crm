@@ -461,6 +461,30 @@ def _kpis(db: Session, u: User | None = None):
         .scalar()
         or 0
     )
+    # A lead leaves the current "Quotation sent" status after it converts, so
+    # current-status counts cannot be used for conversion. Keep the live
+    # quotation-sent population from its saved work-progress history instead.
+    quotation_sent_lead_ids = {
+        lead_id for (lead_id,) in db.query(LeadActivity.lead_id)
+        .join(Lead, Lead.id == LeadActivity.lead_id)
+        .filter(
+            Lead.is_active.is_(True),
+            LeadActivity.activity_type == "Work Progress",
+            LeadActivity.outcome == STATUS_QUOTE,
+            *emp,
+        ).distinct().all()
+    }
+    converted_from_quotation = (
+        db.query(func.count(Lead.id))
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(
+            Lead.is_active.is_(True),
+            LeadStatus.name == STATUS_CONVERTED,
+            Lead.id.in_(quotation_sent_lead_ids),
+            *emp,
+        ).scalar()
+        if quotation_sent_lead_ids else 0
+    )
     status_category = []
     for status_name, review, n in (
         db.query(LeadStatus.name, Lead.customer_review, func.count(Lead.id))
@@ -483,6 +507,8 @@ def _kpis(db: Session, u: User | None = None):
         "total_lead_value": lead_value["total_lead_value"],
         "total_quotation_value": total_quotation_value,
         "total_converted_lead_value": total_converted_lead_value,
+        "quotation_sent_history_count": len(quotation_sent_lead_ids),
+        "converted_from_quotation": int(converted_from_quotation or 0),
         "by_status": by_status,
         "funnel": {
             "total": total,
