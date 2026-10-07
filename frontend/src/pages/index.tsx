@@ -2272,8 +2272,8 @@ export function Leads() {
       <div className="card min-w-0">
         {loading ? <Spinner /> : items.length === 0 ? <EmptyState title={error ? 'Could not load leads' : 'No leads match'} hint={error ? 'Check your connection and retry.' : 'Import the Excel tracker or adjust filters.'} /> : (
           <>
-          {/* Mobile: stacked read-only cards for all roles, same as admin */}
-          {(
+          {/* Admin mobile: stacked read-only cards */}
+          {role !== 'EMPLOYEE' && (
             <div className="block md:hidden space-y-3 p-3">
               {items.map((l) => (
                 <div
@@ -2336,6 +2336,208 @@ export function Leads() {
                   </dl>
                 </div>
               ))}
+            </div>
+          )}
+          {/* Employee mobile: stacked editable cards with desktop work actions */}
+          {role === 'EMPLOYEE' && (
+            <div className="block md:hidden space-y-3 p-3">
+              {items.map((l) => {
+                const draft = draftFor(l);
+                const editing = canEditWorkFields(l);
+                const locked = isOutreachLocked(l);
+                return (
+                  <div
+                    key={`m-${l.id}`}
+                    className={`rounded-xl border border-graphite-200 p-3 shadow-sm ${leadRowColour(l, nameOf('statuses', l.status_id))}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <Link to={`/leads/${l.id}`} className="font-semibold text-brand-700 text-sm break-words min-w-0">
+                        {l.enquiry_number}
+                      </Link>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                        <StatusBadge value={statusLabel(l)} />
+                        <SlaBadge value={l.sla_state} />
+                      </div>
+                    </div>
+                    <div className="mt-2 min-w-0">
+                      <div className="font-medium text-graphite-900 break-words">{l.customer_name || '—'}</div>
+                      <div className="text-sm text-graphite-700 break-words">{l.company_name || '—'}</div>
+                      <div className="text-sm text-graphite-600 break-words">{l.city || '—'}</div>
+                    </div>
+                    <div className="mt-2 text-sm text-graphite-800 break-words">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="break-words">{l.contact_number || '—'}</span>
+                        {l.contact_number && whatsappUrl(l.contact_number) && (
+                          <a
+                            href={whatsappUrl(l.contact_number)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open WhatsApp"
+                            className="inline-flex text-[#25D366] hover:text-[#128C7E] min-w-[44px] min-h-[44px] items-center justify-center"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isOutreachLocked(l)) {
+                                e.preventDefault();
+                                setValidationMessage(lockedLeadMessage(l));
+                              }
+                            }}
+                          >
+                            <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+                              <path fill="currentColor" d="M20.5 3.5A11 11 0 0 0 2.1 17.8L1 23l5.3-1.1A11 11 0 0 0 12 23a11 11 0 0 0 8.5-19.5zM12 21a9 9 0 0 1-4.6-1.3l-.3-.2-3.1.7.7-3-.2-.3A9 9 0 1 1 12 21zm5-6.7c-.3-.1-1.6-.8-1.8-.9s-.4-.1-.6.1-.7.9-.8 1-.3.2-.6.1a7.4 7.4 0 0 1-2.2-1.4 8.2 8.2 0 0 1-1.5-1.9c-.2-.3 0-.4.1-.6l.4-.5.2-.3a.5.5 0 0 0 0-.5c-.1-.1-.6-1.4-.8-1.9s-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.8 11.8 0 0 0 4.4 4 14 14 0 0 0 1.5.5 3.6 3.6 0 0 0 1.6.1 2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .2-1.2c-.1-.1-.3-.2-.6-.3z" />
+                            </svg>
+                          </a>
+                        )}
+                      </div>
+                      <div className="text-xs text-graphite-600 break-words [overflow-wrap:anywhere] mt-1">
+                        {l.email
+                          ? <button type="button" className="text-brand-700 hover:underline text-left text-xs break-words [overflow-wrap:anywhere] min-h-[44px] py-2" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
+                          : <span className="text-graphite-400">No email</span>}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="min-w-0">
+                        <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Cars</div>
+                        {canEditProductCars(l) ? (
+                          <input
+                            className="input text-base sm:text-sm mt-1 min-h-[44px] text-center w-full"
+                            type="number"
+                            min="2"
+                            disabled={savingId === l.id}
+                            value={l.quantity_raw || ''}
+                            placeholder="2"
+                            onChange={(e) => setItems((current) => current.map((item) => item.id === l.id ? { ...item, quantity_raw: e.target.value } : item))}
+                            onBlur={(e) => saveProductCars(l, l.product_id || '', e.target.value)}
+                          />
+                        ) : (<div className="text-sm text-graphite-900 mt-1">{l.quantity_raw || '—'}</div>)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Lead value</div>
+                        <div className="text-sm text-graphite-900 mt-1 font-semibold tabular-nums">{inr(l.lead_value)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-2 min-w-0">
+                      <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Product</div>
+                      {canEditProductCars(l) ? (
+                        <select
+                          className="input text-base sm:text-sm mt-1 min-h-[44px] w-full"
+                          disabled={savingId === l.id}
+                          value={l.product_id || ''}
+                          onChange={(e) => saveProductCars(l, e.target.value, l.quantity_raw || '')}
+                        >
+                          <option value="">Select product…</option>
+                          {(masters?.products || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{prodName(l, nameOf)}</div>)}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Work details</span>
+                      {!locked && l.employee_remarks && (
+                        <button
+                          type="button"
+                          className="btn-secondary !px-3 !py-1 text-xs min-h-[36px]"
+                          onClick={() => setExpandedRows((current) => ({ ...current, [l.id]: !current[l.id] }))}
+                        >
+                          {expandedRows[l.id] ? 'Cancel' : 'Edit'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      <div>
+                        <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Category</div>
+                        {editing ? (
+                          <select className="input text-base sm:text-sm mt-1 min-h-[44px] w-full" disabled={locked} value={draft.review}
+                            onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
+                            <option value="">Select category…</option>
+                            {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                          </select>
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`m-category-${index}`}><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Work action</div>
+                          <button type="button" className="btn-secondary !px-3 !py-1 text-base font-bold min-w-[44px] min-h-[44px]" disabled={locked} onClick={() => ((followupForms[l.id] || []).length ? closeFollowUp(l) : addFollowUp(l))} title={(followupForms[l.id] || []).length ? 'Close unsaved follow-up' : 'Add follow-up'}>{(followupForms[l.id] || []).length ? '×' : '+'}</button>
+                        </div>
+                        {editing ? (
+                          <select className="input text-base sm:text-sm mt-1 min-h-[44px] w-full" disabled={locked} value={draft.progress}
+                            onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
+                            <option value="">Select progress…</option>
+                            {actionOptions.map((option) => {
+                              const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
+                              return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                            })}
+                          </select>
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`m-action-${index}`}><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
+                        {(followupForms[l.id] || []).map((form, index) => (
+                          <div key={`m-follow-${index}`} className="mt-2 space-y-2 rounded-lg border border-graphite-200 p-2">
+                            <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+                            <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
+                              <option value="">Select progress…</option>
+                              {actionOptions.map((option) => {
+                                const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
+                                return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                              })}
+                            </select>
+                            <AutoGrowRemarks
+                              placeholder={`Follow-up ${index + 2} remarks…`}
+                              value={form.remarks}
+                              onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
+                            />
+                            <button type="button" className="btn-primary !px-3 !py-2 text-sm w-full min-h-[44px]" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Remarks</div>
+                        {editing ? (
+                          <>
+                            <AutoGrowRemarks
+                              disabled={locked}
+                              placeholder="Enter customer conversation remarks…"
+                              value={draft.remarks}
+                              onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
+                            />
+                            <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || !draft.remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
+                          </>
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}</div>) : (l.employee_remarks || '—')}</div>)}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {isConvertedLocked(l) ? (
+                        <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
+                      ) : (
+                        <button type="button" className={`btn-secondary !px-4 !py-2 text-sm min-h-[44px] flex-1 ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300' : '!bg-blue-600 !text-white !border-blue-600'}`}
+                          disabled={savingId === l.id}
+                          onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
+                          {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
+                        </button>
+                      )}
+                      {isQuotationUnlocked(l) ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-primary !px-4 !py-2 text-sm min-h-[44px] flex-1"
+                            onClick={(e) => {
+                              if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; }
+                              setQuoteFormLead(l);
+                            }}
+                          >
+                            {l.quotation_form?.quotation_number ? 'Edit quote' : 'Quote form'}
+                          </button>
+                          {isQuotationUnlocked(l) && l.quotation_value != null && l.quotation_value !== '' && (
+                            <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tabular-nums text-amber-900">
+                              {inr(l.quotation_value)}
+                            </span>
+                          )}
+                        </>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 text-xs text-graphite-500 break-words">
+                      <span>Source: {l.source_name || nameOf('sources', l.source_id)}</span>
+                      {l.sla_deadline && <span className="ml-2">· Due: {fmtDT(l.sla_deadline)}</span>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           <div ref={tableScroll.ref} className={`relative isolate w-full overflow-x-auto drag-scroll hidden md:block ${tableScroll.dragging ? 'is-dragging' : ''}`}>
