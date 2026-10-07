@@ -477,6 +477,13 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         *line_rows,
         [
             Paragraph("", cell),
+            Paragraph("<b>Total</b>", cell_left),
+            Paragraph("", cell),
+            Paragraph("", cell),
+            Paragraph(f"<b>{_inr_indian(totals['amount_excl'])}</b>", cell),
+        ],
+        [
+            Paragraph("", cell),
             Paragraph("GST 18%", cell_left),
             Paragraph("", cell),
             Paragraph("", cell),

@@ -466,14 +466,14 @@ export function Dashboard() {
   }));
   const tiles = [
     { label: 'Total Leads', value: f.total ?? d.total ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
-    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#BE185D]', text: 'text-white' },
+    { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
     { label: 'In Followup', value: f.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
     { label: 'Meeting', value: f.meeting ?? 0, bg: PROGRESS_TILE_BG.Meeting, text: PROGRESS_TILE_TEXT.Meeting },
     { label: 'Site Visit', value: f.site_visit ?? 0, bg: PROGRESS_TILE_BG['Site Visit'], text: PROGRESS_TILE_TEXT['Site Visit'] },
     { label: 'Quotation Sent', value: f.quotation_sent ?? 0, bg: PROGRESS_TILE_BG['Quotation sent'], text: PROGRESS_TILE_TEXT['Quotation sent'] },
     { label: 'Not Interested', value: f.not_interested ?? 0, bg: PROGRESS_TILE_BG['Not Interested'], text: PROGRESS_TILE_TEXT['Not Interested'] },
-    { label: 'Assigned', value: f.assigned ?? 0, bg: 'bg-[#0e7490]', text: 'text-white' },
     { label: 'Converted', value: f.converted ?? 0, bg: PROGRESS_TILE_BG.Converted, text: PROGRESS_TILE_TEXT.Converted },
+    { label: 'Overdue', value: d.sla_overdue ?? 0, bg: 'bg-[#BE185D]', text: 'text-white' },
   ];
   const categoryLabels = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
   const categoryCountFor = (label: string) => {
@@ -1850,6 +1850,12 @@ function QuotationFormModal({
                   )}
                   <tr>
                     <td className="border border-slate-400 px-2 py-2" />
+                    <td className="border border-slate-400 px-2 py-2 font-bold">Total</td>
+                    <td className="border border-slate-400 px-2 py-2" colSpan={2} />
+                    <td className="border border-slate-400 px-2 py-2 text-center tabular-nums font-bold">{inrIndian(amountExcl)}</td>
+                  </tr>
+                  <tr>
+                    <td className="border border-slate-400 px-2 py-2" />
                     <td className="border border-slate-400 px-2 py-2">GST 18%</td>
                     <td className="border border-slate-400 px-2 py-2" colSpan={2} />
                     <td className="border border-slate-400 px-2 py-2 text-center tabular-nums">{inrIndian(gst)}</td>
@@ -2752,7 +2758,7 @@ export function EmployeeLeads() {
               { label: 'Total leads', value: total, bg: 'bg-[#1e3a5f]' },
               { label: 'Pending', value: needsContact, bg: 'bg-[#c0392b]' },
               { label: 'Overdue', value: overdue, bg: 'bg-[#7b241c]' },
-              { label: 'Contact done', value: done, bg: 'bg-[#2F9E44]' },
+              { label: 'Responded', value: done, bg: 'bg-[#2F9E44]' },
             ].map((s) => (
               <div key={s.label} className={`${s.bg} text-white rounded-lg px-3 py-3 text-center shadow-sm`}>
                 <div className="text-2xl font-bold tabular-nums">{s.value}</div>
@@ -5246,7 +5252,7 @@ export function EmployeesPage() {
                   { label: 'Total assigned', value: employeeLeads.length },
                   { label: 'Needs first contact', value: empNeedsContact },
                   { label: 'Overdue', value: empOverdue },
-                  { label: 'Contact done', value: empContactDone },
+                  { label: 'Responded', value: empContactDone },
                 ].map((s) => (
                   <div key={s.label} className="rounded-xl border border-graphite-100 bg-graphite-50 p-3 text-center">
                     <div className="text-xl font-bold text-graphite-900 tabular-nums">{s.value}</div>
