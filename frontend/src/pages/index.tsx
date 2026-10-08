@@ -2272,7 +2272,16 @@ export function Leads() {
     setSavingId(lead.id);
     try {
       const { data } = await api.put(`/leads/${lead.id}`, { reminder_done: done });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, reminder_done: data.reminder_done ?? done } : item));
+      const d = data.reminder_done ?? done;
+      const leadDate = String(lead.reminder_date || '').slice(0, 10);
+      setItems((current) => current.map((item) => item.id === lead.id ? {
+        ...item,
+        reminder_done: d,
+        // Backend mirrors onto same-date entries — reflect locally too.
+        work_history: (item.work_history || []).map((h: any) => (
+          h.reminder_date && leadDate && String(h.reminder_date).slice(0, 10) === leadDate
+            ? { ...h, reminder_done: d } : h)),
+      } : item));
     } catch (e: any) {
       setValidationMessage(e?.response?.data?.detail || 'Could not update reminder');
     } finally { setSavingId(null); }
@@ -2283,9 +2292,16 @@ export function Leads() {
     const done = !entry.reminder_done;
     setSavingId(lead.id);
     try {
-      await api.post(`/leads/${lead.id}/activities/${entry.id}/reminder-done`, { done });
+      const { data } = await api.post(`/leads/${lead.id}/activities/${entry.id}/reminder-done`, { done });
+      const sameDate = String(entry.reminder_date || '').slice(0, 10) !== ''
+        && String(entry.reminder_date).slice(0, 10) === String(lead.reminder_date || '').slice(0, 10);
       setItems((current) => current.map((item) => item.id === lead.id
-        ? { ...item, work_history: (item.work_history || []).map((h: any) => h.id === entry.id ? { ...h, reminder_done: done } : h) }
+        ? {
+          ...item,
+          // Backend mirrors onto the lead when dates match — reflect locally too.
+          reminder_done: sameDate ? (data.lead_reminder_done ?? item.reminder_done) : item.reminder_done,
+          work_history: (item.work_history || []).map((h: any) => h.id === entry.id ? { ...h, reminder_done: done } : h),
+        }
         : item));
     } catch (e: any) {
       setValidationMessage(e?.response?.data?.detail || 'Could not update reminder');
@@ -2620,7 +2636,7 @@ export function Leads() {
                             </div>
                             <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : ''}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : ''}`}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : ''}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : ''}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : ''}`}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2847,23 +2863,8 @@ export function Leads() {
                         </div>
                       ) : (
                         <div className="min-w-0">
-                          <div className="inline-flex items-center gap-1.5">
-                            <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : ''}`}>{reminderOf(l) || '—'}</span>
-                            {reminderOf(l) && reminderTickable(l) && (
-                              <button
-                                type="button"
-                                title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
-                                aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
-                                disabled={savingId === l.id}
-                                onClick={(e) => { e.stopPropagation(); toggleLeadReminder(l); }}
-                                className={tickBtn(!!l.reminder_done)}
-                              >
-                                ✓
-                              </button>
-                            )}
-                          </div>
-                          {l.work_history?.length ? (
-                            <div className="mt-1 space-y-1 text-[11px] text-graphite-500">
+                          {(l.work_history || []).some((entry: any) => entry.reminder_date) ? (
+                            <div className="space-y-1 text-[11px] text-graphite-500">
                               {l.work_history.map((entry: any, index: number) => entry.reminder_date ? (
                                 <div key={`remhist-${entry.id || index}`} className="tabular-nums inline-flex items-center gap-1">
                                   <span className={entry.reminder_done ? 'reminder-done' : ''}>{index + 1}. Reminder: {String(entry.reminder_date).slice(0, 10)}</span>
@@ -2883,6 +2884,26 @@ export function Leads() {
                               ) : null)}
                             </div>
                           ) : null}
+                          {reminderOf(l) && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
+                            <div className="inline-flex items-center gap-1.5 mt-1">
+                              <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : ''}`}>{reminderOf(l)}</span>
+                              {reminderTickable(l) && (
+                                <button
+                                  type="button"
+                                  title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                  aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                  disabled={savingId === l.id}
+                                  onClick={(e) => { e.stopPropagation(); toggleLeadReminder(l); }}
+                                  className={tickBtn(!!l.reminder_done)}
+                                >
+                                  ✓
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {!reminderOf(l) && !(l.work_history || []).some((entry: any) => entry.reminder_date) && (
+                            <span className="text-sm tabular-nums">—</span>
+                          )}
                         </div>
                       )}
                       {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
@@ -3754,7 +3775,7 @@ export function LeadDetail({ id }: { id: string }) {
           {l.employee_remarks && (
             <Card title="Latest employee remarks">
               <p className="text-sm whitespace-pre-wrap">{l.employee_remarks}</p>
-              {l.reminder_date && (
+              {l.reminder_date && !(l.activities || []).some((a: any) => a.reminder_date && String(a.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
                 <p className="text-xs text-graphite-500 mt-2 tabular-nums inline-flex items-center gap-1.5">
                   <span className={l.reminder_done ? 'reminder-done' : ''}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>
                   {!leadLocked && !frozen && (

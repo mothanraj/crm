@@ -662,6 +662,12 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
         lead.reminder_date = rd
     if "reminder_done" in data:
         lead.reminder_done = bool(data.pop("reminder_done"))
+        # One tick declares the remainder done: mirror onto same-date entries.
+        if getattr(lead, "reminder_date", None) is not None:
+            db.query(LeadActivity).filter(
+                LeadActivity.lead_id == lead.id,
+                LeadActivity.reminder_date == lead.reminder_date,
+            ).update({"reminder_done": lead.reminder_done}, synchronize_session=False)
     if "product_id" in data:
         pid = data.pop("product_id")
         if pid is None:
@@ -936,8 +942,15 @@ def set_activity_reminder_done(lid: UUID, aid: UUID, body: ReminderDoneIn, db: S
         if status and status.name in ("Converted", "Not Interested", "Not Interested/Spam"):
             raise HTTPException(403, "This lead cannot be edited or reopened")
     a.reminder_done = bool(body.done)
+    # One tick declares the remainder done: mirror onto the lead when this
+    # entry carries the lead's current remainder date (clears popup/reports).
+    act_date = getattr(a, "reminder_date", None)
+    lead_date = getattr(lead, "reminder_date", None)
+    if act_date is not None and lead_date is not None and act_date == lead_date:
+        lead.reminder_done = a.reminder_done
     db.commit()
-    return {"ok": True, "reminder_done": a.reminder_done}
+    return {"ok": True, "reminder_done": a.reminder_done,
+            "lead_reminder_done": bool(getattr(lead, "reminder_done", False))}
 
 
 @router.post("/{lid}/site-visits")
