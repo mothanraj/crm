@@ -246,7 +246,7 @@ def build_comparison_pdf(payload: dict, item: str | None = None) -> bytes:
     logo = _brand_logo()
     logo_iw, logo_ih = logo.getSize()
     page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
-    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=8.5, leading=10.5, alignment=1)
     left = ParagraphStyle("left", parent=cell, alignment=0)
     heading = ParagraphStyle(
         "heading", fontName="Helvetica-Bold", fontSize=13, textColor=NAVY,
@@ -665,7 +665,7 @@ def build_dashboard_history_pdf(payload: dict) -> bytes:
     logo_iw, logo_ih = logo.getSize()
     page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
 
-    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=12, alignment=1)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=8.5, leading=10.5, alignment=1)
     heading = ParagraphStyle(
         "heading", fontName="Helvetica-Bold", fontSize=13,
         textColor=colors.HexColor("#0f766e"), spaceAfter=8, keepWithNext=True, alignment=1,
@@ -762,7 +762,7 @@ def build_dashboard_history_pdf(payload: dict) -> bytes:
         story.append(Paragraph(section_title, heading))
         headers = [
             section_title.split("(")[0].replace("Leads by ", "").strip() or field.title(),
-            "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
+            "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested",
         ]
         # Cleaner label headers
         label_headers = {
@@ -775,17 +775,28 @@ def build_dashboard_history_pdf(payload: dict) -> bytes:
         for row in rows_data:
             table_rows.append([
                 Paragraph(escape(str(row.get(field) or "—")), cell),
-                *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS],
+                Paragraph(str(row.get("total", 0)), cell),
+                Paragraph(_inr(row.get("lead_value")), cell),
+                *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS[1:]],
             ])
         if not rows_data:
-            table_rows.append([Paragraph("No data", cell), *[Paragraph("0", cell) for _ in KEYS]])
+            table_rows.append([Paragraph("No data", cell), *[Paragraph("0", cell) for _ in range(len(KEYS) + 1)]])
         table_rows.append([
             Paragraph("TOTAL", header),
-            *[Paragraph(str(totals.get(key, 0)), cell) for key in KEYS],
+            Paragraph(str(totals.get("total", 0)), cell),
+            Paragraph(_inr(totals.get("lead_value")), cell),
+            *[Paragraph(str(totals.get(key, 0)), cell) for key in KEYS[1:]],
         ])
-        col_w = usable / 8
-        table = Table(table_rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
+        col_w = usable / 9
+        table = Table(table_rows, colWidths=[col_w] * 9, repeatRows=1, hAlign="CENTER")
         table.setStyle(_centered_table_style(bar_color))
+        table.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ]))
         story.append(table)
 
         paired = [
@@ -858,19 +869,36 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
                           alignment=1, textColor=colors.HexColor("#334155"))
     story = []
     story.append(Paragraph(title, heading))
-    headers = [label, "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    headers = [label, "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     rows = [[Paragraph(value, header) for value in headers]]
     for row in payload["rows"]:
         rows.append([
             Paragraph(escape(str(row[field])), cell),
-            *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS],
+            Paragraph(str(row.get("total", 0)), cell),
+            Paragraph(_inr(row.get("lead_value")), cell),
+            *[Paragraph(str(row.get(key, 0)), cell) for key in KEYS[1:]],
         ])
     if not payload["rows"]:
-        rows.append([Paragraph("No leads found", cell), *[Paragraph("0", cell) for _ in KEYS]])
-    rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"].get(key, 0)), cell) for key in KEYS]])
-    col_w = (width - 72) / 8
-    table = Table(rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
+        rows.append([Paragraph("No leads found", cell), *[Paragraph("0", cell) for _ in range(len(KEYS) + 1)]])
+    rows.append([
+        Paragraph("TOTAL", header),
+        Paragraph(str(payload["totals"].get("total", 0)), cell),
+        Paragraph(_inr(payload["totals"].get("lead_value")), cell),
+        *[Paragraph(str(payload["totals"].get(key, 0)), cell) for key in KEYS[1:]],
+    ])
+    usable = width - 72
+    # Give the descriptive columns room to breathe while keeping the compact
+    # status counts narrow enough for the complete table to remain on page one.
+    weights = [0.16, 0.09, 0.14, 0.102, 0.102, 0.102, 0.10, 0.10, 0.10]
+    table = Table(rows, colWidths=[usable * weight for weight in weights], repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style(bar_color))
+    table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]))
     story.append(table)
 
     # Chart on its own page so table text never collides with the donut.
@@ -1150,12 +1178,12 @@ def build_monthly_pdf(payload: dict) -> bytes:
     story.append(Spacer(1, 10))
 
     headers = [
-        "Month", "Total Leads", "In Followup", "Meeting", "Site Visit",
+        "Month", "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit",
         "Quotation sent", "Not Interested", "Lead Sources", "Products",
     ]
     rows = [[Paragraph(h, header) for h in headers]]
     totals = {
-        "leads": 0, "in_followup": 0, "meeting": 0, "site_visit": 0,
+        "leads": 0, "lead_value": 0, "in_followup": 0, "meeting": 0, "site_visit": 0,
         "quotation_sent": 0, "not_interested": 0,
     }
     for row in payload.get("rows") or []:
@@ -1164,6 +1192,7 @@ def build_monthly_pdf(payload: dict) -> bytes:
         rows.append([
             Paragraph(escape(str(row.get("month") or "—")), cell),
             Paragraph(str(row.get("leads") or 0), cell),
+            Paragraph(_inr(row.get("lead_value")), cell),
             Paragraph(str(row.get("in_followup") or 0), cell),
             Paragraph(str(row.get("meeting") or 0), cell),
             Paragraph(str(row.get("site_visit") or 0), cell),
@@ -1173,10 +1202,11 @@ def build_monthly_pdf(payload: dict) -> bytes:
             Paragraph(escape(str(row.get("products") or "—")), cell),
         ])
     if len(rows) == 1:
-        rows.append([Paragraph("No months found", cell), *[Paragraph("—", cell) for _ in range(8)]])
+        rows.append([Paragraph("No months found", cell), *[Paragraph("—", cell) for _ in range(9)]])
     rows.append([
         Paragraph("TOTAL", header),
         Paragraph(str(totals["leads"]), cell),
+        Paragraph(_inr(totals["lead_value"]), cell),
         Paragraph(str(totals["in_followup"]), cell),
         Paragraph(str(totals["meeting"]), cell),
         Paragraph(str(totals["site_visit"]), cell),
@@ -1187,7 +1217,7 @@ def build_monthly_pdf(payload: dict) -> bytes:
     ])
 
     usable = width - 56
-    weights = [0.08, 0.08, 0.09, 0.08, 0.08, 0.10, 0.10, 0.20, 0.19]
+    weights = [0.07, 0.08, 0.11, 0.08, 0.08, 0.08, 0.10, 0.10, 0.16, 0.14]
     col_w = [usable * w for w in weights]
     table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style(INDIGO))

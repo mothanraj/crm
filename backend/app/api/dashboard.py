@@ -31,6 +31,8 @@ STATUS_ASSIGNED = "Assigned"
 STATUS_MEETING = "Meeting"
 CUSTOMER_REVIEW_ORDER = ["A+ (Immediate)", "A (3-6 months)", "B (6-9 months)", "C (Planning Stage)"]
 CUSTOMER_REVIEW_ALIASES = {
+    "A+": "A+ (Immediate)",
+    "A": "A (3-6 months)",
     "B (1 year)": "B (6-9 months)",
     "C (plan stage)": "C (Planning Stage)",
     "Planning Stage": "C (Planning Stage)",
@@ -1295,9 +1297,11 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
         if status:
             row[status] = int(row.get(status, 0)) + int(count)
         row["total"] = int(row.get("total", 0)) + int(count)
-    value_rows = db.query(Lead.customer_review, func.coalesce(func.sum(Lead.lead_value), 0)).filter(_date_filter(start, end, u)).group_by(Lead.customer_review).all()
+    value_rows = db.query(Lead.customer_review, Lead.lead_value).filter(_date_filter(start, end, u)).all()
     for review, value in value_rows:
-        rows_by_cat.setdefault(_normalize_customer_review(review), {"total": 0})["lead_value"] = _as_rupee(value)
+        category = _normalize_customer_review(review)
+        bucket = rows_by_cat.setdefault(category, {"total": 0})
+        bucket["lead_value"] = int(bucket.get("lead_value", 0)) + _as_rupee(value)
     extras = [name for name in ("Other", "Unreviewed") if name in rows_by_cat and rows_by_cat[name].get("total", 0)]
     ordered = list(CUSTOMER_REVIEW_ORDER) + extras
     rows = []
