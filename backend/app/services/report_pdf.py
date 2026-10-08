@@ -478,47 +478,92 @@ def _label_for_axis(text: str, max_len: int = 18) -> str:
     return label[: max_len - 1].rstrip() + "…"
 
 
+def _axis_label(text: str, max_len: int = 18) -> str:
+    """ASCII-safe short axis label (Helvetica/WinAnsi cannot draw …)."""
+    label = " ".join(str(text or "").split())
+    if len(label) <= max_len:
+        return label
+    return label[: max_len - 3].rstrip() + "..."
+
+
+def _share_caption(prefix: str, pairs: list[tuple[str, float]]) -> str:
+    """'Share of …: A 33% · B 17% …' line for under-chart captions."""
+    tot = sum(float(v or 0) for _, v in pairs)
+    if tot <= 0:
+        return ""
+    parts = [f"{lab} {float(v) / tot * 100:.0f}%" for lab, v in pairs if float(v or 0) > 0]
+    return f"{prefix}: " + " · ".join(parts)
+
+
 def _vertical_bar_chart(
     labels: list[str],
-    values: list[float],
+    series: list[tuple[str, list[float], str]],
     chart_width: float,
     title: str,
-    bar_color=None,
+    value_format: str = "%d",
     show_values: bool = True,
 ) -> Drawing | None:
-    """Category names on X, counts on Y — roomy bottom labels so text never hits bars."""
-    if not labels or not values:
+    """Grouped vertical bars mirroring the webpage charts — one colour per
+    series, counts on bars, centred legend on top, angled names below.
+
+    series: list of (legend name, values per label, hex colour).
+    All-zero rows are dropped from the chart only (tables keep full set).
+    """
+    series = [(nm, [float(v or 0) for v in vals], col) for nm, vals, col in series]
+    keep = [i for i in range(len(labels)) if any(vals[i] > 0 for _, vals, _ in series)]
+    if not keep:
         return None
-    peak = max(float(v or 0) for v in values)
+    labels = [str(labels[i] or "") for i in keep]
+    series = [(nm, [vals[i] for i in keep], col) for nm, vals, col in series]
+    peak = max(v for _, vals, _ in series for v in vals)
     if peak <= 0:
         return None
-    fill = bar_color or colors.HexColor("#65A30D")
     n = len(labels)
-    # Extra bottom band for angled category names; taller plot so bars stay clear of labels.
-    left_pad = 48.0
-    right_pad = 18.0
-    top_pad = 28.0
-    label_band = 78.0 if n > 4 else 64.0
-    plot_h = 210.0
-    plot_w = max(240.0, chart_width - left_pad - right_pad)
-    drawing_h = top_pad + plot_h + label_band + 8
-    drawing = Drawing(chart_width, drawing_h)
+    ns = len(series)
+    chart_w = min(float(chart_width), 750.0)
+    # Legend rows (9pt names), greedily wrapped and centred.
+    leg_fs = 9
+    items_w = [10.0 + 4.0 + stringWidth(nm, "Helvetica", leg_fs) for nm, _, _ in series]
+    leg_rows: list[list[int]] = []
+    cur: list[int] = []
+    cur_w = 0.0
+    for i, w in enumerate(items_w):
+        add = w + (18.0 if cur else 0.0)
+        if cur and cur_w + add > chart_w - 20.0:
+            leg_rows.append(cur)
+            cur = [i]
+            cur_w = w
+        else:
+            cur.append(i)
+            cur_w += add
+    if cur:
+        leg_rows.append(cur)
+    leg_h = len(leg_rows) * 15.0 + 6.0
+    left_pad, right_pad, top_pad = 52.0, 16.0, 26.0
+    label_band = 84.0 if n > 4 else 66.0
+    plot_h = 190.0
+    plot_w = max(240.0, chart_w - left_pad - right_pad)
+    drawing_h = top_pad + leg_h + 6.0 + plot_h + label_band + 8.0
+    drawing = Drawing(chart_w, drawing_h)
+    drawing.hAlign = "CENTER"
 
     chart = VerticalBarChart()
     chart.x = left_pad
     chart.y = label_band
     chart.height = plot_h
     chart.width = plot_w
-    chart.data = [list(values)]
+    chart.data = [list(vals) for _, vals, _ in series]
     chart.strokeColor = colors.white
-    chart.barWidth = min(28, max(10, plot_w / max(n * 1.8, 1)))
-    chart.groupSpacing = max(8, plot_w / max(n * 3.2, 1))
-    chart.barSpacing = 2
-    chart.bars[0].fillColor = fill
-    chart.bars[0].strokeColor = fill
+    bw = min(14.0, max(3.0, plot_w / max(n * (ns + 1.5), 1)))
+    chart.barWidth = bw
+    chart.groupSpacing = bw * 1.5
+    chart.barSpacing = 1.5
+    for i, (_, _, col) in enumerate(series):
+        chart.bars[i].fillColor = colors.HexColor(col)
+        chart.bars[i].strokeColor = colors.HexColor(col)
 
     chart.valueAxis.valueMin = 0
-    chart.valueAxis.valueMax = peak * 1.22
+    chart.valueAxis.valueMax = peak * 1.28
     chart.valueAxis.valueSteps = None
     chart.valueAxis.labels.fontSize = 8
     chart.valueAxis.labels.fontName = "Helvetica"
@@ -526,7 +571,7 @@ def _vertical_bar_chart(
     chart.valueAxis.gridStrokeColor = colors.HexColor("#e2e8f0")
     chart.valueAxis.gridStrokeWidth = 0.5
 
-    chart.categoryAxis.categoryNames = [_label_for_axis(name) for name in labels]
+    chart.categoryAxis.categoryNames = [_axis_label(name) for name in labels]
     chart.categoryAxis.labels.boxAnchor = "ne"
     chart.categoryAxis.labels.angle = 35
     chart.categoryAxis.labels.dx = -2
@@ -536,14 +581,29 @@ def _vertical_bar_chart(
     chart.categoryAxis.strokeColor = colors.HexColor("#94a3b8")
 
     if show_values:
-        chart.barLabels.nudge = 6
-        chart.barLabelFormat = "%d"
+        chart.barLabels.nudge = 8
+        chart.barLabelFormat = value_format
         chart.barLabels.fontName = "Helvetica-Bold"
-        chart.barLabels.fontSize = 8
+        chart.barLabels.fontSize = 6 if (ns > 1 or n > 6) else 8
         chart.barLabels.fillColor = NAVY
 
     drawing.add(chart)
-    drawing.add(String(left_pad, drawing_h - 14, title, fontSize=10, fillColor=NAVY))
+    # Centred legend rows above the plot.
+    leg_top = label_band + plot_h + 6.0 + leg_h
+    for r, row in enumerate(leg_rows):
+        row_w = sum(items_w[i] for i in row) + 18.0 * (len(row) - 1)
+        x = (chart_w - row_w) / 2
+        y = leg_top - 8.0 - r * 15.0
+        for i in row:
+            nm, _, col = series[i]
+            sw = Rect(x, y - 1, 10, 10)
+            sw.fillColor = colors.HexColor(col)
+            sw.strokeColor = colors.HexColor(col)
+            sw.strokeWidth = 0
+            drawing.add(sw)
+            drawing.add(String(x + 14, y, nm, fontSize=leg_fs, fillColor=colors.HexColor("#334155")))
+            x += items_w[i] + 18.0
+    drawing.add(String(chart_w / 2, drawing_h - 14, escape(title), fontSize=10, fillColor=NAVY, textAnchor="middle"))
     return drawing
 
 
@@ -594,12 +654,11 @@ def _donut_chart(
     drawing_h = content_h + pad_top + pad_bottom
     drawing = Drawing(chart_w, drawing_h)
     drawing.hAlign = "CENTER"
-    # Pie on the left, centred in its zone.
-    pie_zone_w = 330.0
+    # Pie on the left; shifted with the legend below so the group centres.
     pie = Pie()
     pie.width = pie_size
     pie.height = pie_size
-    pie.x = (pie_zone_w - pie_size) / 2
+    pie.x = 0.0
     pie.y = pad_bottom + (content_h - pie_size) / 2
     pie.data = [val for _, val in pairs]
     pie.labels = [f"{(val / total * 100):.0f}%" for _, val in pairs]
@@ -608,6 +667,10 @@ def _donut_chart(
     pie.slices.fontSize = 12
     pie.slices.fontName = "Helvetica-Bold"
     pie.slices.fontColor = colors.white
+    # Labels sit in the visible ring band (hole edge is at 0.52 of the
+    # radius; the white hole circle is drawn on top, so the default
+    # centre-placed labels would be hidden underneath it).
+    pie.slices.labelRadius = 0.75
     pie.sideLabels = False
     pie.slices.popout = 0
     for i, (_lab, _val) in enumerate(pairs):
@@ -624,7 +687,19 @@ def _donut_chart(
     # Legend column on the right, vertically centred against the pie.
     # All text is XML-escaped and ASCII-safe (Helvetica/WinAnsi cannot
     # draw glyphs like ■ or …); swatches are drawn Rects, not glyphs.
-    legend_x = pie_zone_w + 30.0
+    # Centre the pie+legend group on the page: measure the widest legend
+    # line and shift both so the group midpoint sits on the drawing centre.
+    max_text_w = max(
+        (stringWidth(t, "Helvetica", 11) for _, t in shown), default=0.0,
+    )
+    if extra:
+        max_text_w = max(max_text_w, stringWidth(f"+{extra} more", "Helvetica", 11))
+    legend_block_w = 11.0 + 5.0 + max_text_w
+    content_w = pie_size + 30.0 + legend_block_w
+    shift = (chart_w - content_w) / 2 - pie.x
+    pie.x += shift
+    hole.cx += shift
+    legend_x = pie.x + pie_size + 30.0
     legend_top = pad_bottom + (content_h - legend_h) / 2 + legend_h
     for i, ((lab, val), text) in enumerate(zip(pairs, texts)):
         if i >= max_rows:
@@ -901,22 +976,38 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
     ]))
     story.append(table)
 
-    # Chart on its own page so table text never collides with the donut.
+    # Chart on its own page: the same chart type as the webpage —
+    # grouped bars for source, single bars for product/category.
+    if report_type == "source":
+        bar_defs = [
+            ("Total Leads", "total", "#1e3a5f"),
+            ("In Followup", "in_followup", "#E8890C"),
+            ("Meeting", "meeting", "#38BDF8"),
+            ("Site Visit", "site_visit", "#0D9488"),
+            ("Quotation sent", "quote_sent", "#FACC15"),
+            ("Converted", "converted", "#16A34A"),
+            ("Not Interested", "not_interested", "#DC2626"),
+        ]
+    else:
+        bar_defs = [("Leads", "total", "#65A30D")]
     chart_labels = [str(row.get(field) or "") for row in payload.get("rows") or []]
-    chart_values = [float(row.get("total") or 0) for row in payload.get("rows") or []]
-    # Drop all-zero rows from the chart only (table still shows full set).
-    paired = [(lab, val) for lab, val in zip(chart_labels, chart_values) if val > 0]
-    if paired:
+    bar_series = [
+        (nm, [float(row.get(key) or 0) for row in payload.get("rows") or []], col)
+        for nm, key, col in bar_defs
+    ]
+    share = _share_caption(
+        "Share of total leads",
+        [(str(row.get(field) or ""), float(row.get("total") or 0)) for row in payload.get("rows") or []],
+    )
+    if any(v > 0 for _, vals, _ in bar_series for v in vals):
         story.append(PageBreak())
         story.append(Paragraph(chart_title, heading))
-        story.append(Paragraph("Share of total leads", meta))
+        if share:
+            story.append(Paragraph(escape(share), meta))
+        else:
+            story.append(Paragraph("Counts per stage", meta))
         story.append(Spacer(1, 8))
-        chart = _donut_chart(
-            [lab for lab, _ in paired],
-            [val for _, val in paired],
-            width - 72,
-            chart_title,
-        )
+        chart = _vertical_bar_chart(chart_labels, bar_series, width - 72, chart_title)
         if chart is not None:
             story.append(chart)
         else:
@@ -1051,6 +1142,36 @@ def build_lead_value_pdf(payload: dict) -> bytes:
     per_table = Table(per_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
     per_table.setStyle(_centered_table_style(GREEN))
     story.append(per_table)
+
+    # Same ₹ bar charts as the webpage (values plotted in lakhs).
+    value_charts = [
+        ("Lead Value by Product — Chart", [(str(r.get("product") or ""), r.get("lead_value")) for r in payload.get("by_product") or []]),
+        ("Lead Value by Source — Chart", [(str(r.get("source") or ""), r.get("lead_value")) for r in payload.get("by_source") or []]),
+        ("Lead Value by Period — Chart", [(str(r.get("label") or r.get("period") or ""), r.get("lead_value")) for r in payload.get("by_period") or []]),
+    ]
+    for chart_heading, raw_pairs in value_charts:
+        pairs = [(lab, float(v or 0)) for lab, v in raw_pairs if float(v or 0) > 0]
+        if not pairs:
+            continue
+        story.append(PageBreak())
+        story.append(Paragraph(chart_heading, heading))
+        share = _share_caption("Share of total value", pairs)
+        if share:
+            story.append(Paragraph(escape(share), meta))
+        else:
+            story.append(Paragraph("Values in ₹ lakh", meta))
+        story.append(Spacer(1, 8))
+        chart = _vertical_bar_chart(
+            [lab for lab, _ in pairs],
+            [("Lead Value (₹ lakh)", [v / 1e5 for _, v in pairs], "#3F6212")],
+            usable,
+            f"{chart_heading} (₹ lakh)",
+            value_format="%.1f",
+        )
+        if chart is not None:
+            story.append(chart)
+        else:
+            story.append(Paragraph("No chart data for this selection.", meta))
 
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
@@ -1222,6 +1343,38 @@ def build_monthly_pdf(payload: dict) -> bytes:
     table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
     table.setStyle(_centered_table_style(INDIGO))
     story.append(table)
+
+    # Same grouped bar chart as the webpage (Total + progress per month).
+    month_defs = [
+        ("Total Leads", "leads", "#1e3a5f"),
+        ("In Followup", "in_followup", "#E8890C"),
+        ("Meeting", "meeting", "#38BDF8"),
+        ("Site Visit", "site_visit", "#0D9488"),
+        ("Quotation sent", "quotation_sent", "#FACC15"),
+        ("Not Interested", "not_interested", "#DC2626"),
+    ]
+    month_labels = [str(row.get("month") or "") for row in payload.get("rows") or []]
+    month_series = [
+        (nm, [float(row.get(key) or 0) for row in payload.get("rows") or []], col)
+        for nm, key, col in month_defs
+    ]
+    month_share = _share_caption(
+        "Share of total leads",
+        [(str(row.get("month") or ""), float(row.get("leads") or 0)) for row in payload.get("rows") or []],
+    )
+    if any(v > 0 for _, vals, _ in month_series for v in vals):
+        story.append(PageBreak())
+        story.append(Paragraph("Monthly lead volume — Chart", heading))
+        if month_share:
+            story.append(Paragraph(escape(month_share), meta))
+        else:
+            story.append(Paragraph("Counts per stage", meta))
+        story.append(Spacer(1, 8))
+        chart = _vertical_bar_chart(month_labels, month_series, width - 56, "Monthly lead volume")
+        if chart is not None:
+            story.append(chart)
+        else:
+            story.append(Paragraph("No chart data for this selection.", meta))
 
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
