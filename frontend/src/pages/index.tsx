@@ -314,6 +314,8 @@ export function Login() {
       localStorage.setItem('role', data.user.role);
       localStorage.setItem('user_id', data.user.id);
       localStorage.setItem('user_name', data.user.name || data.user.email || data.user.role);
+      // Arm the employee login notification popup (consumed once after redirect).
+      try { sessionStorage.setItem('crm:login-popup', '1'); } catch { /* private mode */ }
       location.href = '/dashboard';
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Cannot reach the server. Port 8000 is busy or the backend is stuck — run scripts\\stop-backend.ps1 then scripts\\start-backend.ps1');
@@ -2067,10 +2069,10 @@ export function Leads() {
   const STATUS_FILTERS = ['Assigned', 'In Followup', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string; quotationValue?: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string; reminderDate: string; quotationValue?: string }>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
-  const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string; quotationValue?: string }>>>({});
+  const [followupForms, setFollowupForms] = useState<Record<string, Array<{ remarks: string; review: string; progress: string; reminderDate: string; quotationValue?: string }>>>({});
   const [quoteFormLead, setQuoteFormLead] = useState<any>(null);
   const size = 15;
   useEffect(() => { api.get('/masters').then((r) => setMasters(r.data)).catch(() => setError('Could not load filters.')); }, []);
@@ -2099,10 +2101,25 @@ export function Leads() {
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
-  const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', quotationValue: lead.quotation_value ?? '0' };
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const reminderOf = (lead: any) => (lead.reminder_date || '').slice(0, 10);
+  const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', reminderDate: '', quotationValue: lead.quotation_value ?? '0' };
+  /** The three mandatory work fields (Remarks, Category, Work Action). Reminder Date is optional. */
+  const workFormIncomplete = (form: { remarks: string; review: string; progress: string }, lead: any) => {
+    const actionName = nameOf('statuses', form.progress);
+    return !form?.remarks.trim() || !form.review || !actionOptions.includes(actionName);
+  };
+  /** Reminder Date unlocks only after Category, Work Action and Remarks are filled. */
+  const reminderUnlocked = (form: { remarks: string; review: string; progress: string }, lead: any) => {
+    const actionName = nameOf('statuses', form.progress);
+    return !!form?.remarks.trim() && !!form.review && actionOptions.includes(actionName);
+  };
   const isConvertedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && nameOf('statuses', lead.status_id) === 'Converted';
   const isNotInterestedLocked = (lead: any) => lead.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', lead.status_id));
   const isOutreachLocked = (lead: any) => isConvertedLocked(lead) || isNotInterestedLocked(lead);
+  /** Deep freeze: employee clicked Done (COMPLETED). Nothing in the row works until Reopen — except Reopen itself. */
+  const isFrozen = (lead: any) => role === 'EMPLOYEE' && lead.sla_state === 'COMPLETED';
+  const frozenMessage = () => 'This lead is completed and frozen. Click Reopen to continue.';
   /** Edit Category/Progress/Remarks for new leads, after Reopen, or when overdue (always editable until Converted). Use + for next progress. */
   const canEditWorkFields = (lead: any) => {
     if (role !== 'EMPLOYEE') return false;
@@ -2178,7 +2195,7 @@ export function Leads() {
     const draft = draftFor(lead);
     const reopening = !done && lead.sla_state === 'COMPLETED';
     const actionName = nameOf('statuses', draft.progress);
-    if (!draft.remarks.trim() || !draft.review || !actionOptions.includes(actionName)) {
+    if (workFormIncomplete(draft, lead)) {
       setValidationMessage('Please fill Remarks, Category, and Work Action before saving or completing this lead.');
       return;
     }
@@ -2207,6 +2224,7 @@ export function Leads() {
         method: 'Call',
         customer_review: draft.review,
         quotation_value: qv || undefined,
+        reminder_date: draft.reminderDate || undefined,
         sla_state: nextSla,
       });
       setItems((current) => current.map((item) => item.id === lead.id
@@ -2216,8 +2234,10 @@ export function Leads() {
           employee_remarks: stampedRemarks,
           customer_review: draft.review,
           quotation_value: qv || item.quotation_value,
+          reminder_date: data.reminder_date ?? item.reminder_date ?? null,
+          reminder_done: data.reminder_done ?? item.reminder_done ?? false,
           sla_state: data.sla_state ?? nextSla,
-          work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), at: new Date().toISOString() }],
+          work_history: data.activity_recorded === false ? item.work_history : [...(item.work_history || []), { remarks: stampedRemarks, category: draft.review, quotation_value: qv || null, work_action: nameOf('statuses', draft.progress || item.status_id), reminder_date: draft.reminderDate || null, reminder_done: false, at: new Date().toISOString() }],
         }
         : item));
       setDrafts((current) => { const next = { ...current }; delete next[lead.id]; return next; });
@@ -2232,16 +2252,44 @@ export function Leads() {
   const addFollowUp = (lead: any) => {
     setFollowupForms((current) => ({
       ...current,
-      [lead.id]: [...(current[lead.id] || []), { remarks: '', review: '', progress: '', quotationValue: '0' }],
+      [lead.id]: [...(current[lead.id] || []), { remarks: '', review: '', progress: '', reminderDate: '', quotationValue: '0' }],
     }));
   };
   const closeFollowUp = (lead: any) => {
     setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).slice(0, -1) }));
   };
+  /** Tick the live reminder done / not done: strikes it through, keeps the date. */
+  const toggleLeadReminder = async (lead: any) => {
+    if (savingId === lead.id) return;
+    const done = !lead.reminder_done;
+    setSavingId(lead.id);
+    try {
+      const { data } = await api.put(`/leads/${lead.id}`, { reminder_done: done });
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, reminder_done: data.reminder_done ?? done } : item));
+    } catch (e: any) {
+      setValidationMessage(e?.response?.data?.detail || 'Could not update reminder');
+    } finally { setSavingId(null); }
+  };
+  /** Tick a single history entry's reminder done / not done. */
+  const toggleEntryReminder = async (lead: any, entry: any) => {
+    if (!entry?.id || savingId === lead.id) return;
+    const done = !entry.reminder_done;
+    setSavingId(lead.id);
+    try {
+      await api.post(`/leads/${lead.id}/activities/${entry.id}/reminder-done`, { done });
+      setItems((current) => current.map((item) => item.id === lead.id
+        ? { ...item, work_history: (item.work_history || []).map((h: any) => h.id === entry.id ? { ...h, reminder_done: done } : h) }
+        : item));
+    } catch (e: any) {
+      setValidationMessage(e?.response?.data?.detail || 'Could not update reminder');
+    } finally { setSavingId(null); }
+  };
+  const tickBtn = (done: boolean) => `inline-flex items-center justify-center w-7 h-7 rounded-md border text-sm shrink-0 ${done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`;
+  const reminderTickable = (lead: any) => !(role === 'EMPLOYEE' && (isOutreachLocked(lead) || isFrozen(lead)));
   const saveFollowup = async (lead: any, index: number) => {
     const form = followupForms[lead.id]?.[index];
     const actionName = form ? nameOf('statuses', form.progress) : '';
-    if (!form?.remarks.trim() || !form.review || !actionOptions.includes(actionName)) {
+    if (!form || workFormIncomplete(form, lead)) {
       setValidationMessage('Please fill Remarks, Category, and Work Action for this follow-up.');
       return;
     }
@@ -2255,8 +2303,9 @@ export function Leads() {
         method: 'Call',
         customer_review: form.review,
         quotation_value: qv || undefined,
+        reminder_date: form.reminderDate || undefined,
       });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, sla_state: data.sla_state ?? item.sla_state, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), at: new Date().toISOString() }] } : item));
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, reminder_date: data.reminder_date ?? item.reminder_date ?? null, reminder_done: data.reminder_done ?? item.reminder_done ?? false, sla_state: data.sla_state ?? item.sla_state, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), reminder_date: form.reminderDate || null, reminder_done: false, at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
     finally { setSavingId(null); }
@@ -2348,6 +2397,15 @@ export function Leads() {
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Lead value</dt>
                       <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">{inr(l.lead_value)}</dd>
                     </div>
+                    <div className="min-w-0">
+                      <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Reminder Date</dt>
+                      <dd className="text-graphite-900 mt-0.5 tabular-nums inline-flex items-center gap-1.5">
+                        <span className={l.reminder_done ? 'reminder-done' : ''}>{(l.reminder_date || '').slice(0, 10) || '—'}</span>
+                        {l.reminder_date && reminderTickable(l) && (
+                          <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>
+                        )}
+                      </dd>
+                    </div>
                     <div className="min-w-0 col-span-2">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Quotation value</dt>
                       <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">
@@ -2364,17 +2422,30 @@ export function Leads() {
             <div className="block md:hidden space-y-3 p-3">
               {items.map((l) => {
                 const draft = draftFor(l);
-                const editing = canEditWorkFields(l);
+                const editing = canEditWorkFields(l) && !isFrozen(l);
                 const locked = isOutreachLocked(l);
+                const frozen = isFrozen(l);
                 return (
                   <div
                     key={`m-${l.id}`}
-                    className={`rounded-xl border border-graphite-200 p-3 shadow-sm ${leadRowColour(l, nameOf('statuses', l.status_id))}`}
+                    className={`rounded-xl border border-graphite-200 p-3 shadow-sm ${leadRowColour(l, nameOf('statuses', l.status_id))} ${frozen ? 'opacity-80' : ''}`}
+                    onClickCapture={(event) => {
+                      const target = event.target as HTMLElement;
+                      if (target.closest?.('[data-reopen]')) return;
+                      if (frozen && target.closest?.('button, select, textarea, input, a')) {
+                        event.preventDefault(); event.stopPropagation();
+                        setValidationMessage(frozenMessage());
+                      }
+                    }}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <Link to={`/leads/${l.id}`} className="font-semibold text-brand-700 text-sm break-words min-w-0">
-                        {l.enquiry_number}
-                      </Link>
+                      {frozen ? (
+                        <span className="font-semibold text-brand-700 text-sm break-words min-w-0">{l.enquiry_number}</span>
+                      ) : (
+                        <Link to={`/leads/${l.id}`} className="font-semibold text-brand-700 text-sm break-words min-w-0">
+                          {l.enquiry_number}
+                        </Link>
+                      )}
                       <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
                         <StatusBadge value={statusLabel(l)} />
                         <SlaBadge value={l.sla_state} />
@@ -2388,7 +2459,7 @@ export function Leads() {
                     <div className="mt-2 text-sm text-graphite-800 break-words">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="break-words">{l.contact_number || '—'}</span>
-                        {l.contact_number && whatsappUrl(l.contact_number) && (
+                        {l.contact_number && !frozen && whatsappUrl(l.contact_number) && (
                           <a
                             href={whatsappUrl(l.contact_number)}
                             target="_blank"
@@ -2410,15 +2481,15 @@ export function Leads() {
                         )}
                       </div>
                       <div className="text-xs text-graphite-600 break-words [overflow-wrap:anywhere] mt-1">
-                        {l.email
+                        {l.email && !frozen
                           ? <button type="button" className="text-brand-700 hover:underline text-left text-xs break-words [overflow-wrap:anywhere] min-h-[44px] py-2" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
-                          : <span className="text-graphite-400">No email</span>}
+                          : <span className="text-graphite-400">{l.email || 'No email'}</span>}
                       </div>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <div className="min-w-0">
                         <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Cars</div>
-                        {canEditProductCars(l) ? (
+                        {canEditProductCars(l) && !frozen ? (
                           <input
                             className="input text-base sm:text-sm mt-1 min-h-[44px] text-center w-full"
                             type="number"
@@ -2437,8 +2508,8 @@ export function Leads() {
                       </div>
                     </div>
                     <div className="mt-2 min-w-0">
-                      <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Product</div>
-                      {canEditProductCars(l) ? (
+                        <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Product</div>
+                      {canEditProductCars(l) && !frozen ? (
                         <select
                           className="input text-base sm:text-sm mt-1 min-h-[44px] w-full"
                           disabled={savingId === l.id}
@@ -2452,7 +2523,7 @@ export function Leads() {
                     </div>
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <span className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Work details</span>
-                      {!locked && l.employee_remarks && (
+                      {!locked && !frozen && l.employee_remarks && (
                         <button
                           type="button"
                           className="btn-secondary !px-3 !py-1 text-xs min-h-[36px]"
@@ -2476,7 +2547,7 @@ export function Leads() {
                       <div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Work action</div>
-                          <button type="button" className="btn-secondary !px-3 !py-1 text-base font-bold min-w-[44px] min-h-[44px]" disabled={locked} onClick={() => ((followupForms[l.id] || []).length ? closeFollowUp(l) : addFollowUp(l))} title={(followupForms[l.id] || []).length ? 'Close unsaved follow-up' : 'Add follow-up'}>{(followupForms[l.id] || []).length ? '×' : '+'}</button>
+                          <button type="button" className="btn-secondary !px-3 !py-1 text-base font-bold min-w-[44px] min-h-[44px]" disabled={locked || frozen} onClick={() => ((followupForms[l.id] || []).length ? closeFollowUp(l) : addFollowUp(l))} title={(followupForms[l.id] || []).length ? 'Close unsaved follow-up' : 'Add follow-up'}>{(followupForms[l.id] || []).length ? '×' : '+'}</button>
                         </div>
                         {editing ? (
                           <select className="input text-base sm:text-sm mt-1 min-h-[44px] w-full" disabled={locked} value={draft.progress}
@@ -2488,7 +2559,7 @@ export function Leads() {
                             })}
                           </select>
                         ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`m-action-${index}`}><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
-                        {(followupForms[l.id] || []).map((form, index) => (
+                        {!frozen && (followupForms[l.id] || []).map((form, index) => (
                           <div key={`m-follow-${index}`} className="mt-2 space-y-2 rounded-lg border border-graphite-200 p-2">
                             <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
                             <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
@@ -2503,7 +2574,17 @@ export function Leads() {
                               value={form.remarks}
                               onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
                             />
-                            <button type="button" className="btn-primary !px-3 !py-2 text-sm w-full min-h-[44px]" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button>
+                            <input
+                              type="date"
+                              aria-label="Reminder date"
+                              title={reminderUnlocked(form, l) ? 'Optional reminder date' : 'Fill Category, Work Action and Remarks first'}
+                              className="input text-base sm:text-sm min-h-[44px] w-full"
+                              min={todayISO}
+                              disabled={!reminderUnlocked(form, l)}
+                              value={form.reminderDate}
+                              onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, reminderDate: e.target.value } : item) }))}
+                            />
+                            <button type="button" className="btn-primary !px-3 !py-2 text-sm w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(form, l)} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button>
                           </div>
                         ))}
                       </div>
@@ -2517,22 +2598,35 @@ export function Leads() {
                               value={draft.remarks}
                               onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
                             />
-                            <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || !draft.remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
+                            <div className="mt-2">
+                              <div className="text-graphite-500 uppercase tracking-wide font-semibold text-[11px]">Reminder Date</div>
+                              <input
+                                type="date"
+                                aria-label="Reminder date (optional)"
+                                title={reminderUnlocked(draft, l) ? 'Optional reminder date' : 'Fill Category, Work Action and Remarks first'}
+                                className="input text-base sm:text-sm mt-1 min-h-[44px] w-full min-w-0"
+                                min={todayISO}
+                                disabled={locked || !reminderUnlocked(draft, l)}
+                                value={draft.reminderDate}
+                                onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), reminderDate: e.target.value } }))}
+                              />
+                            </div>
+                            <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}</div>) : (l.employee_remarks || '—')}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : ''}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : ''}`}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {isConvertedLocked(l) ? (
                         <span className="text-xs font-semibold text-emerald-700">✓ Done</span>
                       ) : (
-                        <button type="button" className={`btn-secondary !px-4 !py-2 text-sm min-h-[44px] flex-1 ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300' : '!bg-blue-600 !text-white !border-blue-600'}`}
+                        <button type="button" data-reopen={l.sla_state === 'COMPLETED' ? '' : undefined} className={`btn-secondary !px-4 !py-2 text-sm min-h-[44px] flex-1 ${l.sla_state === 'COMPLETED' ? '!bg-amber-100 !text-amber-900 !border-amber-300' : '!bg-blue-600 !text-white !border-blue-600'}`}
                           disabled={savingId === l.id}
                           onClick={() => saveLead(l, l.sla_state !== 'COMPLETED')}>
                           {savingId === l.id ? 'Saving…' : l.sla_state === 'COMPLETED' ? 'Reopen' : 'Done'}
                         </button>
                       )}
-                      {isQuotationUnlocked(l) ? (
+                      {isQuotationUnlocked(l) && !frozen ? (
                         <>
                           <button
                             type="button"
@@ -2563,7 +2657,7 @@ export function Leads() {
           )}
           <div ref={tableScroll.ref} className={`relative isolate w-full overflow-x-auto drag-scroll hidden md:block ${tableScroll.dragging ? 'is-dragging' : ''}`}>
             <div className="text-[11px] text-graphite-400 mb-1 hidden md:block select-none" aria-hidden="true">⇔ Drag to see more columns</div>
-            <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2080px]' : 'min-w-[2100px]'}`}>
+            <table className={`w-full table-fixed border-separate border-spacing-0 text-sm [&_td]:border-graphite-100 [&_td]:break-words ${role === 'EMPLOYEE' ? 'min-w-[2270px]' : 'min-w-[2290px]'}`}>
               <thead className="bg-graphite-50"><tr>
                 <th className="th whitespace-nowrap align-top w-[144px] sm:w-[160px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-0 z-20 bg-graphite-50">Enquiry Number</th>
                 <th className="th whitespace-nowrap align-top w-[200px] sm:w-[240px] !px-2 sm:!px-4 !text-[10px] sm:!text-xs sticky left-[144px] sm:left-[160px] z-20 bg-graphite-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)]">Customer details</th>
@@ -2573,6 +2667,7 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Progress</th>
                 <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
+                <th className="th whitespace-nowrap align-top w-[190px]">Reminder Date</th>
                 <th className="th whitespace-nowrap align-top w-[140px]">Source</th>
                 <th className="th whitespace-nowrap align-top w-[170px] text-center">Current status</th>
                 <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
@@ -2583,17 +2678,22 @@ export function Leads() {
               </tr></thead>
               <tbody>
                 {items.map((l) => (
-                  <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}
+                  <tr key={l.id} className={`${leadRowColour(l, nameOf('statuses', l.status_id))} ${isFrozen(l) ? 'opacity-80' : ''}`}
                     onClickCapture={(event) => {
                       const target = event.target as HTMLElement;
                       if (target.closest?.('[data-reopen]')) return;
+                      if (role === 'EMPLOYEE' && isFrozen(l) && target.closest?.('button, select, textarea, input, a, [data-webmail], [data-quote-pdf], [data-whatsapp]')) {
+                        event.preventDefault(); event.stopPropagation();
+                        setValidationMessage(frozenMessage());
+                        return;
+                      }
                       if (role === 'EMPLOYEE' && isOutreachLocked(l) && target.closest?.('button, select, textarea, [data-webmail], [data-quote-pdf], [data-whatsapp]')) {
                         event.preventDefault(); event.stopPropagation();
                         setValidationMessage(lockedLeadMessage(l));
                       }
                     }}>
 
-                    <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                    <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>{isFrozen(l) ? <span>{l.enquiry_number}</span> : <Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link>}</td>
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
                       <div className="text-base font-semibold text-graphite-900">{l.customer_name || '—'}</div>
                       <div className="text-base text-graphite-700 mt-1.5">{l.company_name || '—'}</div>
@@ -2602,7 +2702,7 @@ export function Leads() {
                     <td className="td align-top min-w-[260px]">
                       <div className="whitespace-nowrap flex items-center gap-1.5 text-base text-graphite-900">
                         <span>{l.contact_number || '—'}</span>
-                        {role === 'EMPLOYEE' && l.contact_number && whatsappUrl(l.contact_number) && (
+                        {role === 'EMPLOYEE' && !isFrozen(l) && l.contact_number && whatsappUrl(l.contact_number) && (
                           <a
                             data-whatsapp
                             href={whatsappUrl(l.contact_number)}
@@ -2625,7 +2725,7 @@ export function Leads() {
                         )}
                       </div>
                       <div className="text-sm mt-1.5 break-words [overflow-wrap:anywhere]">
-                        {l.email && role === 'EMPLOYEE'
+                        {l.email && role === 'EMPLOYEE' && !isFrozen(l)
                           ? <button type="button" data-webmail className="text-brand-700 hover:underline text-left text-sm break-words [overflow-wrap:anywhere]" onClick={(e) => { if (isOutreachLocked(l)) { e.preventDefault(); e.stopPropagation(); setValidationMessage(lockedLeadMessage(l)); return; } openEstarWebmail(e, l.email, l.enquiry_number); }}>{l.email}</button>
                           : l.email
                             ? <span className="break-words [overflow-wrap:anywhere]">{l.email}</span>
@@ -2633,7 +2733,7 @@ export function Leads() {
                       </div>
                     </td>
                     <td className="td align-top text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      {canEditProductCars(l) ? (
+                      {canEditProductCars(l) && !isFrozen(l) ? (
                         <input
                           className="input text-xs text-center w-full max-w-[5.5rem]"
                           type="number"
@@ -2656,7 +2756,7 @@ export function Leads() {
                       ) : (l.quantity_raw || '—')}
                     </td>
                     <td className="td align-top" onClick={(e) => e.stopPropagation()}>
-                      {canEditProductCars(l) ? (
+                      {canEditProductCars(l) && !isFrozen(l) ? (
                         <select
                           className="input text-xs w-full max-w-[12rem]"
                           disabled={savingId === l.id}
@@ -2669,20 +2769,20 @@ export function Leads() {
                       ) : prodName(l, nameOf)}
                     </td>
                     <td className="td align-top">
-                      {canEditWorkFields(l) ? (
+                      {canEditWorkFields(l) && !isFrozen(l) ? (
                         <select className="input text-xs" disabled={isOutreachLocked(l)} value={draftFor(l).review}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), review: e.target.value } }))}>
                           <option value="">Select category…</option>
                           {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`category-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.category || '—'}</div>) : (l.customer_review || '—')}</div>)}
-                      {canEditWorkFields(l) && (isOutreachLocked(l)
+                      {canEditWorkFields(l) && !isFrozen(l) && (isOutreachLocked(l)
                         ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : '✓ Not interested — click Reopen for email and quotation'}</span>
-                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button></div>)}
+                        : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || workFormIncomplete(draftFor(l), l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
+                      {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || workFormIncomplete(form, l)} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button></div>)}
                     </td>
                     <td className="td align-top">
-                      {canEditWorkFields(l) ? (
+                      {canEditWorkFields(l) && !isFrozen(l) ? (
                         <select className="input text-xs" disabled={isOutreachLocked(l)} value={draftFor(l).progress}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
                           <option value="">Select progress…</option>
@@ -2692,7 +2792,7 @@ export function Leads() {
                           })}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => (
+                      {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
                         <div key={`progress-${index}`}>
                           <select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
                             <option value="">Select progress…</option>
@@ -2703,10 +2803,10 @@ export function Leads() {
                           </select>
                         </div>
                       ))}
-                      {role === 'EMPLOYEE' && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={isOutreachLocked(l)} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
+                      {role === 'EMPLOYEE' && !isFrozen(l) && <button type="button" className="btn-secondary !px-2 !py-1 text-base font-bold ml-2" disabled={isOutreachLocked(l)} onClick={() => (followupForms[l.id]?.length ? closeFollowUp(l) : addFollowUp(l))} title={followupForms[l.id]?.length ? 'Close unsaved follow-up' : 'Add follow-up'}>{followupForms[l.id]?.length ? '×' : '+'}</button>}
                     </td>
                     <td className="td align-top">
-                      {canEditWorkFields(l) ? (
+                      {canEditWorkFields(l) && !isFrozen(l) ? (
                         <AutoGrowRemarks
                           disabled={isOutreachLocked(l)}
                           placeholder="Enter customer conversation remarks…"
@@ -2714,13 +2814,81 @@ export function Leads() {
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
                         />
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => (
+                      {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
                         <AutoGrowRemarks
                           key={`remark-${index}`}
                           className="mt-2"
                           placeholder={`Follow-up ${(l.work_history?.length || 1) + index + 1} remarks…`}
                           value={form.remarks}
                           onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
+                        />
+                      ))}
+                    </td>
+                    <td className="td align-top" onClick={(e) => e.stopPropagation()}>
+                      {canEditWorkFields(l) && !isFrozen(l) ? (
+                        <div className="min-w-0">
+                          <input
+                            type="date"
+                            aria-label="Reminder date (optional)"
+                            title={reminderUnlocked(draftFor(l), l) ? 'Optional reminder date' : 'Fill Category, Work Action and Remarks first'}
+                            className="input text-xs w-full min-w-0"
+                            min={todayISO}
+                            disabled={isOutreachLocked(l) || savingId === l.id || !reminderUnlocked(draftFor(l), l)}
+                            value={draftFor(l).reminderDate}
+                            onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), reminderDate: e.target.value } }))}
+                          />
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <div className="inline-flex items-center gap-1.5">
+                            <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : ''}`}>{reminderOf(l) || '—'}</span>
+                            {reminderOf(l) && reminderTickable(l) && (
+                              <button
+                                type="button"
+                                title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                disabled={savingId === l.id}
+                                onClick={(e) => { e.stopPropagation(); toggleLeadReminder(l); }}
+                                className={tickBtn(!!l.reminder_done)}
+                              >
+                                ✓
+                              </button>
+                            )}
+                          </div>
+                          {l.work_history?.length ? (
+                            <div className="mt-1 space-y-1 text-[11px] text-graphite-500">
+                              {l.work_history.map((entry: any, index: number) => entry.reminder_date ? (
+                                <div key={`remhist-${entry.id || index}`} className="tabular-nums inline-flex items-center gap-1">
+                                  <span className={entry.reminder_done ? 'reminder-done' : ''}>{index + 1}. Reminder: {String(entry.reminder_date).slice(0, 10)}</span>
+                                  {entry.id && reminderTickable(l) && (
+                                    <button
+                                      type="button"
+                                      title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                      aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
+                                      disabled={savingId === l.id}
+                                      onClick={(e) => { e.stopPropagation(); toggleEntryReminder(l, entry); }}
+                                      className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}
+                                    >
+                                      ✓
+                                    </button>
+                                  )}
+                                </div>
+                              ) : null)}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                      {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
+                        <input
+                          key={`remdate-${index}`}
+                          type="date"
+                          aria-label={`Follow-up ${index + 2} reminder date (optional)`}
+                          title={reminderUnlocked(form, l) ? 'Optional reminder date' : 'Fill Category, Work Action and Remarks first'}
+                          className="input text-xs w-full min-w-0 mt-2"
+                          min={todayISO}
+                          disabled={!reminderUnlocked(form, l)}
+                          value={form.reminderDate}
+                          onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, reminderDate: e.target.value } : item) }))}
                         />
                       ))}
                     </td>
@@ -2744,9 +2912,9 @@ export function Leads() {
                     </td>
                     {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
                     <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
-                    {role === 'EMPLOYEE' && (
+                      {role === 'EMPLOYEE' && (
                       <td className="td align-top text-center">
-                        {isQuotationUnlocked(l) ? (
+                        {isQuotationUnlocked(l) && !isFrozen(l) ? (
                           <>
                             <div className="flex flex-col items-center gap-1">
                               <button
@@ -3072,6 +3240,8 @@ export function LeadDetail({ id }: { id: string }) {
   const [method, setMethod] = useState('Call');
   const [progressId, setProgressId] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [reminderDate, setReminderDate] = useState('');
+  const todayISO = new Date().toISOString().slice(0, 10);
   const [assignEmp, setAssignEmp] = useState('');
   const [reassignReason, setReassignReason] = useState('');
   const [productId, setProductId] = useState('');
@@ -3134,13 +3304,15 @@ export function LeadDetail({ id }: { id: string }) {
   const convertedLocked = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED' && nameOf('statuses', l.status_id) === 'Converted';
   const notInterestedLocked = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED' && ['Not Interested', 'Not Interested/Spam'].includes(nameOf('statuses', l.status_id));
   const leadLocked = convertedLocked || notInterestedLocked;
+  /** Deep freeze: employee clicked Done (COMPLETED). Everything stays dead until Reopen — except Reopen itself. */
+  const frozen = role === 'EMPLOYEE' && l.sla_state === 'COMPLETED';
   const selectedProduct = masters?.products?.find((p: any) => p.id === productId);
   const preview = previewLeadValue(selectedProduct?.price_per_car ?? l.price_per_car, String(cars || '').trim() || '2');
   const needsContact = !l.first_contact_at && !!l.primary_employee_id;
-  const canUpdateProgress = !leadLocked && (role === 'ADMIN' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
-  const canEditPricing = !leadLocked && (role === 'ADMIN' || (role === 'EMPLOYEE' && l.primary_employee_id));
+  const canUpdateProgress = !leadLocked && !frozen && (role === 'ADMIN' || (role === 'EMPLOYEE' && !!l.primary_employee_id));
+  const canEditPricing = !leadLocked && !frozen && (role === 'ADMIN' || (role === 'EMPLOYEE' && l.primary_employee_id));
   const rr = l.reassignment_request;
-  const canRequestReassign = !leadLocked && role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
+  const canRequestReassign = !leadLocked && !frozen && role === 'EMPLOYEE' && !!l.primary_employee_id && !rr;
   const addNote = async () => {
     if (!note.trim() || busy) return;
     setBusy(true); setErr('');
@@ -3152,15 +3324,17 @@ export function LeadDetail({ id }: { id: string }) {
     } finally { setBusy(false); }
   };
   const saveProgress = async () => {
-    if (leadLocked) return;
+    if (leadLocked || frozen) return;
     if (!progressId) { setErr('Select work progress'); return; }
     if (!remarks.trim()) { setErr('Enter remarks about the conversation'); return; }
+    if (!reminderDate) { setErr('Select a reminder date'); return; }
     setBusy(true); setErr(''); setOkMsg('');
     try {
       await api.post(`/leads/${id}/status`, {
         new_status_id: progressId,
         reason: remarks.trim(),
         method,
+        reminder_date: reminderDate || undefined,
       });
       setRemarks('');
       setOkMsg('Work progress saved');
@@ -3169,8 +3343,48 @@ export function LeadDetail({ id }: { id: string }) {
       setErr(e?.response?.data?.detail || 'Could not save work progress');
     } finally { setBusy(false); }
   };
-  const doAssign = async () => {
-    if (!assignEmp) return;
+  /** Reopen a frozen (Done) lead from the detail page: same path as the list Reopen button. */
+  const reopenDetailLead = async () => {
+    if (busy || leadLocked || !frozen) return;
+    if (!l.employee_remarks?.trim()) { setErr('No saved conversation to reopen with.'); return; }
+    setBusy(true); setErr(''); setOkMsg('');
+    try {
+      await api.post(`/leads/${id}/status`, {
+        new_status_id: l.status_id,
+        reason: l.employee_remarks,
+        method: 'Call',
+        customer_review: l.customer_review || '',
+        sla_state: 'PENDING',
+      });
+      setOkMsg('Lead reopened — back to normal.');
+      await reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not reopen lead');
+    } finally { setBusy(false); }
+  };
+  /** Tick the live reminder done / not done on the detail page: strikes it, keeps the date. */
+  const toggleDetailReminder = async () => {
+    if (busy || leadLocked || frozen || !l?.reminder_date) return;
+    setBusy(true); setErr('');
+    try {
+      await api.put(`/leads/${id}`, { reminder_done: !l.reminder_done });
+      await reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not update reminder');
+    } finally { setBusy(false); }
+  };
+  /** Tick a single timeline entry's reminder done / not done. */
+  const toggleDetailEntryReminder = async (entry: any) => {
+    if (busy || leadLocked || frozen || !entry?.id) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/leads/${id}/activities/${entry.id}/reminder-done`, { done: !entry.reminder_done });
+      await reload();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not update reminder');
+    } finally { setBusy(false); }
+  };
+  const doAssign = async () => {    if (!assignEmp) return;
     setBusy(true); setErr(''); setOkMsg('');
     try {
       const employeeName = masters?.employees?.find((emp: any) => emp.id === assignEmp)?.name || 'This employee';
@@ -3252,8 +3466,8 @@ export function LeadDetail({ id }: { id: string }) {
             </div>
             <p className="text-graphite-600 mt-1 text-lg">{l.customer_name || '—'} {l.company_name && <span className="text-graphite-400">· {l.company_name}</span>}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm">
-              <span>📞 {l.contact_number ? <a className="text-brand-700 font-semibold hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a> : '—'}{l.alternate_contact ? <span className="text-graphite-400"> (alt: {l.alternate_contact})</span> : null}</span>
-              <span>✉️ {l.email ? (leadLocked ? <span className="font-semibold">{l.email}</span> : <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a>) : <span className="text-graphite-400">No email</span>}</span>
+              <span>📞 {l.contact_number ? (frozen ? <span className="font-semibold">{l.contact_number}</span> : <a className="text-brand-700 font-semibold hover:underline" href={`tel:${String(l.contact_number).replace(/\s/g, '')}`}>{l.contact_number}</a>) : '—'}{l.alternate_contact ? <span className="text-graphite-400"> (alt: {l.alternate_contact})</span> : null}</span>
+              <span>✉️ {l.email ? ((leadLocked || frozen) ? <span className="font-semibold">{l.email}</span> : <a className="text-brand-700 font-semibold hover:underline" href={`mailto:${l.email}`}>{l.email}</a>) : <span className="text-graphite-400">No email</span>}</span>
               <span>🚗 {l.quantity_raw ? `${l.quantity_raw} cars` : '—'}</span>
               <span className="font-semibold text-graphite-900">💰 Lead Value {inr(l.lead_value)}</span>
             </div>
@@ -3269,6 +3483,14 @@ export function LeadDetail({ id }: { id: string }) {
           <Link to="/leads" className="btn-secondary">← All leads</Link>
         </div>
       </div>
+      {frozen && !convertedLocked && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-amber-900">This lead is completed and frozen — links, buttons and dropdowns are locked until you reopen it.</p>
+          <button type="button" className="btn-secondary !bg-amber-100 !text-amber-900 !border-amber-300 hover:!bg-amber-200 min-h-[44px]" disabled={busy} onClick={reopenDetailLead}>
+            {busy ? 'Working…' : 'Reopen'}
+          </button>
+        </div>
+      )}
       {role === 'ADMIN' && (
         <Card title="Edit lead details">
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -3497,7 +3719,19 @@ export function LeadDetail({ id }: { id: string }) {
                     onChange={(e) => setRemarks(e.target.value)}
                   />
                 </div>
-                <button onClick={saveProgress} disabled={busy || !progressId || !remarks.trim()} className="btn-primary w-full">
+                <div>
+                  <label className="text-xs font-medium text-graphite-600">Reminder Date</label>
+                  <input
+                    type="date"
+                    className="input mt-1"
+                    min={todayISO}
+                    disabled={!progressId || !remarks.trim()}
+                    title={progressId && remarks.trim() ? 'Optional reminder date' : 'Fill Work progress and Remarks first'}
+                    value={reminderDate}
+                    onChange={(e) => setReminderDate(e.target.value)}
+                  />
+                </div>
+                <button onClick={saveProgress} disabled={busy || !progressId || !remarks.trim() || !reminderDate} className="btn-primary w-full">
                   {busy ? 'Saving…' : needsContact ? 'Save progress & complete contact' : 'Save work progress'}
                 </button>
               </div>
@@ -3513,6 +3747,14 @@ export function LeadDetail({ id }: { id: string }) {
           {l.employee_remarks && (
             <Card title="Latest employee remarks">
               <p className="text-sm whitespace-pre-wrap">{l.employee_remarks}</p>
+              {l.reminder_date && (
+                <p className="text-xs text-graphite-500 mt-2 tabular-nums inline-flex items-center gap-1.5">
+                  <span className={l.reminder_done ? 'reminder-done' : ''}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>
+                  {!leadLocked && !frozen && (
+                    <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={toggleDetailReminder} className={`inline-flex items-center justify-center w-7 h-7 rounded-md border text-sm shrink-0 ${l.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
+                  )}
+                </p>
+              )}
             </Card>
           )}
           {role !== 'EMPLOYEE' && (
@@ -3539,6 +3781,14 @@ export function LeadDetail({ id }: { id: string }) {
                     <span className="absolute -left-[7px] mt-1 w-3 h-3 rounded-full bg-brand-500 ring-4 ring-brand-100" />
                     <div className="flex items-center gap-2 text-sm"><b>{a.type}</b><span className="text-xs text-graphite-400">{fmtDT(a.at)}</span></div>
                     <p className="text-sm text-graphite-700 mt-1 whitespace-pre-wrap">{a.notes}</p>
+                    {a.reminder_date && (
+                      <p className="text-xs text-graphite-500 mt-1 tabular-nums inline-flex items-center gap-1.5">
+                        <span className={a.reminder_done ? 'reminder-done' : ''}>Reminder: {String(a.reminder_date).slice(0, 10)}</span>
+                        {!leadLocked && !frozen && a.id && (
+                          <button type="button" title={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={() => toggleDetailEntryReminder(a)} className={`inline-flex items-center justify-center w-6 h-6 rounded-md border text-xs shrink-0 ${a.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
+                        )}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ol>

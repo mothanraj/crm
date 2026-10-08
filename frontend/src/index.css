@@ -54,6 +54,9 @@
 .drag-scroll { cursor: grab; overscroll-behavior-x: contain; }
 .drag-scroll.is-dragging { cursor: grabbing; user-select: none; }
 
+/* struck-through (done) reminder dates — static, no animation */
+.reminder-done { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--muted); }
+
 /* employee to-do queue: animated strike-through for contacted leads */
 .todo-strike {
   position: relative;

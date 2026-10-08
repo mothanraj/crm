@@ -1929,10 +1929,13 @@ def _detailed_leads_payload(
         )
         for a in activities:
             history_by_lead[a.lead_id].append({
+                "id": str(a.id),
                 "remarks": (a.notes or "").strip(),
                 "category": (a.customer_review or "").strip(),
                 "progress": (a.outcome or "").strip(),
                 "quotation_value": _money_cell(a.quotation_value),
+                "reminder_date": a.reminder_date.isoformat() if a.reminder_date else None,
+                "reminder_done": bool(getattr(a, "reminder_done", False)),
                 "at": a.activity_at.isoformat() if a.activity_at else None,
             })
 

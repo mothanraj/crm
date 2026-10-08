@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -10,6 +10,7 @@ import httpx
 BASE = "http://127.0.0.1:8000"
 CTX = Path(__file__).resolve().parent.parent / ".qa_ctx.json"
 results: list[tuple[str, str, str]] = []
+REMINDER = (date.today() + timedelta(days=3)).isoformat()
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -72,9 +73,34 @@ def main() -> None:
     r = c.post(
         f"/api/leads/{lid}/status",
         headers=eh,
-        json={"new_status_id": statuses["In Followup"], "reason": ""},
+        json={"new_status_id": statuses["In Followup"], "reason": "", "reminder_date": REMINDER},
     )
     check("status without remarks -> 400", r.status_code == 400, str(r.status_code))
+
+    # Status without reminder date still saves (optional field)
+    r = c.post(
+        f"/api/leads/{lid}/status",
+        headers=eh,
+        json={
+            "new_status_id": statuses["In Followup"],
+            "reason": "Called customer, no reminder needed",
+            "customer_review": "A (3-6 months)",
+        },
+    )
+    check("status without reminder_date -> 200", r.status_code == 200, str(r.status_code))
+
+    # Past reminder date rejected
+    r = c.post(
+        f"/api/leads/{lid}/status",
+        headers=eh,
+        json={
+            "new_status_id": statuses["In Followup"],
+            "reason": "Called customer",
+            "customer_review": "A (3-6 months)",
+            "reminder_date": (date.today() - timedelta(days=1)).isoformat(),
+        },
+    )
+    check("status with past reminder_date -> 400", r.status_code == 400, str(r.status_code))
 
     # Invalid customer review
     r = c.post(
@@ -84,6 +110,7 @@ def main() -> None:
             "new_status_id": statuses["In Followup"],
             "reason": "Called customer",
             "customer_review": "INVALID",
+            "reminder_date": REMINDER,
         },
     )
     check("invalid customer_review -> 400", r.status_code == 400, str(r.status_code))
@@ -97,6 +124,7 @@ def main() -> None:
             "reason": "Spoke with customer about requirement",
             "customer_review": "A (3-6 months)",
             "method": "Call",
+            "reminder_date": REMINDER,
         },
     )
     check("status change In Followup", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
@@ -108,6 +136,7 @@ def main() -> None:
     check("first_contact_at set", bool(lead.get("first_contact_at")), str(lead.get("first_contact_at")))
     check("employee_remarks saved", "Spoke with customer" in (lead.get("employee_remarks") or ""), str(lead.get("employee_remarks"))[:80])
     check("customer_review saved", lead.get("customer_review") == "A (3-6 months)", str(lead.get("customer_review")))
+    check("reminder_date saved", lead.get("reminder_date") == REMINDER, str(lead.get("reminder_date")))
     check("history present", len(lead.get("history") or []) >= 1, str(len(lead.get("history") or [])))
     check("work progress activity", any(a.get("type") == "Work Progress" for a in lead.get("activities") or []), str(lead.get("activities")))
 
@@ -132,6 +161,7 @@ def main() -> None:
             "reason": "Sent quotation by email",
             "customer_review": "A+ (Immediate)",
             "quotation_value": "150000.50",
+            "reminder_date": REMINDER,
         },
     )
     check("quotation status with value", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
@@ -148,6 +178,7 @@ def main() -> None:
             "reason": "Deal closed",
             "customer_review": "A+ (Immediate)",
             "sla_state": "COMPLETED",
+            "reminder_date": REMINDER,
         },
     )
     check("convert lead", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
@@ -158,7 +189,7 @@ def main() -> None:
     r = c.post(
         f"/api/leads/{lid}/status",
         headers=eh,
-        json={"new_status_id": statuses["In Followup"], "reason": "reopen attempt"},
+        json={"new_status_id": statuses["In Followup"], "reason": "reopen attempt", "reminder_date": REMINDER},
     )
     check("employee cannot reopen converted", r.status_code == 403, str(r.status_code))
 
