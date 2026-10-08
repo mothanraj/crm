@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
   ResponsiveContainer, Legend,
@@ -294,6 +294,7 @@ async function downloadReport(path: string, filename: string, params?: Record<st
 
 /* ================= LOGIN ================= */
 export function Login() {
+  const navigate = useNavigate();
   const devDefault = import.meta.env.DEV ? 'admin@crm.local' : '';
   const [email, setEmail] = useState(devDefault);
   const [password, setPassword] = useState('');
@@ -312,7 +313,7 @@ export function Login() {
       localStorage.setItem('user_name', data.user.name || data.user.email || data.user.role);
       // Arm the employee login notification popup (consumed once after redirect).
       try { sessionStorage.setItem('crm:login-popup', '1'); } catch { /* private mode */ }
-      location.href = '/dashboard';
+      navigate('/dashboard', { replace: true });
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Cannot reach the server. Port 8000 is busy or the backend is stuck — run scripts\\stop-backend.ps1 then scripts\\start-backend.ps1');
     } finally { setBusy(false); }
@@ -690,6 +691,12 @@ function TodoRow({ lead: l, state, leaving, statusLabel, now }: {
 }
 
 export function EmployeeDashboard() {
+  const greet = () => {
+    const h = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(new Date()));
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
   const [d, setD] = useState<any>(null);
   const [todos, setTodos] = useState<any[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -762,7 +769,7 @@ export function EmployeeDashboard() {
   if (error && !d) {
     return (
       <div>
-        <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and overdue." />
+        <PageHeader title={`${greet()}, ${userName}`} subtitle="Welcome back! Your assigned leads, follow-ups and overdue." />
         <div className="card p-8 text-center">
           <p className="font-medium text-graphite-700">Could not load your dashboard</p>
           <p className="text-sm text-graphite-500 mt-1">{error}</p>
@@ -816,7 +823,7 @@ export function EmployeeDashboard() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title={`Hello, ${userName}`} subtitle="Your assigned leads, follow-ups and overdue." actions={
+      <PageHeader title={`${greet()}, ${userName}`} subtitle="Welcome back! Your assigned leads, follow-ups and overdue." actions={
         <Link to="/leads" className="btn-primary">View all my leads →</Link>
       } />
       {d.warning && (
@@ -4858,28 +4865,28 @@ export function Reports() {
             {dashHistory && (
               <>
                 <DashboardTableChartRow
-                  title="Leads by Source (history)"
+                  title="Leads by Source"
                   labelHeader="Source"
                   rows={srcRowsH}
                   totals={mapTotals(dashHistory?.by_source?.totals)}
                   pieRows={srcRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
-                  emptyTitle="No source history in this range"
+                  emptyTitle="No source data in this range"
                 />
                 <DashboardTableChartRow
-                  title="Leads by Product (history)"
+                  title="Leads by Product"
                   labelHeader="Product"
                   rows={prodRowsH}
                   totals={mapTotals(dashHistory?.by_product?.totals)}
                   pieRows={prodRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
-                  emptyTitle="No product history in this range"
+                  emptyTitle="No product data in this range"
                 />
                 <DashboardTableChartRow
-                  title="Leads by Category (history)"
+                  title="Leads by Category"
                   labelHeader="Category"
                   rows={catRowsH}
                   totals={mapTotals(dashHistory?.by_category?.totals)}
                   pieRows={catRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
-                  emptyTitle="No category history in this range"
+                  emptyTitle="No category data in this range"
                 />
               </>
             )}
@@ -5157,7 +5164,7 @@ export function Reports() {
               {!details && !sourceBusy && <EmptyState title="Apply a date range to load the report" />}
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Leads by Source (progress history)</h3>
+              <h3 className="text-sm font-semibold text-graphite-700 mb-2">Leads by Source</h3>
               {!(details?.rows || []).some((r: any) => r.total > 0) ? <EmptyState title="No source data to chart" /> : (
                 <div className="h-80">
                   <ResponsiveContainer>

@@ -3,24 +3,20 @@ import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 
 const POP_FLAG = 'crm:login-popup';
-const QUEUE_CAP = 500;
 const ROW_CAP = 8;
 
 type Bucket = 'overdue' | 'reminders' | 'new';
 
-function todayISO(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
-  return `${get('year')}-${get('month')}-${get('day')}`;
-}
-
-function latestRemarks(l: any): string {
-  const hist = Array.isArray(l.work_history) ? l.work_history : [];
-  if (hist.length) return String(hist[hist.length - 1]?.remarks || '').trim();
-  return String(l.employee_remarks || '').trim();
-}
+type PulseRow = {
+  id: string;
+  enquiry_number: string;
+  customer_name: string;
+  remarks: string;
+  reminder_date?: string | null;
+  sla_deadline?: string | null;
+  enquiry_date?: string | null;
+  assigned_at?: string | null;
+};
 
 function greeting(): string {
   const h = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(new Date()));
@@ -32,16 +28,17 @@ function greeting(): string {
 const SECTIONS: Array<{ key: Bucket; title: string; hint: string; bar: string; badge: string }> = [
   { key: 'overdue', title: 'Overdue follow-ups', hint: 'Act now', bar: 'border-[#E03131]', badge: 'bg-[#E03131] text-white' },
   { key: 'reminders', title: 'Reminders due', hint: 'Due today or earlier', bar: 'border-[#E8890C]', badge: 'bg-[#E8890C] text-white' },
-  { key: 'new', title: 'Newly assigned leads', hint: 'Speak to customer', bar: 'border-[#2F9E44]', badge: 'bg-[#2F9E44] text-white' },
+  { key: 'new', title: 'Newly assigned leads', hint: 'Pending — speak to customer', bar: 'border-[#2F9E44]', badge: 'bg-[#2F9E44] text-white' },
 ];
 
 /**
  * One-time login popup for employees: overdue (red), reminders due (amber),
- * newly assigned (green) — priority ordered. Silent when there is nothing to show.
+ * newly assigned pending (green) — priority ordered. Silent when empty.
+ * Single fast GET /dashboard/login-pulse (no full /leads download).
  */
 export function EmployeeLoginPopup() {
   const [open, setOpen] = useState(false);
-  const [groups, setGroups] = useState<Record<Bucket, any[]>>({ overdue: [], reminders: [], new: [] });
+  const [groups, setGroups] = useState<Record<Bucket, PulseRow[]>>({ overdue: [], reminders: [], new: [] });
   const [totals, setTotals] = useState<Record<Bucket, number>>({ overdue: 0, reminders: 0, new: 0 });
   const [userName, setUserName] = useState('');
 
@@ -57,38 +54,27 @@ export function EmployeeLoginPopup() {
     // NOTE: the flag is consumed only AFTER the fetch resolves (see below), so
     // React StrictMode's double-mount in dev cannot swallow this one-shot popup.
     setUserName(localStorage.getItem('user_name') || 'there');
+    const ctrl = new AbortController();
     let cancelled = false;
     const consume = () => { try { sessionStorage.removeItem(POP_FLAG); } catch { /* private mode */ } };
-    api.get('/leads', { params: { page: 1, size: 1 } })
-      .then((r) => {
-        const full = Math.min(Math.max(r.data.total ?? 0, 1), QUEUE_CAP);
-        return api.get('/leads', { params: { page: 1, size: full } });
-      })
+    api.get('/dashboard/login-pulse', { params: { limit: ROW_CAP }, signal: ctrl.signal as any })
       .then((r) => {
         if (cancelled) return;
         consume();
-        const items: any[] = r.data.items || [];
-        const today = todayISO();
-        const live = items.filter((l) => l.sla_state !== 'COMPLETED');
-        const overdue = live
-          .filter((l) => l.sla_state === 'OVERDUE')
-          .sort((a, b) => String(a.sla_deadline || 'zzz').localeCompare(String(b.sla_deadline || 'zzz')));
-        const reminders = live
-          .filter((l) => {
-            const d = String(l.reminder_date || '').slice(0, 10);
-            return !!d && d <= today && !l.reminder_done;
-          })
-          .sort((a, b) => String(a.reminder_date || '').localeCompare(String(b.reminder_date || '')));
-        const fresh = live
-          .filter((l) => !l.first_contact_at)
-          .sort((a, b) => String(b.enquiry_date || '').localeCompare(String(a.enquiry_date || '')));
-        if (overdue.length + reminders.length + fresh.length === 0) return;
-        setGroups({ overdue, reminders, new: fresh });
-        setTotals({ overdue: overdue.length, reminders: reminders.length, new: fresh.length });
+        const pick = (b: Bucket): { total: number; rows: PulseRow[] } => ({
+          total: Number(r.data?.[b]?.total ?? 0),
+          rows: Array.isArray(r.data?.[b]?.rows) ? r.data[b].rows : [],
+        });
+        const o = pick('overdue');
+        const m = pick('reminders');
+        const n = pick('new');
+        if (o.total + m.total + n.total === 0) return;
+        setGroups({ overdue: o.rows, reminders: m.rows, new: n.rows });
+        setTotals({ overdue: o.total, reminders: m.total, new: n.total });
         setOpen(true);
       })
       .catch(() => { consume(); /* stay silent on failure — dashboard still loads */ });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctrl.abort(); };
   }, []);
 
   useEffect(() => {
@@ -129,22 +115,22 @@ export function EmployeeLoginPopup() {
                   <span className="text-xs text-graphite-400">· {s.hint}</span>
                 </div>
                 <ul className={`mt-2 space-y-2 border-l-4 ${s.bar} pl-2`}>
-                  {rows.slice(0, ROW_CAP).map((l: any) => (
+                  {rows.slice(0, ROW_CAP).map((l: PulseRow) => (
                     <li key={`${s.key}-${l.id}`} className="rounded-lg border border-graphite-200 bg-white px-3 py-2 shadow-sm">
                       <div className="flex items-center justify-between gap-2">
                         <Link to={`/leads/${l.id}`} onClick={() => setOpen(false)} className="font-semibold text-brand-700 hover:underline text-sm break-words min-w-0">
                           {l.enquiry_number}
                         </Link>
-                        {s.key === 'reminders' && (
+                        {s.key === 'reminders' && l.reminder_date && (
                           <span className="text-[11px] font-semibold tabular-nums text-graphite-600 bg-graphite-100 rounded px-1.5 py-0.5 shrink-0">
-                            {String(l.reminder_date || '').slice(0, 10)}
+                            {String(l.reminder_date).slice(0, 10)}
                           </span>
                         )}
                       </div>
                       <div className="text-sm font-medium text-graphite-900 break-words mt-0.5">{l.customer_name || '—'}</div>
-                      {latestRemarks(l) && (
+                      {(l.remarks || '').trim() && (
                         <div className="text-xs text-graphite-500 break-words mt-0.5 [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden">
-                          {latestRemarks(l)}
+                          {(l.remarks || '').trim()}
                         </div>
                       )}
                     </li>

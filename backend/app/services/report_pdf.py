@@ -5,13 +5,15 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics.charts.legends import Legend
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
-from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.shapes import Circle, Drawing, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
@@ -545,6 +547,109 @@ def _vertical_bar_chart(
     return drawing
 
 
+def _donut_chart(
+    labels: list[str],
+    values: list[float],
+    chart_width: float,
+    title: str,
+) -> Drawing | None:
+    """Donut (pie with hole) beside its legend — mirrors the UI donut.
+
+    Horizontal layout (pie left, wordings right) so the drawing stays short
+    enough to share its page with the section heading — never orphaned onto
+    a blank page. Percent labels are drawn inside slices; full names with
+    counts go in the legend beside the pie.
+    """
+    pairs = [(str(lab or ""), float(val or 0)) for lab, val in zip(labels, values)]
+    pairs = [(lab, val) for lab, val in pairs if val > 0]
+    if not pairs:
+        return None
+    total = sum(val for _, val in pairs)
+    if total <= 0:
+        return None
+    n = len(pairs)
+    # Fit inside the printable frame (~757 x ~419 on landscape A4 with the
+    # report header/margins): cap the drawing width; side-by-side layout
+    # keeps the height small so the flowable never raises LayoutError.
+    chart_w = min(float(chart_width), 750.0)
+
+    def _legend_raw(raw: str, max_len: int = 30) -> str:
+        label = " ".join(str(raw or "").split())
+        if len(label) > max_len:
+            label = label[: max_len - 3].rstrip() + "..."
+        return label
+    texts = [f"{_legend_raw(lab)} ({int(val)})" for lab, val in pairs]
+    # Bound the legend height: extra entries collapse into a "+N more" line.
+    max_rows = 14
+    shown = list(zip(pairs, texts))
+    extra = 0
+    if len(shown) > max_rows:
+        extra = len(shown) - max_rows
+        shown = shown[:max_rows]
+    row_h = 18.0
+    legend_h = len(shown) * row_h + (row_h if extra else 0.0)
+    pie_size = 230.0
+    content_h = max(pie_size, legend_h)
+    pad_top, pad_bottom = 14.0, 14.0
+    drawing_h = content_h + pad_top + pad_bottom
+    drawing = Drawing(chart_w, drawing_h)
+    drawing.hAlign = "CENTER"
+    # Pie on the left, centred in its zone.
+    pie_zone_w = 330.0
+    pie = Pie()
+    pie.width = pie_size
+    pie.height = pie_size
+    pie.x = (pie_zone_w - pie_size) / 2
+    pie.y = pad_bottom + (content_h - pie_size) / 2
+    pie.data = [val for _, val in pairs]
+    pie.labels = [f"{(val / total * 100):.0f}%" for _, val in pairs]
+    pie.slices.strokeWidth = 1.5
+    pie.slices.strokeColor = colors.white
+    pie.slices.fontSize = 12
+    pie.slices.fontName = "Helvetica-Bold"
+    pie.slices.fontColor = colors.white
+    pie.sideLabels = False
+    pie.slices.popout = 0
+    for i, (_lab, _val) in enumerate(pairs):
+        pie.slices[i].fillColor = CHART_COLORS[i % len(CHART_COLORS)]
+    drawing.add(pie)
+    # Donut hole: white circle over the pie centre.
+    cx = pie.x + pie_size / 2
+    cy = pie.y + pie_size / 2
+    hole = Circle(cx, cy, pie_size * 0.26)
+    hole.fillColor = colors.white
+    hole.strokeColor = colors.white
+    hole.strokeWidth = 0
+    drawing.add(hole)
+    # Legend column on the right, vertically centred against the pie.
+    # All text is XML-escaped and ASCII-safe (Helvetica/WinAnsi cannot
+    # draw glyphs like ■ or …); swatches are drawn Rects, not glyphs.
+    legend_x = pie_zone_w + 30.0
+    legend_top = pad_bottom + (content_h - legend_h) / 2 + legend_h
+    for i, ((lab, val), text) in enumerate(zip(pairs, texts)):
+        if i >= max_rows:
+            break
+        y = legend_top - 8.0 - i * row_h
+        swatch = Rect(legend_x, y - 1, 11, 11)
+        swatch.fillColor = CHART_COLORS[i % len(CHART_COLORS)]
+        swatch.strokeColor = CHART_COLORS[i % len(CHART_COLORS)]
+        swatch.strokeWidth = 0
+        drawing.add(swatch)
+        drawing.add(String(
+            legend_x + 16, y + 1,
+            escape(text),
+            fontSize=11, fillColor=colors.HexColor("#334155"),
+        ))
+    if extra:
+        y = legend_top - 8.0 - len(shown) * row_h
+        drawing.add(String(
+            legend_x, y + 1,
+            escape(f"+{extra} more"),
+            fontSize=11, fillColor=colors.HexColor("#334155"),
+        ))
+    return drawing
+
+
 def build_dashboard_history_pdf(payload: dict) -> bytes:
     """KPI tiles + source/product/category tables and charts for Dashboard History."""
     title = "Dashboard History Report"
@@ -643,9 +748,9 @@ def build_dashboard_history_pdf(payload: dict) -> bytes:
     story.append(value_table)
 
     sections = [
-        ("by_source", "source", "Leads by Source (history)", colors.HexColor("#1e3a5f")),
-        ("by_product", "product", "Leads by Product (history)", colors.HexColor("#0f766e")),
-        ("by_category", "category", "Leads by Category (history)", colors.HexColor("#0e7490")),
+        ("by_source", "source", "Leads by Source", colors.HexColor("#1e3a5f")),
+        ("by_product", "product", "Leads by Product", colors.HexColor("#0f766e")),
+        ("by_category", "category", "Leads by Category", colors.HexColor("#0e7490")),
     ]
     usable = width - 72
     for section_key, field, section_title, bar_color in sections:
@@ -690,16 +795,14 @@ def build_dashboard_history_pdf(payload: dict) -> bytes:
         ]
         story.append(PageBreak())
         story.append(Paragraph(f"{section_title} — Chart", heading))
-        story.append(Paragraph("X-axis: names · Y-axis: lead count (values shown on bars)", meta))
+        story.append(Paragraph("Share of total leads", meta))
         story.append(Spacer(1, 8))
         if paired:
-            chart = _vertical_bar_chart(
+            chart = _donut_chart(
                 [lab for lab, _ in paired],
                 [val for _, val in paired],
                 usable,
                 section_title,
-                bar_color=bar_color,
-                show_values=True,
             )
             if chart is not None:
                 story.append(chart)
@@ -767,10 +870,10 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
     rows.append([Paragraph("TOTAL", header), *[Paragraph(str(payload["totals"].get(key, 0)), cell) for key in KEYS]])
     col_w = (width - 72) / 8
     table = Table(rows, colWidths=[col_w] * 8, repeatRows=1, hAlign="CENTER")
-    table.setStyle(_centered_table_style())
+    table.setStyle(_centered_table_style(bar_color))
     story.append(table)
 
-    # Chart on its own page so table text never collides with axis labels / bars.
+    # Chart on its own page so table text never collides with the donut.
     chart_labels = [str(row.get(field) or "") for row in payload.get("rows") or []]
     chart_values = [float(row.get("total") or 0) for row in payload.get("rows") or []]
     # Drop all-zero rows from the chart only (table still shows full set).
@@ -778,14 +881,13 @@ def build_report_pdf(payload: dict, report_type: str) -> bytes:
     if paired:
         story.append(PageBreak())
         story.append(Paragraph(chart_title, heading))
-        story.append(Paragraph("X-axis: names · Y-axis: lead count", meta))
+        story.append(Paragraph("Share of total leads", meta))
         story.append(Spacer(1, 8))
-        chart = _vertical_bar_chart(
+        chart = _donut_chart(
             [lab for lab, _ in paired],
             [val for _, val in paired],
             width - 72,
             chart_title,
-            bar_color=bar_color,
         )
         if chart is not None:
             story.append(chart)

@@ -2194,6 +2194,132 @@ def masters(db: Session = Depends(get_db), u: User = Depends(current_user)):
     }
 
 
+@router.get("/dashboard/login-pulse")
+def login_pulse(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    limit: int = Query(8, ge=1, le=20),
+):
+    """Lightweight one-shot payload for the employee login popup.
+
+    Single fast call replacing the old 2x GET /leads full-list fetch.
+    Buckets (only the caller's own active leads, priority-deduped
+    overdue > reminders > new):
+    - overdue:   sla_state == OVERDUE
+    - reminders: lead reminder_date <= today (IST) and not done, not COMPLETED
+    - new:       PENDING SLA and never contacted (newly assigned)
+    """
+    empty = {
+        "overdue": {"total": 0, "rows": []},
+        "reminders": {"total": 0, "rows": []},
+        "new": {"total": 0, "rows": []},
+    }
+    if not _is_employee(u):
+        return empty
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        today = date.today()
+    mine = [Lead.is_active.is_(True), Lead.primary_employee_id == u.id]
+
+    # 1. Overdue ids first (for priority dedup).
+    overdue_ids = [
+        r[0]
+        for r in db.query(Lead.id)
+        .filter(*mine, Lead.sla_state == "OVERDUE")
+        .all()
+    ]
+    overdue_set = set(overdue_ids)
+
+    # 2. Reminder ids (excluding overdue).
+    rem_q = db.query(Lead.id).filter(
+        *mine,
+        Lead.sla_state != "COMPLETED",
+        Lead.reminder_date.isnot(None),
+        Lead.reminder_date <= today,
+        Lead.reminder_done.is_(False),
+    )
+    if overdue_set:
+        rem_q = rem_q.filter(~Lead.id.in_(overdue_set))
+    reminder_ids = [r[0] for r in rem_q.all()]
+    reminder_set = set(reminder_ids)
+
+    # 3. New/pending ids (excluding overdue + reminders).
+    excluded = overdue_set | reminder_set
+    new_q = db.query(Lead.id).filter(
+        *mine,
+        Lead.sla_state == "PENDING",
+        Lead.first_contact_at.is_(None),
+    )
+    if excluded:
+        new_q = new_q.filter(~Lead.id.in_(excluded))
+    new_ids = [r[0] for r in new_q.all()]
+    # new_set not needed further (lowest priority)
+
+    def _rows(ids: list, order_col, order_desc: bool = False):
+        if not ids:
+            return []
+        q = db.query(Lead).filter(Lead.id.in_(ids))
+        if order_desc:
+            q = q.order_by(order_col.desc().nullslast(), Lead.updated_at.desc())
+        else:
+            q = q.order_by(order_col.asc().nullsfirst(), Lead.updated_at.desc())
+        return q.limit(limit).all()
+
+    overdue_rows = _rows(overdue_ids, Lead.sla_deadline)
+    reminder_rows = _rows(reminder_ids, Lead.reminder_date)
+    new_rows = _rows(new_ids, Lead.enquiry_date, order_desc=True)
+
+    shown = overdue_rows + reminder_rows + new_rows
+    shown_ids = [x.id for x in shown]
+    # Latest Work Progress remark per lead (fallback: employee_remarks).
+    remark_by_lead: dict = {}
+    assign_by_lead: dict = {}
+    if shown_ids:
+        acts = (
+            db.query(LeadActivity)
+            .filter(
+                LeadActivity.lead_id.in_(shown_ids),
+                LeadActivity.activity_type == "Work Progress",
+            )
+            .order_by(LeadActivity.activity_at.asc())
+            .all()
+        )
+        for a in acts:
+            if (a.notes or "").strip():
+                remark_by_lead[a.lead_id] = (a.notes or "").strip()
+        assigns = (
+            db.query(LeadAssignment)
+            .filter(
+                LeadAssignment.lead_id.in_(shown_ids),
+                LeadAssignment.is_current.is_(True),
+            )
+            .all()
+        )
+        for a in assigns:
+            assign_by_lead[a.lead_id] = a.assigned_at
+
+    def _item(lead: Lead) -> dict:
+        assigned_at = assign_by_lead.get(lead.id)
+        return {
+            "id": str(lead.id),
+            "enquiry_number": lead.enquiry_number,
+            "customer_name": lead.customer_name or "—",
+            "remarks": remark_by_lead.get(lead.id, (lead.employee_remarks or "").strip()),
+            "reminder_date": lead.reminder_date.isoformat() if lead.reminder_date else None,
+            "sla_deadline": lead.sla_deadline.isoformat() if lead.sla_deadline else None,
+            "enquiry_date": str(lead.enquiry_date) if lead.enquiry_date else None,
+            "assigned_at": assigned_at.isoformat() if assigned_at else None,
+        }
+
+    return {
+        "overdue": {"total": len(overdue_ids), "rows": [_item(x) for x in overdue_rows]},
+        "reminders": {"total": len(reminder_ids), "rows": [_item(x) for x in reminder_rows]},
+        "new": {"total": len(new_ids), "rows": [_item(x) for x in new_rows]},
+    }
+
+
 @router.get("/notifications")
 def notifs(db: Session = Depends(get_db), u: User = Depends(current_user)):
     rows = db.query(Notification).filter(Notification.user_id == u.id).order_by(Notification.created_at.desc()).limit(50).all()
