@@ -276,8 +276,11 @@ def _dashboard_history_payload(
 
         try:
             total_lead_value += float(lead_value or 0)
+            lead_value_int = _as_rupee(lead_value)
         except (TypeError, ValueError):
-            pass
+            lead_value_int = 0
+        src_bucket["lead_value"] = src_bucket.get("lead_value", 0) + lead_value_int
+        prod_bucket["lead_value"] = prod_bucket.get("lead_value", 0) + lead_value_int
         try:
             total_quotation_value += float(quote_val or 0)
         except (TypeError, ValueError):
@@ -333,10 +336,10 @@ def _dashboard_history_payload(
         extras = sorted(k for k in buckets if k not in ordered and buckets[k].get("total", 0))
         labels = list(ordered) + extras
         rows = []
-        totals = _empty_progress_counts()
+        totals = {**_empty_progress_counts(), "lead_value": 0}
         for label in labels:
             data = buckets.get(label) or _empty_progress_counts()
-            row = {label_key: label, **{k: int(data.get(k, 0)) for k in totals}}
+            row = {label_key: label, **{k: int(data.get(k, 0)) for k in _empty_progress_counts()}, "lead_value": _as_rupee(data.get("lead_value", 0))}
             rows.append(row)
             for k in totals:
                 totals[k] += row[k]
@@ -346,7 +349,7 @@ def _dashboard_history_payload(
     product_rows, product_totals = _matrix_rows(by_product, "product", list(CANONICAL_PRODUCTS))
 
     cat_rows = []
-    cat_totals = _empty_progress_counts()
+    cat_totals = {**_empty_progress_counts(), "lead_value": 0}
     for cat in CUSTOMER_REVIEW_ORDER:
         data = by_category.get(cat) or _empty_progress_counts()
         row = {
@@ -358,6 +361,10 @@ def _dashboard_history_payload(
             "quote_sent": int(data.get("quote_sent", 0)),
             "converted": int(data.get("converted", 0)),
             "not_interested": int(data.get("not_interested", 0)),
+            "lead_value": _as_rupee(sum(
+                float(rows_q_item[1] or 0) for rows_q_item in rows_q
+                if _normalize_history_category(rows_q_item[3]) == cat
+            )),
         }
         cat_rows.append(row)
         for k in cat_totals:
@@ -447,9 +454,13 @@ def _kpis(db: Session, u: User | None = None):
                 "quotation_value": str(int(round(float(lead.quotation_value)))),
             })
     lead_value = _lead_value_analytics(db, u)
+    # Total quotation value is the live value for leads currently in
+    # "Quotation sent" status. Converted / otherwise progressed leads are
+    # intentionally excluded so this box tracks the current funnel state.
     total_quotation_value = _as_rupee(
         db.query(func.coalesce(func.sum(Lead.quotation_value), 0))
-        .filter(Lead.is_active.is_(True), *emp)
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), LeadStatus.name == STATUS_QUOTE, *emp)
         .scalar()
         or 0
     )
@@ -1127,6 +1138,11 @@ def _by_source_matrix(db: Session, start: date | None = None, end: date | None =
             out[name]["total"] += c
         elif c:
             out[name]["total"] += c
+    value_rows = db.query(src_name, func.coalesce(func.sum(Lead.lead_value), 0)).outerjoin(
+        LeadSource, Lead.source_id == LeadSource.id
+    ).filter(_date_filter(start, end, u)).group_by(src_name).all()
+    for src, value in value_rows:
+        out.setdefault(canonical_source(src), {"total": 0})["lead_value"] = _as_rupee(value)
     return out
 
 
@@ -1178,7 +1194,7 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
     """Lead Source report: live current-status counts (same rules as dashboard by-source)."""
     matrix = _by_source_matrix(db, start, end)
     rows = []
-    totals = _empty_progress_counts()
+    totals = {**_empty_progress_counts(), "lead_value": 0}
     for src in _ordered_sources(matrix):
         m = matrix[src]
         row = {
@@ -1190,6 +1206,7 @@ def _source_details_payload(db: Session, start: date | None, end: date | None, m
             "quote_sent": int(m.get(STATUS_QUOTE, 0)),
             "converted": int(m.get(STATUS_CONVERTED, 0)),
             "not_interested": int(sum(m.get(s, 0) for s in STATUS_NOT_INT)),
+            "lead_value": _as_rupee(m.get("lead_value", 0)),
         }
         rows.append(row)
         for k in totals:
@@ -1223,13 +1240,16 @@ def _product_live_payload(db: Session, start: date | None, end: date | None, mod
         key = _norm_progress_bucket(status)
         if key:
             row[key] = int(row.get(key, 0)) + n
+    value_rows = db.query(Product.name, func.coalesce(func.sum(Lead.lead_value), 0)).select_from(Lead).outerjoin(Product, Lead.product_id == Product.id).filter(_date_filter(start, end, u)).group_by(Product.name).all()
+    for product, value in value_rows:
+        rows_by_product.setdefault(product or "Unmapped", _empty_progress_counts())["lead_value"] = _as_rupee(value)
 
     ordered = list(CANONICAL_PRODUCTS) + sorted(p for p in rows_by_product if p not in CANONICAL_PRODUCTS)
     rows = []
-    totals = _empty_progress_counts()
+    totals = {**_empty_progress_counts(), "lead_value": 0}
     for product in ordered:
         data = rows_by_product[product]
-        row = {"product": product, **{k: int(data.get(k, 0)) for k in totals}}
+        row = {"product": product, **{k: int(data.get(k, 0)) for k in _empty_progress_counts()}, "lead_value": _as_rupee(data.get("lead_value", 0))}
         rows.append(row)
         for key in totals:
             totals[key] += row[key]
@@ -1275,10 +1295,13 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
         if status:
             row[status] = int(row.get(status, 0)) + int(count)
         row["total"] = int(row.get("total", 0)) + int(count)
+    value_rows = db.query(Lead.customer_review, func.coalesce(func.sum(Lead.lead_value), 0)).filter(_date_filter(start, end, u)).group_by(Lead.customer_review).all()
+    for review, value in value_rows:
+        rows_by_cat.setdefault(_normalize_customer_review(review), {"total": 0})["lead_value"] = _as_rupee(value)
     extras = [name for name in ("Other", "Unreviewed") if name in rows_by_cat and rows_by_cat[name].get("total", 0)]
     ordered = list(CUSTOMER_REVIEW_ORDER) + extras
     rows = []
-    totals = {"total": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "converted": 0, "not_interested": 0}
+    totals = {"total": 0, "lead_value": 0, "in_followup": 0, "meeting": 0, "site_visit": 0, "quote_sent": 0, "converted": 0, "not_interested": 0}
     for category in ordered:
         data = rows_by_cat.get(category) or {"total": 0}
         row = {
@@ -1290,6 +1313,7 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
             "quote_sent": int(data.get(STATUS_QUOTE, 0)),
             "converted": int(data.get(STATUS_CONVERTED, 0)),
             "not_interested": int(sum(data.get(s, 0) for s in STATUS_NOT_INT)),
+            "lead_value": _as_rupee(data.get("lead_value", 0)),
         }
         rows.append(row)
         for key in totals:
@@ -1325,10 +1349,10 @@ def product_details_export(db: Session = Depends(get_db), u: User = Depends(curr
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _product_details_payload(db, start, end, resolved)
-    headers = ["Product", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
-    body = [[r["product"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]] for r in payload["rows"]]
+    headers = ["Product", "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    body = [[r["product"], r["total"], r["lead_value"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]] for r in payload["rows"]]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
+    body.append(["TOTAL", t["total"], t["lead_value"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
     return _xlsx_download("product-wise-details.xlsx", headers, body, title="Product-wise Leads")
 
 
@@ -1421,13 +1445,13 @@ def category_details_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _category_details_payload(db, start, end, resolved)
-    headers = ["Category", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    headers = ["Category", "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     body = [
-        [r["category"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]]
+        [r["category"], r["total"], r["lead_value"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"]]
         for r in payload["rows"]
     ]
     t = payload["totals"]
-    body.append(["TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
+    body.append(["TOTAL", t["total"], t["lead_value"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"]])
     return _xlsx_download("category-wise-details.xlsx", headers, body, title="Category-wise Leads")
 
 
@@ -1459,15 +1483,15 @@ def source_details_export(
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _source_details_payload(db, start, end, resolved)
-    headers = ["Lead Source", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+    headers = ["Lead Source", "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
     body = []
     for r in payload["rows"]:
         body.append([
-            r["source"], r["total"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"],
+            r["source"], r["total"], r["lead_value"], r["in_followup"], r["meeting"], r["site_visit"], r["quote_sent"], r.get("converted", 0), r["not_interested"],
         ])
     t = payload["totals"]
     body.append([
-        "TOTAL", t["total"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"],
+        "TOTAL", t["total"], t["lead_value"], t["in_followup"], t["meeting"], t["site_visit"], t["quote_sent"], t.get("converted", 0), t["not_interested"],
     ])
     # Meta sheet row for range
     label = f"{payload['effective_from'] or 'all'}_to_{payload['effective_to'] or 'all'}"
@@ -1771,11 +1795,13 @@ def _monthly_rows(db: Session, u: User | None = None, start: date | None = None,
         label = f"{month_abbr[dt.month]}-{dt.year % 100:02d}"
         item = grouped.setdefault(key, {
             "month_key": key, "month": label, "leads": 0,
+            "lead_value": 0,
             "in_followup": 0, "meeting": 0, "site_visit": 0,
             "quotation_sent": 0, "not_interested": 0,
             "sources": set(), "products": set(),
         })
         item["leads"] += 1
+        item["lead_value"] += _as_rupee(lead.lead_value)
         if source_name: item["sources"].add(source_name)
         if product_name: item["products"].add(product_name)
         if status_name == STATUS_FOLLOWUP: item["in_followup"] += 1
@@ -1812,8 +1838,8 @@ def monthly_export(
     rows = _monthly_rows(db, u, start, end)
     return _xlsx_download(
         "monthly-lead-volume.xlsx",
-        ["Month", "Total Leads", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested", "Lead Sources", "Products"],
-        [[r["month"], r["leads"], r["in_followup"], r["meeting"], r["site_visit"], r["quotation_sent"], r["not_interested"], r["sources"], r["products"]] for r in rows],
+        ["Month", "Total Leads", "Total Lead Value", "In Followup", "Meeting", "Site Visit", "Quotation sent", "Not Interested", "Lead Sources", "Products"],
+        [[r["month"], r["leads"], r["lead_value"], r["in_followup"], r["meeting"], r["site_visit"], r["quotation_sent"], r["not_interested"], r["sources"], r["products"]] for r in rows],
         title="Monthly Volume",
     )
 

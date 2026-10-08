@@ -17,8 +17,8 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   if (!rows.length) return <EmptyState title="No data" />;
   const RADIAN = Math.PI / 180;
   return (
-    <div className="w-full h-full min-h-[240px] flex flex-col">
-      <div className="flex-1 min-h-[180px] w-full">
+    <div className="w-full h-full min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
@@ -70,28 +70,30 @@ function DashboardFunnelTable({
 }: {
   labelHeader: string;
   rows: Array<{ name: string; total?: number; Meeting?: number; [k: string]: any }>;
-  totals: { total: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
+  totals: { total: number; lead_value?: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   emptyTitle: string;
 }) {
-  const cell = 'td !px-0.5 sm:!px-1 !py-1.5 text-[10px] sm:text-[11px] text-center align-middle leading-snug break-words [overflow-wrap:anywhere] border-graphite-100 tabular-nums';
-  const head = 'th !px-0.5 sm:!px-1 !py-1.5 !text-[9px] sm:!text-[10px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-snug font-semibold break-words [overflow-wrap:anywhere]';
+  const cell = 'td !px-0.5 sm:!px-1 !py-1 text-[10px] sm:text-[11px] text-center align-middle leading-tight break-words [overflow-wrap:anywhere] border-graphite-100 tabular-nums';
+  const head = 'th !px-1 !py-1.5 !text-[8px] sm:!text-[9px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-tight font-semibold break-words [overflow-wrap:anywhere]';
   return (
     <div className="rounded-lg border border-graphite-100 overflow-hidden h-full">
       <table className="w-full table-fixed text-center">
         <colgroup>
-          <col className="w-[20%]" />
+          <col className="w-[18%]" />
+          <col className="w-[9%]" />
+          <col className="w-[15%]" />
           <col className="w-[10%]" />
-          <col className="w-[12%]" />
+          <col className="w-[10%]" />
           <col className="w-[10%]" />
           <col className="w-[11%]" />
-          <col className="w-[13%]" />
-          <col className="w-[12%]" />
-          <col className="w-[12%]" />
+          <col className="w-[8%]" />
+          <col className="w-[9%]" />
         </colgroup>
         <thead>
           <tr className="bg-[#0e7490] text-white">
             <th className={head}>{labelHeader}</th>
             <th className={head}>Total Leads</th>
+            <th className={head}>Total Lead Value</th>
             <th className={head}>In Followup</th>
             <th className={head}>Meeting</th>
             <th className={head}>Site Visit</th>
@@ -105,6 +107,7 @@ function DashboardFunnelTable({
             <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
               <td className={`${cell} !text-left !px-1.5 font-medium break-words`}>{r.name}</td>
               <td className={`${cell} font-bold`}>{r.total ?? 0}</td>
+              <td className={`${cell} whitespace-nowrap`}>{inr(r.lead_value)}</td>
               <td className={cell}>{r['In Followup'] ?? 0}</td>
               <td className={cell}>{r.Meeting ?? 0}</td>
               <td className={cell}>{r['Site Visit'] ?? 0}</td>
@@ -117,6 +120,7 @@ function DashboardFunnelTable({
             <tr className="bg-graphite-100 font-bold">
               <td className={`${cell} !text-left !px-1.5`}>TOTAL</td>
               <td className={cell}>{totals.total}</td>
+              <td className={`${cell} whitespace-nowrap`}>{inr(totals.lead_value)}</td>
               <td className={cell}>{totals.follow}</td>
               <td className={cell}>{totals.meeting}</td>
               <td className={cell}>{totals.siteVisit}</td>
@@ -156,7 +160,7 @@ function DashboardTableChartRow({
         </div>
       </Card>
       <Card title={title} className="min-w-0 h-full !p-4 flex flex-col">
-        <div className="flex-1 min-h-[260px] flex flex-col">
+        <div className="flex-1 min-h-0 flex flex-col">
           <DashboardPie rows={pieRows} />
         </div>
       </Card>
@@ -392,9 +396,10 @@ export function Dashboard() {
   const pie = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, value: v.total ?? 0 })).filter((x) => x.value > 0), [src]);
   const srcRows = useMemo(() => Object.entries(src || {}).map(([name, v]: any) => ({ name, ...(v as object) })).sort((a: any, b: any) => (b.total || 0) - (a.total || 0)), [src]);
   const srcTotals = useMemo(() => {
-    const t = { total: 0, follow: 0, meeting: 0, siteVisit: 0, quote: 0, converted: 0, notInt: 0 };
+    const t = { total: 0, lead_value: 0, follow: 0, meeting: 0, siteVisit: 0, quote: 0, converted: 0, notInt: 0 };
     for (const r of srcRows as any[]) {
       t.total += r.total || 0;
+      t.lead_value += r.lead_value || 0;
       t.follow += r['In Followup'] || 0;
       t.meeting += r.Meeting || 0;
       t.siteVisit += r['Site Visit'] || 0;
@@ -407,6 +412,7 @@ export function Dashboard() {
   const productRows = (products?.rows || []).map((row: any) => ({
     name: row.product,
     total: row.total,
+    lead_value: row.lead_value ?? 0,
     'In Followup': row.in_followup,
     Meeting: row.meeting,
     'Site Visit': row.site_visit,
@@ -417,6 +423,7 @@ export function Dashboard() {
   const productPie = productRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
   const productTotals = {
     total: products?.totals?.total ?? 0,
+    lead_value: products?.totals?.lead_value ?? 0,
     follow: products?.totals?.in_followup ?? 0,
     meeting: products?.totals?.meeting ?? 0,
     siteVisit: products?.totals?.site_visit ?? 0,
@@ -427,6 +434,7 @@ export function Dashboard() {
   const categoryRows = (categories?.rows || []).map((row: any) => ({
     name: row.category,
     total: row.total,
+    lead_value: row.lead_value ?? 0,
     'In Followup': row.in_followup,
     Meeting: row.meeting,
     'Site Visit': row.site_visit,
@@ -437,6 +445,7 @@ export function Dashboard() {
   const categoryPie = categoryRows.filter((row: any) => row.total > 0).map((row: any) => ({ name: row.name, value: row.total }));
   const categoryTotals = {
     total: categories?.totals?.total ?? 0,
+    lead_value: categories?.totals?.lead_value ?? 0,
     follow: categories?.totals?.in_followup ?? 0,
     meeting: categories?.totals?.meeting ?? 0,
     siteVisit: categories?.totals?.site_visit ?? 0,
@@ -498,12 +507,6 @@ export function Dashboard() {
       text: CATEGORY_TILE_TEXT[label] || categoryTileText(label),
     };
   });
-  // Conversion is based on current live statuses: Converted / Quotation Sent.
-  const quotationSentCount = Number(d.quotation_sent_history_count ?? d.by_status?.['Quotation sent'] ?? f.quotation_sent ?? 0);
-  const convertedCount = Number(d.converted_from_quotation ?? d.by_status?.Converted ?? f.converted ?? 0);
-  const conversionRatio = quotationSentCount > 0
-    ? `${((convertedCount / quotationSentCount) * 100).toFixed(1)}%`
-    : '0%';
   return (
     <div className="space-y-5">
       <PageHeader title="Leads Funnel — Live Dashboard" subtitle="Status cards, lead value analytics, source mix and product data from live database." />
@@ -601,11 +604,10 @@ export function Dashboard() {
           </div>
         )}
       </Card>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 md:gap-3">
         {[
           { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN'), bg: 'bg-[#0e7490] border-[#0e7490] text-white' },
           { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0, bg: 'bg-[#15803d] border-[#15803d] text-white' },
-          { label: 'Conversion Ratio', value: conversionRatio, bg: 'bg-[#7c3aed] border-[#7c3aed] text-white' },
         ].map((k) => (
           <div key={k.label} className={`card p-4 text-center border ${k.bg}`}>
             <div className="text-2xl sm:text-3xl font-bold tabular-nums">{k.value}</div>
@@ -2497,11 +2499,11 @@ export function Leads() {
                               })}
                             </select>
                             <AutoGrowRemarks
-                              placeholder={`Follow-up ${index + 2} remarks…`}
+                              placeholder={`Follow-up ${(l.work_history?.length || 1) + index + 1} remarks…`}
                               value={form.remarks}
                               onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
                             />
-                            <button type="button" className="btn-primary !px-3 !py-2 text-sm w-full min-h-[44px]" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button>
+                            <button type="button" className="btn-primary !px-3 !py-2 text-sm w-full min-h-[44px]" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button>
                           </div>
                         ))}
                       </div>
@@ -2677,7 +2679,7 @@ export function Leads() {
                       {canEditWorkFields(l) && (isOutreachLocked(l)
                         ? <span className="inline-block mt-1 text-xs font-semibold text-emerald-700">{isConvertedLocked(l) ? '✓ Converted — cannot be edited' : '✓ Not interested — click Reopen for email and quotation'}</span>
                         : <button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !draftFor(l).remarks.trim()} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>)}
-                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${index + 2}`}</button></div>)}
+                      {role === 'EMPLOYEE' && (followupForms[l.id] || []).map((form, index) => <div key={`category-${index}`} className="mt-2"><select className="input text-xs" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" className="btn-primary !px-2 !py-1 text-xs mt-1" disabled={savingId === l.id || !form.remarks.trim()} onClick={() => saveFollowup(l, index)}>{savingId === l.id ? 'Saving…' : `Save follow-up ${(l.work_history?.length || 1) + index + 1}`}</button></div>)}
                     </td>
                     <td className="td align-top">
                       {canEditWorkFields(l) ? (
@@ -2716,7 +2718,7 @@ export function Leads() {
                         <AutoGrowRemarks
                           key={`remark-${index}`}
                           className="mt-2"
-                          placeholder={`Follow-up ${index + 2} remarks…`}
+                          placeholder={`Follow-up ${(l.work_history?.length || 1) + index + 1} remarks…`}
                           value={form.remarks}
                           onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, remarks: e.target.value } : item) }))}
                         />
@@ -4531,6 +4533,7 @@ export function Reports() {
         const mapRows = (rows: any[], nameKey: string) => (rows || []).map((row: any) => ({
           name: row[nameKey],
           total: row.total,
+          lead_value: row.lead_value ?? 0,
           'In Followup': row.in_followup,
           Meeting: row.meeting,
           'Site Visit': row.site_visit,
@@ -4540,6 +4543,7 @@ export function Reports() {
         }));
         const mapTotals = (totals: any) => ({
           total: totals?.total ?? 0,
+          lead_value: totals?.lead_value ?? 0,
           follow: totals?.in_followup ?? 0,
           meeting: totals?.meeting ?? 0,
           siteVisit: totals?.site_visit ?? 0,
@@ -4864,11 +4868,12 @@ export function Reports() {
               </div>
             )}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1040px] text-sm text-center">
+              <table className="w-full table-fixed text-xs text-center">
                 <thead>
                   <tr className="bg-[#1e3a5f] text-white">
                     <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
                     <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
+                    <th className="th !text-white !bg-transparent !text-center">Total Lead Value</th>
                     <th className="th !text-white !bg-transparent !text-center">In Followup</th>
                     <th className="th !text-white !bg-transparent !text-center">Meeting</th>
                     <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
@@ -4882,6 +4887,7 @@ export function Reports() {
                     <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
                       <td className="td font-medium text-center">{r.source}</td>
                       <td className="td font-bold text-center">{r.total}</td>
+                      <td className="td text-center tabular-nums">{inr(r.lead_value)}</td>
                       <td className="td text-center">{r.in_followup}</td>
                       <td className="td text-center">{r.meeting}</td>
                       <td className="td text-center">{r.site_visit}</td>
@@ -4894,6 +4900,7 @@ export function Reports() {
                     <tr className="bg-graphite-100 font-bold">
                       <td className="td text-center">TOTAL</td>
                       <td className="td text-center">{details.totals.total}</td>
+                      <td className="td text-center tabular-nums">{inr(details.totals.lead_value)}</td>
                       <td className="td text-center">{details.totals.in_followup}</td>
                       <td className="td text-center">{details.totals.meeting}</td>
                       <td className="td text-center">{details.totals.site_visit}</td>
@@ -4945,15 +4952,16 @@ export function Reports() {
               )}
               {productErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{productErr}</div>}
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] text-sm text-center">
+                <table className="w-full table-fixed text-xs text-center">
                   <thead><tr className="bg-[#0f766e] text-white">
-                    {['Product', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Product', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
                   </tr></thead>
                   <tbody>
                     {(productDetails?.rows || []).map((row: any, i: number) => (
                       <tr key={row.product} className={i % 2 ? 'bg-teal-50/70' : 'bg-white'}>
                         <td className="td font-medium text-center">{row.product}</td>
                         <td className="td font-bold text-center">{row.total}</td>
+                        <td className="td text-center tabular-nums">{inr(row.lead_value)}</td>
                         <td className="td text-center">{row.in_followup}</td>
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
@@ -4966,6 +4974,7 @@ export function Reports() {
                       <tr className="bg-graphite-100 font-bold">
                         <td className="td text-center">TOTAL</td>
                         <td className="td text-center">{productDetails.totals.total}</td>
+                        <td className="td text-center tabular-nums">{inr(productDetails.totals.lead_value)}</td>
                         <td className="td text-center">{productDetails.totals.in_followup}</td>
                         <td className="td text-center">{productDetails.totals.meeting}</td>
                         <td className="td text-center">{productDetails.totals.site_visit}</td>
@@ -5002,15 +5011,16 @@ export function Reports() {
               )}
               {categoryErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{categoryErr}</div>}
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] text-sm text-center">
+                <table className="w-full table-fixed text-xs text-center">
                   <thead><tr className="bg-[#0e7490] text-white">
-                    {['Category', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Category', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
                   </tr></thead>
                   <tbody>
                     {(categoryDetails?.rows || []).map((row: any, i: number) => (
                       <tr key={row.category} className={i % 2 ? 'bg-cyan-50/70' : 'bg-white'}>
                         <td className="td font-medium text-center">{row.category}</td>
                         <td className="td font-bold text-center">{row.total}</td>
+                        <td className="td text-center tabular-nums">{inr(row.lead_value)}</td>
                         <td className="td text-center">{row.in_followup}</td>
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
@@ -5023,6 +5033,7 @@ export function Reports() {
                       <tr className="bg-graphite-100 font-bold">
                         <td className="td text-center">TOTAL</td>
                         <td className="td text-center">{categoryDetails.totals.total}</td>
+                        <td className="td text-center tabular-nums">{inr(categoryDetails.totals.lead_value)}</td>
                         <td className="td text-center">{categoryDetails.totals.in_followup}</td>
                         <td className="td text-center">{categoryDetails.totals.meeting}</td>
                         <td className="td text-center">{categoryDetails.totals.site_visit}</td>
@@ -5147,10 +5158,10 @@ export function Reports() {
                   </ResponsiveContainer>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[960px] text-sm text-center">
+                  <table className="w-full table-fixed text-xs text-center">
                     <thead>
                       <tr className="bg-[#4338ca] text-white">
-                        {['Month', 'Total Leads', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested', 'Sources', 'Products'].map((h) => (
+                        {['Month', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested', 'Sources', 'Products'].map((h) => (
                           <th key={h} className="th !text-white !bg-transparent !text-center">{h}</th>
                         ))}
                       </tr>
@@ -5160,6 +5171,7 @@ export function Reports() {
                         <tr key={row.month_key || row.month} className={i % 2 ? 'bg-indigo-50/60' : 'bg-white'}>
                           <td className="td font-medium text-center">{row.month}</td>
                           <td className="td font-bold text-center">{row.leads}</td>
+                          <td className="td text-center whitespace-nowrap">{inr(row.lead_value)}</td>
                           <td className="td text-center">{row.in_followup}</td>
                           <td className="td text-center">{row.meeting}</td>
                           <td className="td text-center">{row.site_visit}</td>
