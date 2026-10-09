@@ -212,18 +212,32 @@ def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:
     """
     total = sum(len(g.get("leads", [])) for g in groups)
     all_items = [item for g in groups for item in g.get("leads", [])]
-    direct_n = sum(1 for item in all_items if _is_direct_call(item))
+    direct_n = sum(1 for item in all_items if _is_direct_call(item) and not item.get("is_reminder_due"))
+    reminder_n = sum(1 for item in all_items if item.get("is_reminder_due"))
     if direct_n and direct_n == total:
         subject = f"Direct Call not followed: {total} customer(s) past 24 hours ({date_str})"
         intro = (
             "The following Direct Call customers were not updated within 24 hours. "
             "The assigned employee has not followed them yet:"
         )
+    elif reminder_n and reminder_n == total:
+        subject = f"Not updated: {total} customer(s) past reminder date ({date_str})"
+        intro = (
+            "The following assigned customers were not talked to by their reminder date. "
+            "The assigned employee has not updated them yet:"
+        )
     elif direct_n:
         subject = f"Not updated: {total} customer(s) past due ({date_str})"
         intro = (
             "The following assigned customers were not updated on time. "
-            "Direct Call leads were due within 24 hours. Other leads were due within 3 days:"
+            "Direct Call leads were due within 24 hours. Reminder-date leads were due on their "
+            "reminder date. Other leads were due within 3 days:"
+        )
+    elif reminder_n:
+        subject = f"Not updated: {total} customer(s) past due ({date_str})"
+        intro = (
+            "The following assigned customers were not updated on time. "
+            "Reminder-date leads were due on their reminder date. Other leads were due within 3 days:"
         )
     else:
         subject = f"Not updated: {total} customer(s) past 3-day due ({date_str})"
@@ -235,7 +249,7 @@ def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:
     for g in groups:
         rows += f"<h3>{g.get('employee', '—')} — {len(g.get('leads', []))} not updated</h3><ul>"
         for item in g.get("leads", []):
-            if _is_direct_call(item):
+            if _is_direct_call(item) and not item.get("is_reminder_due"):
                 rows += (
                     f"<li><b>{g.get('employee', 'Employee')}</b> has not followed "
                     f"<b>{item.get('customer_name') or '—'}</b> "
@@ -243,6 +257,16 @@ def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:
                     f"within 24 hours. Phone {item.get('phone') or '—'}, "
                     f"assigned {item.get('assigned_date_str') or '—'}, "
                     f"due {item.get('deadline_str')} — "
+                    f"<a href=\"{item.get('lead_url')}\">open lead</a></li>"
+                )
+            elif item.get("is_reminder_due"):
+                rows += (
+                    f"<li><b>{g.get('employee', 'Employee')}</b> did not talk to "
+                    f"<b>{item.get('customer_name') or '—'}</b> "
+                    f"({item.get('enquiry_number')}) by the reminder date. "
+                    f"Phone {item.get('phone') or '—'}, "
+                    f"assigned {item.get('assigned_date_str') or '—'}, "
+                    f"reminder/overdue {item.get('deadline_str')}, {item.get('days_overdue')} day(s) overdue — "
                     f"<a href=\"{item.get('lead_url')}\">open lead</a></li>"
                 )
             else:

@@ -300,7 +300,6 @@ def _dashboard_history_payload(
                 "category": _normalize_history_category(review),
             }]
 
-        seen_cat_for_lead: set[str] = set()
         for ev in lead_events:
             key = ev.get("progress")
             cat = ev.get("category")
@@ -312,9 +311,6 @@ def _dashboard_history_payload(
                     converted_ids.add(lid)
             if cat:
                 cat_bucket = by_category.setdefault(cat, _empty_progress_counts())
-                if cat not in seen_cat_for_lead:
-                    category_leads.setdefault(cat, set()).add(lid)
-                    seen_cat_for_lead.add(cat)
                 if key:
                     cat_bucket[key] = cat_bucket.get(key, 0) + 1
 
@@ -322,10 +318,10 @@ def _dashboard_history_payload(
         if st_name == STATUS_CONVERTED:
             converted_ids.add(lid)
 
-        # If lead has a current category but no category events, attribute once.
-        cur_cat = _normalize_history_category(review)
-        if cur_cat and cur_cat not in seen_cat_for_lead:
-            category_leads.setdefault(cur_cat, set()).add(lid)
+        # Each lead counts once, under its current category (blank/unknown
+        # reviews collect under "Uncategorized" so totals reconcile).
+        cur_cat = _normalize_history_category(review) or "Uncategorized"
+        category_leads.setdefault(cur_cat, set()).add(lid)
 
     for lid, lead_value, *_rest in rows_q:
         if lid in converted_ids:
@@ -352,7 +348,10 @@ def _dashboard_history_payload(
 
     cat_rows = []
     cat_totals = {**_empty_progress_counts(), "lead_value": 0}
-    for cat in CUSTOMER_REVIEW_ORDER:
+    ordered_cats = list(CUSTOMER_REVIEW_ORDER)
+    if category_leads.get("Uncategorized"):
+        ordered_cats.append("Uncategorized")
+    for cat in ordered_cats:
         data = by_category.get(cat) or _empty_progress_counts()
         row = {
             "category": cat,
@@ -365,7 +364,7 @@ def _dashboard_history_payload(
             "not_interested": int(data.get("not_interested", 0)),
             "lead_value": _as_rupee(sum(
                 float(rows_q_item[1] or 0) for rows_q_item in rows_q
-                if _normalize_history_category(rows_q_item[3]) == cat
+                if (_normalize_history_category(rows_q_item[3]) or "Uncategorized") == cat
             )),
         }
         cat_rows.append(row)

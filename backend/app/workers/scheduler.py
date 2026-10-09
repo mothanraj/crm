@@ -42,6 +42,26 @@ def _lead_url(lead) -> str:
     return f"{settings.FRONTEND_URL.rstrip('/')}/leads/{lead.id}"
 
 
+def _is_reminder_deadline(lead) -> bool:
+    """True when this lead's overdue deadline came from its picked reminder date."""
+    rem = getattr(lead, "reminder_date", None)
+    dl = getattr(lead, "sla_deadline", None)
+    if rem is None or dl is None:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        dl_ist_date = dl.astimezone(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        try:
+            dl_ist_date = dl.date()
+        except Exception:
+            return False
+    try:
+        return dl_ist_date == rem if not hasattr(rem, "date") else dl_ist_date == rem
+    except Exception:
+        return str(dl_ist_date) == str(rem)
+
+
 def _sla_sweep():
     db = SessionLocal()
     try:
@@ -69,7 +89,8 @@ def _sla_sweep():
             st = db.get(LeadStatus, lead.status_id) if lead.status_id else None
             direct = is_direct_call_name(src.name if src else "") and not lead.first_contact_at
             progress = (st.name if st else "") or "follow-up"
-            if direct:
+            reminder_driven = _is_reminder_deadline(lead)
+            if direct and not reminder_driven:
                 body = (
                     f"{owner_name} has not followed Direct Call customer "
                     f"{lead.customer_name or '—'} ({lead.enquiry_number}) within 24 hours. "
@@ -79,6 +100,17 @@ def _sla_sweep():
                 owner_body = (
                     f"You have not updated the Direct Call process for {lead.enquiry_number} "
                     f"({lead.customer_name}) within 24 hours."
+                )
+            elif reminder_driven:
+                body = (
+                    f"{owner_name} did not talk to customer "
+                    f"{lead.customer_name or '—'} ({lead.enquiry_number}) by the reminder date. "
+                    f"Phone: {lead.contact_number or '—'}. Reminder/overdue was {lead.sla_deadline:%d-%b-%Y %H:%M}."
+                )
+                admin_title = "Employee did not follow up"
+                owner_body = (
+                    f"You missed the reminder date follow-up and this lead is overdue for "
+                    f"{lead.enquiry_number} ({lead.customer_name}). Current progress: {progress}."
                 )
             else:
                 body = (
@@ -135,6 +167,7 @@ def _digest_groups(db, rows, now) -> list[dict]:
         else:
             days = 1
         src = db.get(LeadSource, lead.source_id) if lead.source_id else None
+        rem = getattr(lead, "reminder_date", None)
         bucket["leads"].append({
             "enquiry_number": lead.enquiry_number,
             "customer_name": lead.customer_name or "",
@@ -144,6 +177,8 @@ def _digest_groups(db, rows, now) -> list[dict]:
             "days_overdue": days,
             "source": src.name if src else "",
             "lead_url": _lead_url(lead),
+            "reminder_date": rem.isoformat() if rem is not None and hasattr(rem, "isoformat") else (str(rem) if rem else ""),
+            "is_reminder_due": bool(_is_reminder_deadline(lead)),
         })
     return list(groups.values())
 

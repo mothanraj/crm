@@ -2308,7 +2308,7 @@ export function Leads() {
     } finally { setSavingId(null); }
   };
   const tickBtn = (done: boolean) => `inline-flex items-center justify-center w-7 h-7 rounded-md border text-sm shrink-0 ${done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`;
-  const reminderTickable = (lead: any) => !(role === 'EMPLOYEE' && (isOutreachLocked(lead) || isFrozen(lead)));
+  const reminderTickable = (lead: any) => role !== 'EMPLOYEE' && !(role === 'EMPLOYEE' && (isOutreachLocked(lead) || isFrozen(lead)));
   const saveFollowup = async (lead: any, index: number) => {
     const form = followupForms[lead.id]?.[index];
     const actionName = form ? nameOf('statuses', form.progress) : '';
@@ -2328,7 +2328,7 @@ export function Leads() {
         quotation_value: qv || undefined,
         reminder_date: form.reminderDate || undefined,
       });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, reminder_date: data.reminder_date ?? item.reminder_date ?? null, reminder_done: data.reminder_done ?? item.reminder_done ?? false, sla_state: data.sla_state ?? item.sla_state, work_history: [...(item.work_history || []), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), reminder_date: form.reminderDate || null, reminder_done: false, at: new Date().toISOString() }] } : item));
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, reminder_date: data.reminder_date ?? item.reminder_date ?? null, reminder_done: data.reminder_done ?? (form.reminderDate ? false : true), sla_state: data.sla_state ?? item.sla_state, work_history: [...((item.work_history || []).map((h: any) => (h.reminder_date && (!form.reminderDate || String(h.reminder_date).slice(0, 10) !== form.reminderDate) ? { ...h, reminder_done: true } : h))), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), reminder_date: form.reminderDate || null, reminder_done: false, at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
     finally { setSavingId(null); }
@@ -2423,7 +2423,7 @@ export function Leads() {
                     <div className="min-w-0">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Reminder Date</dt>
                       <dd className="text-graphite-900 mt-0.5 tabular-nums inline-flex items-center gap-1.5">
-                        <span className={l.reminder_done ? 'reminder-done' : ''}>{(l.reminder_date || '').slice(0, 10) || '—'}</span>
+                        <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{(l.reminder_date || '').slice(0, 10) || '—'}</span>
                         {l.reminder_date && reminderTickable(l) && (
                           <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>
                         )}
@@ -2636,7 +2636,7 @@ export function Leads() {
                             </div>
                             <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : ''}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : ''}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : ''}`}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2867,7 +2867,7 @@ export function Leads() {
                             <div className="space-y-1 text-[11px] text-graphite-500">
                               {l.work_history.map((entry: any, index: number) => entry.reminder_date ? (
                                 <div key={`remhist-${entry.id || index}`} className="tabular-nums inline-flex items-center gap-1">
-                                  <span className={entry.reminder_done ? 'reminder-done' : ''}>{index + 1}. Reminder: {String(entry.reminder_date).slice(0, 10)}</span>
+                                  <span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{index + 1}. {String(entry.reminder_date).slice(0, 10)}</span>
                                   {entry.id && reminderTickable(l) && (
                                     <button
                                       type="button"
@@ -2886,7 +2886,7 @@ export function Leads() {
                           ) : null}
                           {reminderOf(l) && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
                             <div className="inline-flex items-center gap-1.5 mt-1">
-                              <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : ''}`}>{reminderOf(l)}</span>
+                              <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{reminderOf(l)}</span>
                               {reminderTickable(l) && (
                                 <button
                                   type="button"
@@ -3777,8 +3777,8 @@ export function LeadDetail({ id }: { id: string }) {
               <p className="text-sm whitespace-pre-wrap">{l.employee_remarks}</p>
               {l.reminder_date && !(l.activities || []).some((a: any) => a.reminder_date && String(a.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
                 <p className="text-xs text-graphite-500 mt-2 tabular-nums inline-flex items-center gap-1.5">
-                  <span className={l.reminder_done ? 'reminder-done' : ''}>Reminder: {String(l.reminder_date).slice(0, 10)}</span>
-                  {!leadLocked && !frozen && (
+                  <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(l.reminder_date).slice(0, 10)}</span>
+                  {role !== 'EMPLOYEE' && !leadLocked && !frozen && (
                     <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={toggleDetailReminder} className={`inline-flex items-center justify-center w-7 h-7 rounded-md border text-sm shrink-0 ${l.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
                   )}
                 </p>
@@ -3811,8 +3811,8 @@ export function LeadDetail({ id }: { id: string }) {
                     <p className="text-sm text-graphite-700 mt-1 whitespace-pre-wrap">{a.notes}</p>
                     {a.reminder_date && (
                       <p className="text-xs text-graphite-500 mt-1 tabular-nums inline-flex items-center gap-1.5">
-                        <span className={a.reminder_done ? 'reminder-done' : ''}>Reminder: {String(a.reminder_date).slice(0, 10)}</span>
-                        {!leadLocked && !frozen && a.id && (
+                        <span className={a.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(a.reminder_date).slice(0, 10)}</span>
+                        {role !== 'EMPLOYEE' && !leadLocked && !frozen && a.id && (
                           <button type="button" title={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={() => toggleDetailEntryReminder(a)} className={`inline-flex items-center justify-center w-6 h-6 rounded-md border text-xs shrink-0 ${a.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
                         )}
                       </p>

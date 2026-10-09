@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
+  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { api } from '../services/api';
@@ -118,6 +118,13 @@ function seriesColor(label: string, index: number, groupBy?: string | null) {
   return CHART_COLORS[index % CHART_COLORS.length];
 }
 
+/** One shared palette so a series keeps the SAME color in the line chart and the bar chart. */
+function chartSeriesColor(index: number) {
+  return CHART_COLORS[index % CHART_COLORS.length];
+}
+
+/** One shared palette so each bar/point keeps a distinct color. */
+
 function inr(n: number | null | undefined) {
   if (n == null || Number.isNaN(Number(n))) return '—';
   return `₹${Math.round(Number(n)).toLocaleString('en-IN')}`;
@@ -169,51 +176,72 @@ async function downloadBlob(path: string, filename: string, params: Record<strin
   }
 }
 
-function MiniCharts({
+function GroupedColumnSection({
   title,
   series,
+  groupKeys,
+  groupBy,
   money,
   metricLabel,
-  color = '#1971C2',
+  color,
+  perPointColors,
 }: {
   title: string;
-  series: Array<{ label: string; value: number }>;
+  series: Array<{ label: string; value: number; [k: string]: any }>;
+  groupKeys: string[];
+  groupBy?: string | null;
   money: boolean;
   metricLabel: string;
   color?: string;
+  /** When true, each bar gets its own palette color. */
+  perPointColors?: boolean;
 }) {
   const fmt = (v: number) => (money ? inr(v) : num(v));
+  const multi = groupKeys.length > 0;
+  // Each bar is labeled with its own number (values stay in tooltips too).
+  const num_label = (v: any) => {
+    const n = Number(v);
+    if (!n) return '';
+    return fmt(n);
+  };
+  const pctStyle = { fontSize: 10, fill: '#475569' };
   return (
-    <div className="rounded-xl border border-graphite-200 p-3 space-y-3">
-      <div>
-        <p className="text-sm font-semibold text-graphite-900">{title}</p>
-      </div>
+    <div className="rounded-xl border border-graphite-200 p-3 space-y-2">
+      <p className="text-sm font-semibold text-graphite-900">{title}</p>
+      <p className="text-xs text-graphite-500">Grouped Column Chart</p>
       {!series.length ? (
         <EmptyState title="No data" hint="Nothing in this date range." />
       ) : (
-        <div className="grid grid-cols-1 gap-3">
-          <div className="h-56">
-            <ResponsiveContainer>
-              <LineChart data={series}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={16} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
-                <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2.5} dot={{ r: 2 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="h-48">
-            <ResponsiveContainer>
-              <BarChart data={series}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={16} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
-                <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <div className="h-64">
+          <ResponsiveContainer>
+            <BarChart data={series} barCategoryGap="28%" barGap={3}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={16} />
+              <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
+              <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {multi ? groupKeys.map((key, index) => (
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  name={key}
+                  fill={seriesColor(key, index, groupBy)}
+                  radius={[3, 3, 0, 0]}
+                >
+                  <LabelList dataKey={key} position="top" formatter={num_label} style={pctStyle} />
+                </Bar>
+              )) : (
+                <Bar dataKey="value" name={metricLabel} fill={color || '#1971C2'} radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="value" position="top" formatter={num_label} style={pctStyle} />
+                  {perPointColors
+                    ? series.map((row: any, index: number) => (
+                      <Cell key={row.key || index} fill={chartSeriesColor(index)} />
+                    ))
+                    : null}
+                </Bar>
+              )}
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       )}
     </div>
@@ -512,59 +540,39 @@ export function Analytics() {
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 {multiGroup ? (
                   <>
-                    <div className="rounded-xl border border-graphite-200 p-3 space-y-2">
-                      <p className="text-sm font-semibold text-graphite-900">
-                        Period A · {data.period_a?.from} – {data.period_a?.to} · Total {fmt(data.period_a?.total)}
-                      </p>
-                      <div className="h-64">
-                        <ResponsiveContainer>
-                          <BarChart data={data.period_a?.series || []} margin={{ bottom: 36 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                            <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
-                            <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
-                            <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                              {(data.period_a?.series || []).map((row: any, index: number) => (
-                                <Cell key={row.key || index} fill={seriesColor(String(row.label || ''), index, data.group_by)} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-graphite-200 p-3 space-y-2">
-                      <p className="text-sm font-semibold text-graphite-900">
-                        Period B · {data.period_b?.from} – {data.period_b?.to} · Total {fmt(data.period_b?.total)}
-                      </p>
-                      <div className="h-64">
-                        <ResponsiveContainer>
-                          <BarChart data={data.period_b?.series || []} margin={{ bottom: 36 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                            <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
-                            <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
-                            <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                              {(data.period_b?.series || []).map((row: any, index: number) => (
-                                <Cell key={row.key || index} fill={seriesColor(String(row.label || ''), index, data.group_by)} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
+                    <GroupedColumnSection
+                      title={`Period A · ${data.period_a?.from} – ${data.period_a?.to} · Total ${fmt(data.period_a?.total)}`}
+                      series={data.period_a?.series || []}
+                      groupKeys={groupKeys}
+                      groupBy={data.group_by}
+                      money={money}
+                      metricLabel={metricLabel}
+                    />
+                    <GroupedColumnSection
+                      title={`Period B · ${data.period_b?.from} – ${data.period_b?.to} · Total ${fmt(data.period_b?.total)}`}
+                      series={data.period_b?.series || []}
+                      groupKeys={groupKeys}
+                      groupBy={data.group_by}
+                      money={money}
+                      metricLabel={metricLabel}
+                    />
                   </>
                 ) : (
                   <>
-                    <MiniCharts
+                    <GroupedColumnSection
                       title={`Period A · ${data.period_a?.from} – ${data.period_a?.to} · Total ${fmt(data.period_a?.total)}`}
                       series={data.period_a?.series || []}
+                      groupKeys={[]}
+                      groupBy={data.group_by}
                       money={money}
                       metricLabel={metricLabel}
                       color="#1971C2"
                     />
-                    <MiniCharts
+                    <GroupedColumnSection
                       title={`Period B · ${data.period_b?.from} – ${data.period_b?.to} · Total ${fmt(data.period_b?.total)}`}
                       series={data.period_b?.series || []}
+                      groupKeys={[]}
+                      groupBy={data.group_by}
                       money={money}
                       metricLabel={metricLabel}
                       color="#65A30D"
@@ -575,64 +583,21 @@ export function Analytics() {
             ) : !series.length ? (
               <EmptyState title="No data for this selection" hint="Try other years, months, or dates." />
             ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="h-80">
-                  <ResponsiveContainer>
-                    <LineChart data={series}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={20} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={money} width={56} />
-                      <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                      {multiGroup && <Legend wrapperStyle={{ fontSize: 11 }} />}
-                      {multiGroup ? groupKeys.map((key, index) => (
-                        <Line
-                          key={key}
-                          type="monotone"
-                          dataKey={key}
-                          name={key}
-                          stroke={seriesColor(key, index, data.group_by)}
-                          strokeWidth={2.2}
-                          dot={{ r: 2 }}
-                        />
-                      )) : (
-                        <Line type="monotone" dataKey="value" stroke="#1971C2" strokeWidth={2.5} dot={{ r: 3 }} />
-                      )}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="h-80">
-                  <ResponsiveContainer>
-                    <BarChart data={series}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} minTickGap={20} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={money} width={56} />
-                      <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
-                      {multiGroup && <Legend wrapperStyle={{ fontSize: 11 }} />}
-                      {multiGroup ? groupKeys.map((key, index) => (
-                        <Bar
-                          key={key}
-                          dataKey={key}
-                          name={key}
-                          fill={seriesColor(key, index, data.group_by)}
-                          radius={[3, 3, 0, 0]}
-                        />
-                      )) : (
-                        <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                          {series.map((row: any, index: number) => (
-                            <Cell key={row.key || index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                          ))}
-                        </Bar>
-                      )}
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              <GroupedColumnSection
+                title={`${metricLabel} · ${scopeLabel}`}
+                series={series}
+                groupKeys={multiGroup ? groupKeys : []}
+                groupBy={data.group_by}
+                money={money}
+                metricLabel={metricLabel}
+                perPointColors
+              />
             )}
           </Card>
 
           <Card title="Comparison data">
             {periodMode && !multiGroup ? (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
                 <div className="rounded-xl border border-graphite-200 px-3 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-graphite-500">Period A</div>
                   <div className="text-lg font-semibold tabular-nums mt-1">{fmt(data.period_a?.total)}</div>
@@ -652,7 +617,7 @@ export function Analytics() {
               </div>
             ) : periodMode && multiGroup ? (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
                   <div className="rounded-xl border border-graphite-200 px-3 py-3">
                     <div className="text-[11px] uppercase tracking-wide text-graphite-500">Period A</div>
                     <div className="text-lg font-semibold tabular-nums mt-1">{fmt(data.period_a?.total)}</div>
@@ -668,13 +633,13 @@ export function Analytics() {
                     </div>
                   </div>
                 </div>
-                <div className="overflow-auto">
-                  <table className="w-full text-sm min-w-[480px]">
+                <div className="overflow-auto flex justify-center">
+                  <table className="text-sm min-w-[480px] max-w-3xl w-full text-center">
                     <thead>
-                      <tr className="text-left text-graphite-500 border-b border-graphite-200">
-                        <th className="py-2 pr-3 font-medium">{data.x_title || 'Group'}</th>
-                        <th className="py-2 pr-3 font-medium text-right">Period A</th>
-                        <th className="py-2 font-medium text-right">Period B</th>
+                      <tr className="text-graphite-500 border-b border-graphite-200">
+                        <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Group'}</th>
+                        <th className="py-2 px-3 font-medium text-center">Period A</th>
+                        <th className="py-2 px-3 font-medium text-center">Period B</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -684,14 +649,14 @@ export function Analytics() {
                         const bVal = (data.period_b?.series || []).find((r: any) => r.key === key)?.value ?? 0;
                         return (
                           <tr key={key} className="border-b border-graphite-100">
-                            <td className="py-2 pr-3">
+                            <td className="py-2 px-3 text-center">
                               <span className="inline-flex items-center gap-2">
                                 <span className="inline-block w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: color }} />
                                 {key}
                               </span>
                             </td>
-                            <td className="py-2 pr-3 text-right tabular-nums font-medium">{fmt(aVal)}</td>
-                            <td className="py-2 text-right tabular-nums font-medium">{fmt(bVal)}</td>
+                            <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(aVal)}</td>
+                            <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(bVal)}</td>
                           </tr>
                         );
                       })}
@@ -700,39 +665,39 @@ export function Analytics() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-auto">
-                <table className="w-full text-sm min-w-[420px]">
+              <div className="overflow-auto flex justify-center">
+                <table className="text-sm min-w-[420px] max-w-3xl w-full text-center">
                   <thead>
-                    <tr className="text-left text-graphite-500 border-b border-graphite-200">
-                      <th className="py-2 pr-3 font-medium">{data.x_title || 'Label'}</th>
+                    <tr className="text-graphite-500 border-b border-graphite-200">
+                      <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Label'}</th>
                       {multiGroup ? groupKeys.map((key, index) => (
-                        <th key={key} className="py-2 pr-2 font-medium text-right whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5 justify-end">
+                        <th key={key} className="py-2 px-2 font-medium text-center whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5 justify-center">
                             <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: seriesColor(key, index, data.group_by) }} />
                             {key}
                           </span>
                         </th>
                       )) : null}
-                      <th className="py-2 font-medium text-right">{multiGroup ? 'Total' : metricLabel}</th>
+                      <th className="py-2 px-3 font-medium text-center">{multiGroup ? 'Total' : metricLabel}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(data.rows || series).map((row: any) => (
                       <tr key={row.key} className="border-b border-graphite-100">
-                        <td className="py-2 pr-3 text-graphite-800">{row.label}</td>
+                        <td className="py-2 px-3 text-center text-graphite-800">{row.label}</td>
                         {multiGroup ? groupKeys.map((key) => (
-                          <td key={key} className="py-2 pr-2 text-right tabular-nums font-medium">{fmt(row[key] ?? 0)}</td>
+                          <td key={key} className="py-2 px-2 text-center tabular-nums font-medium">{fmt(row[key] ?? 0)}</td>
                         )) : null}
-                        <td className="py-2 text-right tabular-nums font-medium">{fmt(row.value)}</td>
+                        <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(row.value)}</td>
                       </tr>
                     ))}
                     <tr>
-                      <td className="py-2 pr-3 font-semibold">Total</td>
+                      <td className="py-2 px-3 font-semibold text-center">Total</td>
                       {multiGroup ? groupKeys.map((key) => {
                         const colTotal = (data.rows || series).reduce((sum: number, row: any) => sum + Number(row[key] || 0), 0);
-                        return <td key={key} className="py-2 pr-2 text-right tabular-nums font-semibold">{fmt(colTotal)}</td>;
+                        return <td key={key} className="py-2 px-2 text-center tabular-nums font-semibold">{fmt(colTotal)}</td>;
                       }) : null}
-                      <td className="py-2 text-right tabular-nums font-semibold">{fmt(data.total)}</td>
+                      <td className="py-2 px-3 text-center tabular-nums font-semibold">{fmt(data.total)}</td>
                     </tr>
                   </tbody>
                 </table>

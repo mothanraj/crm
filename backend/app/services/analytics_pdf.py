@@ -6,13 +6,12 @@ from io import BytesIO
 from xml.sax.saxutils import escape
 
 from reportlab.graphics.charts.barcharts import VerticalBarChart
-from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing, Line, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Table, TableStyle
 
 from app.services.report_pdf import _brand_logo, _page_header_fn
 
@@ -22,6 +21,58 @@ GREEN = colors.HexColor("#65A30D")
 MUTED = colors.HexColor("#475569")
 GRID = colors.HexColor("#e2e8f0")
 BORDER = colors.HexColor("#cbd5e1")
+
+# Same hues as the web page so the PDF chart matches (frontend analytics.tsx).
+SERIES_PALETTE = [
+    "#1971C2", "#65A30D", "#E8890C", "#7C3AED", "#0e7490",
+    "#DC2626", "#DB2777", "#0891B2", "#CA8A04",
+]
+PRODUCT_PDF_COLORS = {
+    "Two Post Stack Parking": "#1971C2",
+    "Four Post Stack Parking": "#0e7490",
+    "Pit Stack Parking": "#65A30D",
+    "Puzzle Parking": "#7C3AED",
+    "Pit Puzzle Parking": "#DB2777",
+    "Tower Parking": "#E8890C",
+    "Shuttle Parking": "#0891B2",
+    "Car Elevator": "#CA8A04",
+    "ASRS Parking": "#DC2626",
+}
+CATEGORY_PDF_COLORS = {
+    "A+ (Immediate)": "#D946EF",
+    "A (3-6 months)": "#EC4899",
+    "B (6-9 months)": "#6366F1",
+    "C (Planning Stage)": "#64748B",
+}
+
+
+def group_color(key: str, index: int, group_by: str | None):
+    """Web-parity color for one group series (category/product punya fixed hues)."""
+    label = str(key or "")
+    if group_by == "category" and label in CATEGORY_PDF_COLORS:
+        return colors.HexColor(CATEGORY_PDF_COLORS[label])
+    if group_by == "product" and label in PRODUCT_PDF_COLORS:
+        return colors.HexColor(PRODUCT_PDF_COLORS[label])
+    return colors.HexColor(SERIES_PALETTE[index % len(SERIES_PALETTE)])
+
+
+def group_legend_paragraph(group_keys: list[str], group_by: str | None) -> Paragraph:
+    """Centered color-key strip mirroring the web chart legend."""
+    parts = []
+    for i, key in enumerate(group_keys):
+        c = group_color(key, i, group_by)
+        try:
+            hexcode = "%02x%02x%02x" % (
+                int(c.red * 255), int(c.green * 255), int(c.blue * 255),
+            )
+        except Exception:
+            hexcode = "1971C2"
+        parts.append(f'<font color="#{hexcode}">■</font> {escape(str(key))}')
+    style = ParagraphStyle(
+        "legend", fontName="Helvetica", fontSize=8, leading=11,
+        textColor=MUTED, alignment=1, spaceBefore=4, spaceAfter=2,
+    )
+    return Paragraph("&nbsp;&nbsp;&nbsp;".join(parts), style)
 
 
 def _inr(n) -> str:
@@ -122,34 +173,17 @@ def _chart_frame(width: float, height: float, title: str) -> Drawing:
     return drawing
 
 
-def _line_chart(series: list[dict], *, title: str, color, width: float, height: float) -> Drawing:
-    drawing = _chart_frame(width, height, title)
-    if not series:
-        drawing.add(String(width / 2, height / 2, "No data", textAnchor="middle", fontSize=10, fillColor=MUTED))
-        return drawing
-
-    rotate = len(series) > 6
-    left = 58
-    bottom = 48 if rotate else 36
-    top = 30
-    right = 18
-
-    chart = HorizontalLineChart()
-    chart.x = left
-    chart.y = bottom
-    chart.width = width - left - right
-    chart.height = height - bottom - top
-    chart.data = [[float(row.get("value") or 0) for row in series]]
-    chart.categoryAxis.categoryNames = _x_labels(series)
-    _style_axes(chart, rotate_x=rotate)
-    chart.lines[0].strokeColor = color
-    chart.lines[0].strokeWidth = 2.4
-    chart.lines[0].symbol = None
-    drawing.add(chart)
-    return drawing
-
-
-def _bar_chart(series: list[dict], *, title: str, color, width: float, height: float) -> Drawing:
+def _bar_chart(
+    series: list[dict],
+    *,
+    title: str,
+    color,
+    width: float,
+    height: float,
+    group_keys: list[str] | None = None,
+    group_by: str | None = None,
+    money: bool = False,
+) -> Drawing:
     drawing = _chart_frame(width, height, title)
     if not series:
         drawing.add(String(width / 2, height / 2, "No data", textAnchor="middle", fontSize=10, fillColor=MUTED))
@@ -166,14 +200,34 @@ def _bar_chart(series: list[dict], *, title: str, color, width: float, height: f
     chart.y = bottom
     chart.width = width - left - right
     chart.height = height - bottom - top
-    chart.data = [[float(row.get("value") or 0) for row in series]]
+    groups = [str(k) for k in (group_keys or []) if k]
+    if groups:
+        # Grouped columns: one series per group key, like the web chart.
+        chart.data = [[float(row.get(g) or 0) for row in series] for g in groups]
+        for i, g in enumerate(groups):
+            chart.bars[i].fillColor = group_color(g, i, group_by)
+            chart.bars[i].strokeColor = group_color(g, i, group_by)
+        chart.barWidth = max(4, min(12, (chart.width / max(len(series) * len(groups), 1)) * 0.7))
+        chart.groupSpacing = 8
+        chart.barSpacing = 1.5
+    else:
+        chart.data = [[float(row.get("value") or 0) for row in series]]
+        chart.bars[0].fillColor = color
+        chart.bars[0].strokeColor = color
+        chart.barWidth = max(8, min(22, (chart.width / max(len(series), 1)) * 0.55))
+        chart.groupSpacing = 10
+        chart.barSpacing = 2
     chart.categoryAxis.categoryNames = _x_labels(series)
     _style_axes(chart, rotate_x=rotate)
-    chart.bars[0].fillColor = color
-    chart.bars[0].strokeColor = color
-    chart.barWidth = max(8, min(22, (chart.width / max(len(series), 1)) * 0.55))
-    chart.groupSpacing = 10
-    chart.barSpacing = 2
+    # Number labels above each bar (raw values, like the web chart).
+    data_max = max((v for row in chart.data for v in row), default=0)
+    if data_max:
+        chart.valueAxis.valueMax = data_max * 1.2
+        chart.barLabelFormat = (
+            lambda v, _m=money: _fmt(v, _m) if v else ""
+        )
+        chart.barLabels.nudge = 10
+        chart.barLabels.fontSize = 7
     drawing.add(chart)
     return drawing
 
@@ -243,6 +297,9 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
     # Tall enough for axis labels; one chart row so logo + table stay on one page.
     chart_h = 100 * mm
 
+    group_by = (payload.get("group_by") or "").strip() or None
+    group_keys = [str(k) for k in (payload.get("group_keys") or []) if k]
+
     if period_mode:
         series_a = _downsample(list((payload.get("period_a") or {}).get("series") or []))
         series_b = _downsample(list((payload.get("period_b") or {}).get("series") or []))
@@ -252,19 +309,25 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         b_to = (payload.get("period_b") or {}).get("to")
         a_total = _fmt((payload.get("period_a") or {}).get("total"), money)
         b_total = _fmt((payload.get("period_b") or {}).get("total"), money)
-        left = _line_chart(
+        left = _bar_chart(
             series_a,
             title=f"Period A  |  {a_from} – {a_to}  |  {a_total}",
             color=BLUE,
             width=chart_w,
             height=chart_h,
+            group_keys=group_keys,
+            group_by=group_by,
+            money=money,
         )
-        right = _line_chart(
+        right = _bar_chart(
             series_b,
             title=f"Period B  |  {b_from} – {b_to}  |  {b_total}",
             color=GREEN,
             width=chart_w,
             height=chart_h,
+            group_keys=group_keys,
+            group_by=group_by,
+            money=money,
         )
         charts = Table(
             [[left, right]],
@@ -272,9 +335,19 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         )
     else:
         series = _downsample(list(payload.get("series") or []))
-        line = _line_chart(series, title="Trend (line)", color=BLUE, width=chart_w, height=chart_h)
-        bar = _bar_chart(series, title="Comparison (bar)", color=BLUE, width=chart_w, height=chart_h)
-        charts = Table([[line, bar]], colWidths=[chart_w + gap / 2, chart_w + gap / 2])
+        bar = _bar_chart(
+            series,
+            title="Grouped Column Chart",
+            color=BLUE,
+            width=page_w,
+            height=chart_h,
+            group_keys=group_keys,
+            group_by=group_by,
+            money=money,
+        )
+        charts = Table([[bar]], colWidths=[page_w])
+
+    legend = group_legend_paragraph(group_keys, group_by) if group_keys else None
 
     charts.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -285,7 +358,6 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
-    group_keys = [str(k) for k in (payload.get("group_keys") or []) if k]
     if period_mode and group_keys:
         rows = [["Group", "Period A", "Period B"]]
         map_a = {str(r.get("key")): r.get("value") for r in ((payload.get("period_a") or {}).get("series") or [])}
@@ -348,22 +420,28 @@ def build_analytics_compare_pdf(payload: dict) -> bytes:
         ("RIGHTPADDING", (0, 0), (-1, -1), 4 if col_count > 4 else 10),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
+    table.hAlign = "CENTER"
 
     note = Paragraph(
         "Y-axis uses compact units (k / L / Cr) when values are large so labels stay visible.",
         styles["note"],
     )
 
+    # Page 1: chart only. Page 2: comparison table only.
     story = [
         subtitle,
         charts,
-        Spacer(1, 8),
+    ]
+    if legend is not None:
+        story.append(legend)
+    story += [
+        note,
+        PageBreak(),
         Paragraph("Comparison data", styles["h"]),
         table,
-        note,
     ]
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buf.getvalue()
