@@ -493,15 +493,17 @@ export function Dashboard() {
       const name = String(r.name || '');
       if (label === 'B (6-9 months)') return name === 'B (6-9 months)' || name === 'B (1 year)';
       if (label === 'C (Planning Stage)') return name === 'C (Planning Stage)' || name === 'C (plan stage)' || name === 'Planning Stage';
+      if (label === 'A+ (Immediate)') return name === 'A+ (Immediate)' || name === 'A+';
+      if (label === 'A (3-6 months)') return name === 'A (3-6 months)' || name === 'A';
       return name === label;
     });
     return Number(row?.total || 0);
   };
   // Category percentages use the current live lead population as the 100% base.
-  const categoryBase = Math.max(1, Number(d.total ?? f.total ?? 0));
+  const categoryBase = Number(d.total ?? f.total ?? 0);
   const categoryTiles = categoryLabels.map((label) => {
     const count = categoryCountFor(label);
-    const pct = Math.round((count / categoryBase) * 100);
+    const pct = categoryBase > 0 ? ((count / categoryBase) * 100).toFixed(1) : '0.0';
     return {
       label,
       value: `${pct}%`,
@@ -527,7 +529,7 @@ export function Dashboard() {
               {tiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
                   <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
-                  <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
                 </div>
               ))}
             </div>
@@ -542,7 +544,7 @@ export function Dashboard() {
               {categoryTiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
                   <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
-                  <div className="text-2xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
                   <div className="text-xs opacity-85 mt-1 leading-tight">{t.hint}</div>
                 </div>
               ))}
@@ -607,10 +609,11 @@ export function Dashboard() {
           </div>
         )}
       </Card>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 md:gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
         {[
           { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN'), bg: 'bg-[#0e7490] border-[#0e7490] text-white' },
           { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0, bg: 'bg-[#15803d] border-[#15803d] text-white' },
+          { label: 'Conversion Ratio', value: Number(d.quotation_sent_history_count || 0) > 0 ? `${((Number(d.converted_from_quotation || 0) / Number(d.quotation_sent_history_count || 0)) * 100).toFixed(1)}%` : '0.0%', bg: 'bg-[#7c3aed] border-[#7c3aed] text-white' },
         ].map((k) => (
           <div key={k.label} className={`card p-4 text-center border ${k.bg}`}>
             <div className="text-2xl sm:text-3xl font-bold tabular-nums">{k.value}</div>
@@ -1022,6 +1025,9 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
   onPdf: () => void;
   pdfBusy: boolean;
 }) {
+  const quotationSent = Number((data?.progress || []).find((row: any) => row.label === 'Quotation sent')?.count || 0);
+  const converted = Number((data?.progress || []).find((row: any) => row.label === 'Converted')?.count || 0);
+  const conversionRatio = quotationSent > 0 ? `${((converted / quotationSent) * 100).toFixed(1)}%` : '0.0%';
   return (
     <Card title={title} action={(
       <button type="button" className="btn-secondary" disabled={pdfBusy || loading} onClick={onPdf}>
@@ -1034,9 +1040,10 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
           <div className="text-xs font-semibold text-graphite-600 uppercase tracking-wide mb-2">Category</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {(data?.category || []).map((row: any) => (
-              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#64748B]'} ${CATEGORY_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
-                <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+              <div key={row.label} className={`${REPORT_CATEGORY_BG[row.label] || 'bg-[#64748B]'} ${CATEGORY_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-4 shadow-sm min-h-[8rem] flex flex-col justify-center`}>
+                <div className="text-xs sm:text-sm uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
+                <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+                <div className="text-sm sm:text-base font-semibold mt-1 tabular-nums break-words">{inr(row.lead_value ?? 0)}</div>
               </div>
             ))}
           </div>
@@ -1044,16 +1051,17 @@ function ReportBlock({ title, controls, data, loading, error, onPdf, pdfBusy }: 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {(data?.progress || []).map((row: any) => (
               <div key={row.label} className={`${REPORT_PROGRESS_BG[row.label] || 'bg-[#1e3a5f]'} ${PROGRESS_TILE_TEXT[row.label] || 'text-white'} rounded-lg px-3 py-3 shadow-sm`}>
-                <div className="text-[10px] uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
-                <div className="text-2xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
+                <div className="text-xs sm:text-sm uppercase tracking-wide opacity-90 font-semibold leading-tight">{row.label}</div>
+                <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums">{row.count ?? 0}</div>
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-4">
             {[
               { label: 'Total lead value', value: inr(data?.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
-              { label: 'Quotation value', value: inr(data?.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
+              { label: 'Total quotation value', value: inr(data?.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
               { label: 'Total converted value', value: inr(data?.converted_quotation_value ?? 0), bg: 'bg-[#15803d]' },
+              { label: 'Conversion ratio', value: conversionRatio, bg: 'bg-[#7c3aed]' },
             ].map((t) => (
               <div key={t.label} className={`${t.bg} text-white rounded-lg px-3 py-4 shadow-sm text-center`}>
                 <div className="text-xs sm:text-sm uppercase tracking-wide opacity-90 font-semibold leading-tight">{t.label}</div>
@@ -1086,14 +1094,19 @@ function PeriodReportPage({
   const [weekYear, setWeekYear] = useState(today.getFullYear());
   const [weekFrom, setWeekFrom] = useState(() => reportYmd(today));
   const [weekTo, setWeekTo] = useState(() => addDaysYmd(reportYmd(today), 6));
+  const [rangeFrom, setRangeFrom] = useState(() => reportYmd(today));
+  const [rangeTo, setRangeTo] = useState(() => reportYmd(today));
   const month = `${monthYear}-${String(monthIndex).padStart(2, '0')}`;
   const [monthData, setMonthData] = useState<any>(null);
   const [weekData, setWeekData] = useState<any>(null);
+  const [rangeData, setRangeData] = useState<any>(null);
   const [monthErr, setMonthErr] = useState('');
   const [weekErr, setWeekErr] = useState('');
+  const [rangeErr, setRangeErr] = useState('');
   const [monthLoading, setMonthLoading] = useState(!pickEmployee);
   const [weekLoading, setWeekLoading] = useState(!pickEmployee);
-  const [pdfBusy, setPdfBusy] = useState<'month' | 'week' | ''>('');
+  const [rangeLoading, setRangeLoading] = useState(!pickEmployee);
+  const [pdfBusy, setPdfBusy] = useState<'month' | 'week' | 'range' | ''>('');
   const [pdfErr, setPdfErr] = useState('');
   const ready = !pickEmployee || Boolean(employeeId);
   const selectedName = employees.find((e) => e.id === employeeId)?.name || '';
@@ -1112,18 +1125,21 @@ function PeriodReportPage({
     return params;
   }
 
-  async function downloadPdf(mode: 'month' | 'week') {
+  async function downloadPdf(mode: 'month' | 'week' | 'range') {
     if (!ready) return;
     setPdfBusy(mode);
     setPdfErr('');
     try {
       const params: Record<string, string> = withEmployee({ mode });
       if (mode === 'month') params.month = month;
-      else { params.from_date = weekFrom; params.to_date = weekTo; }
+      else {
+        params.from_date = mode === 'range' ? rangeFrom : weekFrom;
+        params.to_date = mode === 'range' ? rangeTo : weekTo;
+      }
       const who = selectedName ? selectedName.replace(/[^\w.-]+/g, '-') : 'my';
       const filename = mode === 'month'
         ? `report-${who}-${month}.pdf`
-        : `report-${who}-${weekFrom}-to-${weekTo}.pdf`;
+        : `report-${who}-${params.from_date}-to-${params.to_date}.pdf`;
       await downloadReport('/dashboard/period-report/pdf', filename, params);
     } catch (e: any) {
       setPdfErr(e?.message || 'Could not download the PDF');
@@ -1172,6 +1188,20 @@ function PeriodReportPage({
     return () => ctrl.abort();
   }, [weekFrom, weekTo, ready, employeeId]);
 
+  useEffect(() => {
+    if (!ready) { setRangeData(null); setRangeLoading(false); return; }
+    if (!rangeFrom || !rangeTo || rangeFrom > rangeTo) {
+      setRangeLoading(false); setRangeErr('From date must be on or before to date'); return;
+    }
+    const ctrl = new AbortController();
+    setRangeLoading(true); setRangeErr('');
+    api.get('/dashboard/period-report', { params: withEmployee({ mode: 'custom', from_date: rangeFrom, to_date: rangeTo }), signal: ctrl.signal })
+      .then((r) => setRangeData(r.data))
+      .catch((e: any) => { if (!ctrl.signal.aborted) setRangeErr(e?.response?.data?.detail || 'Could not load the date range report'); })
+      .finally(() => { if (!ctrl.signal.aborted) setRangeLoading(false); });
+    return () => ctrl.abort();
+  }, [rangeFrom, rangeTo, ready, employeeId]);
+
   return (
     <div className="space-y-5">
       <PageHeader title={title} subtitle={subtitle} />
@@ -1213,6 +1243,24 @@ function PeriodReportPage({
                   <select className="input mt-1" value={monthIndex} onChange={(e) => setMonthIndex(Number(e.target.value))}>
                     {REPORT_MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
                   </select>
+                </label>
+              </div>
+            )}
+          />
+          <ReportBlock
+            title={pickEmployee && selectedName ? `Date range · ${selectedName}` : 'Date range'}
+            data={rangeData}
+            loading={rangeLoading}
+            error={rangeErr}
+            pdfBusy={pdfBusy === 'range'}
+            onPdf={() => { void downloadPdf('range'); }}
+            controls={(
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm block w-[180px]">From date
+                  <input type="date" className="input mt-1" max={reportYmd(today)} value={rangeFrom} onChange={(e) => setRangeFrom(clampYmdToToday(e.target.value))} />
+                </label>
+                <label className="text-sm block w-[180px]">To date
+                  <input type="date" className="input mt-1" max={reportYmd(today)} value={rangeTo} onChange={(e) => setRangeTo(clampYmdToToday(e.target.value))} />
                 </label>
               </div>
             )}
@@ -2044,7 +2092,7 @@ function formatProgressOccurrence(action: string, occurrence: number) {
 function labeledProgressHistory(history: any[] | undefined) {
   const counts: Record<string, number> = {};
   return (history || []).map((entry) => {
-    const action = entry.work_action || '';
+    const action = entry.work_action || entry.progress || '';
     if (REPEATABLE_PROGRESS.has(action)) {
       counts[action] = (counts[action] || 0) + 1;
       return { ...entry, displayAction: formatProgressOccurrence(action, counts[action]) };
@@ -2067,7 +2115,7 @@ export function Leads() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
-  const [city, setCity] = useState('');
+  const [category, setCategory] = useState('');
   const [sla, setSla] = useState('');
   const [sort, setSort] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
@@ -2088,7 +2136,7 @@ export function Leads() {
     const t = setTimeout(() => {
       setLoading(true); setError('');
       api.get('/leads', {
-        params: { search, status, source, city, sla, page, size, ...(sort ? { sort } : {}) },
+        params: { search, status, source, customer_review: category, sla, page, size, ...(sort ? { sort } : {}) },
         signal: ctrl.signal,
       })
         .then((r) => {
@@ -2104,7 +2152,7 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, city, sla, sort, page]);
+  }, [search, status, source, category, sla, sort, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
@@ -2320,9 +2368,12 @@ export function Leads() {
   return (
     <div className="min-w-0 max-w-full">
       <PageHeader title="Leads" subtitle={`${total} lead${total === 1 ? '' : 's'} found · Create Lead or Excel import · auto-assign round-robin when no employee is selected`} />
-      <div className="card p-3 sm:p-4 mb-4 grid grid-cols-1 gap-2 sm:gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
-        <input className="input min-w-0 min-h-[44px] text-base sm:text-sm" placeholder="🔍 Search name, phone, enquiry…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
-        <input className="input min-w-0 min-h-[44px] text-base sm:text-sm" placeholder="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }} />
+      <div className="card p-3 sm:p-4 mb-4 grid grid-cols-1 gap-2 sm:gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_1fr]">
+        <input className="input min-w-0 min-h-[44px] text-base sm:text-sm" placeholder="🔍 Search name, phone, enquiry, city…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={category} onChange={(e) => { setCategory(e.target.value); setPage(1); }}>
+          <option value="">Category</option>
+          {reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
         <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
           <option value="">Status</option>
           {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
@@ -2378,10 +2429,10 @@ export function Leads() {
                     </div>
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                    <div className="min-w-0">
+                    {role === 'EMPLOYEE' && <div className="min-w-0">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Product</dt>
                       <dd className="text-graphite-900 mt-0.5 break-words">{prodName(l, nameOf)}</dd>
-                    </div>
+                    </div>}
                     <div className="min-w-0">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Cars</dt>
                       <dd className="text-graphite-900 mt-0.5">{l.quantity_raw || '—'}</dd>
@@ -2404,7 +2455,7 @@ export function Leads() {
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Lead value</dt>
                       <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">{inr(l.lead_value)}</dd>
                     </div>
-                    <div className="min-w-0">
+                    {role === 'EMPLOYEE' && <div className="min-w-0">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Reminder Date</dt>
                       <dd className="text-graphite-900 mt-0.5 tabular-nums inline-flex items-center gap-1.5">
                         <span className={l.reminder_done ? 'reminder-done' : ''}>{(l.reminder_date || '').slice(0, 10) || '—'}</span>
@@ -2412,7 +2463,7 @@ export function Leads() {
                           <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>
                         )}
                       </dd>
-                    </div>
+                    </div>}
                     <div className="min-w-0 col-span-2">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Quotation value</dt>
                       <dd className="text-graphite-900 mt-0.5 font-semibold tabular-nums">
@@ -2674,7 +2725,7 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[210px]">Category</th>
                 <th className="th whitespace-nowrap align-top w-[210px]">Progress</th>
                 <th className="th whitespace-nowrap align-top w-[280px]">Remarks</th>
-                <th className="th whitespace-nowrap align-top w-[190px]">Reminder Date</th>
+                {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[190px]">Reminder Date</th>}
                 <th className="th whitespace-nowrap align-top w-[140px]">Source</th>
                 <th className="th whitespace-nowrap align-top w-[170px] text-center">Current status</th>
                 <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
@@ -2763,7 +2814,7 @@ export function Leads() {
                       ) : (l.quantity_raw || '—')}
                     </td>
                     <td className="td align-top" onClick={(e) => e.stopPropagation()}>
-                      {canEditProductCars(l) && !isFrozen(l) ? (
+                      {role === 'EMPLOYEE' && canEditProductCars(l) && !isFrozen(l) ? (
                         <select
                           className="input text-xs w-full max-w-[12rem]"
                           disabled={savingId === l.id}
@@ -2831,7 +2882,7 @@ export function Leads() {
                         />
                       ))}
                     </td>
-                    <td className="td align-top" onClick={(e) => e.stopPropagation()}>
+                    {role === 'EMPLOYEE' && <td className="td align-top" onClick={(e) => e.stopPropagation()}>
                       {canEditWorkFields(l) && !isFrozen(l) ? (
                         <div className="min-w-0">
                           <input
@@ -2898,7 +2949,7 @@ export function Leads() {
                           onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, reminderDate: e.target.value } : item) }))}
                         />
                       ))}
-                    </td>
+                    </td>}
                     <td className="td align-top">{l.source_name || nameOf('sources', l.source_id)}</td>
                     <td className="td align-top text-center"><StatusBadge value={statusLabel(l)} /></td>
                     <td className="td align-top text-center">
@@ -4491,19 +4542,25 @@ export function Reports() {
   };
 
   const loadCategory = async (f: ReportFilter = categoryFilter) => {
-    const v = validate(f);
-    if (v) { setCategoryErr(v); return; }
     setCategoryBusy(true); setCategoryErr('');
     try {
-      const params = toParams(f);
-      const [detailsRes, barRes] = await Promise.all([
-        api.get('/reports/category-details', { params }),
-        api.get('/reports/category-wise', { params }),
+      const [dashboardRes, categoryRes] = await Promise.all([
+        api.get('/dashboard'),
+        api.get('/dashboard/by-category'),
       ]);
-      setCategoryDetails(detailsRes.data);
-      setCatRows(Array.isArray(barRes.data) ? barRes.data : []);
+      const live = categoryRes.data || {};
+      const dashboard = dashboardRes.data || {};
+      setCategoryDetails({
+        ...live,
+        totals: {
+          ...(live.totals || {}),
+          total: dashboard.total_leads ?? dashboard.total ?? live.totals?.total ?? 0,
+          lead_value: dashboard.total_lead_value ?? live.totals?.lead_value ?? 0,
+        },
+      });
+      setCatRows((live.rows || []).map((row: any) => ({ category: row.category, leads: row.total })));
     } catch (e: any) {
-      setCategoryErr(apiErr(e, 'Category report failed'));
+      setCategoryErr(apiErr(e, 'Could not load live category data'));
     } finally { setCategoryBusy(false); }
   };
 
@@ -4810,7 +4867,6 @@ export function Reports() {
         });
         const srcRowsH = mapRows(dashHistory?.by_source?.rows, 'source');
         const prodRowsH = mapRows(dashHistory?.by_product?.rows, 'product');
-        const catRowsH = mapRows(dashHistory?.by_category?.rows, 'category');
         const histCountTiles = [
           { label: 'Total Leads', value: t.total_leads ?? 0, bg: 'bg-[#1e3a5f]', text: 'text-white' },
           { label: 'In Followup', value: t.in_followup ?? 0, bg: PROGRESS_TILE_BG['In Followup'], text: PROGRESS_TILE_TEXT['In Followup'] },
@@ -4883,14 +4939,6 @@ export function Reports() {
                   totals={mapTotals(dashHistory?.by_product?.totals)}
                   pieRows={prodRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
                   emptyTitle="No product data in this range"
-                />
-                <DashboardTableChartRow
-                  title="Leads by Category"
-                  labelHeader="Category"
-                  rows={catRowsH}
-                  totals={mapTotals(dashHistory?.by_category?.totals)}
-                  pieRows={catRowsH.filter((r) => r.total > 0).map((r) => ({ name: r.name, value: r.total }))}
-                  emptyTitle="No category data in this range"
                 />
               </>
             )}
@@ -5260,12 +5308,22 @@ export function Reports() {
           <div className="card overflow-hidden">
             <div className="bg-[#0e7490] text-white px-5 py-3 font-semibold tracking-wide">CATEGORY WISE REPORT</div>
             <div className="p-5 space-y-4">
-              {filterBar(
-                categoryFilter, setCategoryFilter, categoryBusy, () => loadCategory(categoryFilter),
-                () => dl('/reports/category-details/export', 'category-wise-details.xlsx', toParams(categoryFilter), setCategoryErr),
-                !categoryDetails,
-                () => downloadPdf('category', categoryFilter, setCategoryErr),
-              )}
+              <div className="flex flex-wrap gap-3">
+                <div className="rounded-lg bg-[#1e3a5f] text-white px-4 py-3 min-w-[180px]">
+                  <div className="text-xs uppercase tracking-wide opacity-80">Total Leads</div>
+                  <div className="text-2xl font-bold">{categoryDetails?.totals?.total ?? '—'}</div>
+                </div>
+                <div className="rounded-lg bg-[#3F6212] text-white px-4 py-3 min-w-[220px]">
+                  <div className="text-xs uppercase tracking-wide opacity-80">Total Lead Value</div>
+                  <div className="text-2xl font-bold">{categoryDetails ? inr(categoryDetails.totals?.lead_value ?? 0) : '—'}</div>
+                </div>
+                <button type="button" className="btn-secondary self-center" disabled={categoryBusy} onClick={() => void loadCategory()}>
+                  {categoryBusy ? 'Loading…' : 'Refresh'}
+                </button>
+                <button type="button" className="btn-secondary self-center" disabled={pdfBusy || categoryBusy} onClick={() => void downloadPdf('category', emptyFilter(), setCategoryErr)}>
+                  {pdfBusy ? 'Preparing PDF…' : 'Download PDF'}
+                </button>
+              </div>
               {categoryErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{categoryErr}</div>}
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed text-xs text-center">
@@ -5309,7 +5367,7 @@ export function Reports() {
             data={catRows}
             x="category"
             y="leads"
-            onDownload={() => dl('/reports/category-wise/export', 'category-wise-report.xlsx', toParams(categoryFilter), setCategoryErr)}
+            onDownload={() => dl('/reports/category-wise/export', 'category-wise-report.xlsx', {}, setCategoryErr)}
           />
         </div>
       )}
@@ -5510,9 +5568,19 @@ export function Reports() {
                         if (!text || text === '—') return [] as string[];
                         return text.split('\n').map((line) => line.trim()).filter(Boolean);
                       };
-                      const progressLines = historyLines(row.progress);
-                      const categoryLines = historyLines(row.category);
-                      const remarkLines = historyLines(row.remarks);
+                      // Use the structured activity history when available so
+                      // every saved follow-up remains visible, including two
+                      // follow-ups with the same status/category.
+                      const history = Array.isArray(row.work_history) ? row.work_history : [];
+                      const progressLines = history.length
+                        ? labeledProgressHistory(history).map((h: any) => h.displayAction)
+                        : historyLines(row.progress);
+                      const categoryLines = history.length
+                        ? history.map((h: any, index: number) => `${index + 1}. ${String(h.category ?? '').trim() || '—'}`)
+                        : historyLines(row.category);
+                      const remarkLines = history.length
+                        ? history.map((h: any, index: number) => `${index + 1}. ${String(h.remarks ?? '').trim() || '—'}`)
+                        : historyLines(row.remarks);
                       const steps = Math.max(progressLines.length, categoryLines.length, remarkLines.length, 1);
                       const step = (lines: string[], index: number) => (
                         <div key={index} className="h-6 leading-6 whitespace-nowrap">

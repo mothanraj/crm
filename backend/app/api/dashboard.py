@@ -14,7 +14,7 @@ from app.core.deps import current_user
 from app.db.session import get_db
 from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
-from app.services.pricing import PRODUCT_PRICES
+from app.services.pricing import PRODUCT_PRICES, calc_lead_value, price_for_product
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -264,8 +264,15 @@ def _dashboard_history_payload(
     by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
     by_category: dict[str, dict] = {name: _empty_progress_counts() for name in CUSTOMER_REVIEW_ORDER}
     category_leads: dict[str, set] = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+    lead_values: dict = {}
 
     for lid, lead_value, cars, review, src_name, prod_name, st_name, emp_id, quote_val in rows_q:
+        # Keep one value per lead so category history cannot multiply a lead's
+        # value when the same lead has multiple category history entries.
+        try:
+            lead_values[lid] = _as_rupee(lead_value)
+        except (TypeError, ValueError):
+            lead_values[lid] = 0
         src = canonical_source(src_name)
         prod = prod_name or "Unmapped"
         src_bucket = by_source.setdefault(src, _empty_progress_counts())
@@ -363,10 +370,9 @@ def _dashboard_history_payload(
             "quote_sent": int(data.get("quote_sent", 0)),
             "converted": int(data.get("converted", 0)),
             "not_interested": int(data.get("not_interested", 0)),
-            "lead_value": _as_rupee(sum(
-                float(rows_q_item[1] or 0) for rows_q_item in rows_q
-                if _normalize_history_category(rows_q_item[3]) == cat
-            )),
+            # Use the exact same distinct lead set as `total`. A lead with
+            # multiple A+ history entries contributes one count and one value.
+            "lead_value": sum(lead_values.get(lid, 0) for lid in (category_leads.get(cat) or ())),
         }
         cat_rows.append(row)
         for k in cat_totals:
@@ -477,23 +483,24 @@ def _kpis(db: Session, u: User | None = None):
     # A lead leaves the current "Quotation sent" status after it converts, so
     # current-status counts cannot be used for conversion. Keep the live
     # quotation-sent population from its saved work-progress history instead.
-    quotation_sent_lead_ids = {
-        lead_id for (lead_id,) in db.query(LeadActivity.lead_id)
+    quotation_sent_rows = db.query(LeadActivity.lead_id).join(
+        Lead, Lead.id == LeadActivity.lead_id
+    ).filter(
+        Lead.is_active.is_(True),
+        LeadActivity.activity_type == "Work Progress",
+        LeadActivity.outcome == STATUS_QUOTE,
+        *emp,
+    ).all()
+    quotation_sent_lead_ids = {lead_id for (lead_id,) in quotation_sent_rows}
+    quotation_sent_history_count = len(quotation_sent_rows)
+    converted_from_quotation = (
+        db.query(func.count(func.distinct(LeadActivity.lead_id)))
         .join(Lead, Lead.id == LeadActivity.lead_id)
         .filter(
             Lead.is_active.is_(True),
             LeadActivity.activity_type == "Work Progress",
-            LeadActivity.outcome == STATUS_QUOTE,
-            *emp,
-        ).distinct().all()
-    }
-    converted_from_quotation = (
-        db.query(func.count(Lead.id))
-        .join(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(
-            Lead.is_active.is_(True),
-            LeadStatus.name == STATUS_CONVERTED,
-            Lead.id.in_(quotation_sent_lead_ids),
+            LeadActivity.outcome == STATUS_CONVERTED,
+            LeadActivity.lead_id.in_(quotation_sent_lead_ids),
             *emp,
         ).scalar()
         if quotation_sent_lead_ids else 0
@@ -520,7 +527,7 @@ def _kpis(db: Session, u: User | None = None):
         "total_lead_value": lead_value["total_lead_value"],
         "total_quotation_value": total_quotation_value,
         "total_converted_lead_value": total_converted_lead_value,
-        "quotation_sent_history_count": len(quotation_sent_lead_ids),
+        "quotation_sent_history_count": quotation_sent_history_count,
         "converted_from_quotation": int(converted_from_quotation or 0),
         "by_status": by_status,
         "funnel": {
@@ -651,10 +658,14 @@ def _employee_period_payload(
     total_lead_value = 0
     total_quotation_value = 0
     converted_quotation_value = 0
+    category_values = {name: 0 for name in CUSTOMER_REVIEW_ORDER}
     if period_lead_ids:
         for lead in db.query(Lead).filter(Lead.id.in_(period_lead_ids)).all():
             total_lead_value += _as_rupee(lead.lead_value)
             total_quotation_value += _as_rupee(lead.quotation_value)
+            for category, lead_ids in category_leads.items():
+                if lead.id in lead_ids:
+                    category_values[category] += _as_rupee(lead.lead_value)
             if lead.id in converted_lead_ids:
                 converted_quotation_value += _as_rupee(lead.quotation_value)
     return {
@@ -664,7 +675,7 @@ def _employee_period_payload(
         "from": start.isoformat(),
         "to": end.isoformat(),
         "progress": [{"label": name, "count": progress[name]} for name in PERIOD_PROGRESS],
-        "category": [{"label": name, "count": len(category_leads[name])} for name in CUSTOMER_REVIEW_ORDER],
+        "category": [{"label": name, "count": len(category_leads[name]), "lead_value": category_values[name]} for name in CUSTOMER_REVIEW_ORDER],
         "total_lead_value": total_lead_value,
         "total_quotation_value": total_quotation_value,
         "converted_quotation_value": converted_quotation_value,
@@ -1297,11 +1308,23 @@ def _category_details_payload(db: Session, start: date | None, end: date | None,
         if status:
             row[status] = int(row.get(status, 0)) + int(count)
         row["total"] = int(row.get("total", 0)) + int(count)
-    value_rows = db.query(Lead.customer_review, Lead.lead_value).filter(_date_filter(start, end, u)).all()
-    for review, value in value_rows:
+    value_rows = db.query(
+        Lead.customer_review, Lead.lead_value, Lead.quantity_num,
+        Lead.quantity_raw, Lead.price_per_car, Lead.product_raw, Product.name,
+    ).outerjoin(
+        Product, Lead.product_id == Product.id
+    ).filter(_date_filter(start, end, u)).all()
+    for review, value, quantity, quantity_raw, stored_price, product_raw, product_name in value_rows:
         category = _normalize_customer_review(review)
         bucket = rows_by_cat.setdefault(category, {"total": 0})
-        bucket["lead_value"] = int(bucket.get("lead_value", 0)) + _as_rupee(value)
+        calculated = value
+        if _as_rupee(calculated) == 0:
+            resolved_product = product_name or product_raw
+            resolved_quantity = quantity if quantity is not None else quantity_raw
+            resolved_price = stored_price if stored_price is not None else price_for_product(resolved_product)
+            pricing = calc_lead_value(resolved_quantity, resolved_price, product_name=resolved_product)
+            calculated = pricing.get("lead_value")
+        bucket["lead_value"] = int(bucket.get("lead_value", 0)) + _as_rupee(calculated)
     extras = [name for name in ("Other", "Unreviewed") if name in rows_by_cat and rows_by_cat[name].get("total", 0)]
     ordered = list(CUSTOMER_REVIEW_ORDER) + extras
     rows = []
@@ -1866,6 +1889,27 @@ def _numbered_lines(values: list[str]) -> str:
     return "\n".join(f"{i}. {v}" for i, v in enumerate(cleaned, 1))
 
 
+def _progress_ordinal(n: int) -> str:
+    mod100 = n % 100
+    suffix = "th" if 11 <= mod100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _labeled_progress(values: list[str]) -> list[str]:
+    repeatable = {"In Followup", "Meeting", "Site Visit", "Quotation sent"}
+    counts: dict[str, int] = defaultdict(int)
+    labeled = []
+    for value in values:
+        action = str(value or "").strip()
+        if action in repeatable:
+            counts[action] += 1
+            name = "Followup" if action == "In Followup" else action
+            labeled.append(f"{_progress_ordinal(counts[action])} {name}")
+        else:
+            labeled.append(action)
+    return labeled
+
+
 def _resolve_detailed_range(
     mode: str | None,
     month: str | None,
@@ -1874,6 +1918,7 @@ def _resolve_detailed_range(
     to_date: str | None,
     from_month: str | None,
     to_month: str | None,
+    year: str | None = None,
 ) -> tuple[date | None, date | None, str]:
     """Weekly / monthly / custom for Detailed Lead Report (falls back to from_month–to_month)."""
     mode_l = (mode or "custom").lower().strip()
@@ -1881,6 +1926,8 @@ def _resolve_detailed_range(
         return _resolve_range("week", None, from_date, to_date, week)
     if mode_l in ("month", "monthly", "month-wise"):
         return _resolve_range("month", month or from_month, None, None, None)
+    if mode_l in ("year", "yearly", "year-wise"):
+        return _resolve_range("year", year=year)
     if from_date or to_date:
         return _resolve_range("custom", None, from_date, to_date, None)
     if from_month or to_month:
@@ -1952,7 +1999,7 @@ def _detailed_leads_payload(
         if history:
             categories = [h["category"] for h in history]
             remarks = [h["remarks"] for h in history]
-            progress = [h["progress"] for h in history]
+            progress = _labeled_progress([h["progress"] for h in history])
             # Prefer latest quotation from history when present
             quote_vals = [h["quotation_value"] for h in history if h.get("quotation_value")]
             quotation_value = quote_vals[-1] if quote_vals else _money_cell(lead.quotation_value)
@@ -2002,9 +2049,10 @@ def detailed_leads(
     to_date: str | None = None,
     from_month: str | None = None,
     to_month: str | None = None,
+    year: str | None = None,
 ):
     _require_reports(u)
-    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
+    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
     return _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
 
 
@@ -2018,9 +2066,10 @@ def detailed_leads_export(
     to_date: str | None = None,
     from_month: str | None = None,
     to_month: str | None = None,
+    year: str | None = None,
 ):
     _require_reports(u)
-    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
+    start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
     payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
     headers = [
         "Enquiry No", "Enquiry Date", "Customer", "Company", "City", "Contact", "Email",

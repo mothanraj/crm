@@ -440,15 +440,23 @@ def build_employee_period_pdf(payload: dict) -> bytes:
 
     story.append(Paragraph("Values", subhead))
     value_body = [[Paragraph(h, header) for h in ("Metric", "Amount")]]
+    progress_counts = {str(row.get("label") or ""): int(row.get("count") or 0) for row in (payload.get("progress") or [])}
+    quotation_sent = progress_counts.get("Quotation sent", 0)
+    converted = progress_counts.get("Converted", 0)
+    conversion_ratio = f"{(converted / quotation_sent * 100):.1f}%" if quotation_sent else "0.0%"
     for label, key in (
         ("Total lead value", "total_lead_value"),
-        ("Quotation value", "total_quotation_value"),
-        ("Converted quotation value", "converted_quotation_value"),
+        ("Total quotation value", "total_quotation_value"),
+        ("Total converted value", "converted_quotation_value"),
     ):
         value_body.append([
             Paragraph(escape(label), left),
             Paragraph(money(payload.get(key)), cell),
         ])
+    value_body.append([
+        Paragraph("Conversion ratio", left),
+        Paragraph(conversion_ratio, cell),
+    ])
     value_table = Table(value_body, colWidths=[(width - 72) * 0.72, (width - 72) * 0.28], hAlign="CENTER")
     value_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
@@ -461,12 +469,6 @@ def build_employee_period_pdf(payload: dict) -> bytes:
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
     ]))
     story.append(value_table)
-    story.append(Spacer(1, 14))
-    story.append(Paragraph(
-        "Category is the number of customers. Progress is each time that step was logged. "
-        "Values are for leads worked in this period; converted quotation uses the latest quotation value.",
-        meta,
-    ))
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
 
