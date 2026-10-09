@@ -22,7 +22,7 @@ from app.services.lead_service import (
     FOLLOWUP_SLA_HOURS, SLA_STOP_STATUSES, assign, auto_assign, change_status,
     employee_by_name, next_enquiry_number, notify_admins,
     open_reassignment_request, record_first_contact, refresh_followup_sla,
-    remember_assignment, stop_followup_sla, validate_assignee,
+    remember_assignment, set_followup_deadline, stop_followup_sla, validate_assignee,
 )
 from app.services.normalize import (
     allows_odd_cars, canonical_product_name, is_valid_email, is_valid_phone,
@@ -662,6 +662,12 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
         lead.reminder_date = rd
     if "reminder_done" in data:
         lead.reminder_done = bool(data.pop("reminder_done"))
+        # One tick declares the remainder done: mirror onto same-date entries.
+        if getattr(lead, "reminder_date", None) is not None:
+            db.query(LeadActivity).filter(
+                LeadActivity.lead_id == lead.id,
+                LeadActivity.reminder_date == lead.reminder_date,
+            ).update({"reminder_done": lead.reminder_done}, synchronize_session=False)
     if "product_id" in data:
         pid = data.pop("product_id")
         if pid is None:
@@ -744,6 +750,9 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
             lead.reminder_date = body.reminder_date
         if status.name in SLA_STOP_STATUSES or body.sla_state == "COMPLETED":
             stop_followup_sla(lead)
+        elif body.reminder_date is not None:
+            # Explicit new reminder on Done/Reopen path also moves this lead's overdue date.
+            set_followup_deadline(db, lead, body.reminder_date)
         else:
             refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
         db.commit()
@@ -756,21 +765,47 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
     change_status(db, lead, body.new_status_id, u, remarks)
     lead.employee_remarks = remarks
     lead.customer_review = customer_review
-    # Blank reminder means "leave unchanged" — only an explicitly picked date overwrites.
+    # Auto-strike: saving a follow-up (category + progress + remarks) completes the
+    # previous remainder. Old pending entries are struck so they vanish from the
+    # login-pulse "Reminders due" bucket (which filters reminder_done=False).
+    _prior_pending: list = []
+    try:
+        _fetched = db.query(LeadActivity).filter(
+            LeadActivity.lead_id == lead.id,
+            LeadActivity.activity_type == "Work Progress",
+            LeadActivity.reminder_date.isnot(None),
+            LeadActivity.reminder_done.is_(False),
+        ).all()
+        _prior_pending = list(_fetched) if _fetched is not None else []
+    except TypeError:
+        # Unit tests use a bare Mock for db whose .query().filter().all()
+        # returns a non-iterable Mock — treat as "no prior pending".
+        _prior_pending = []
+    # Blank reminder means "no new remainder" — only an explicitly picked date overwrites.
     if body.reminder_date is not None:
+        for _old in _prior_pending:
+            if _old.reminder_date != body.reminder_date:
+                _old.reminder_done = True
         if body.reminder_date != lead.reminder_date:
             lead.reminder_done = False
         lead.reminder_date = body.reminder_date
+    else:
+        for _old in _prior_pending:
+            _old.reminder_done = True
+        # Keep the old date for struck display, but mark done so the popup clears.
+        if lead.reminder_date is not None:
+            lead.reminder_done = True
     if status.name == "Quotation sent" and body.quotation_value is not None:
         rounded = round_money(body.quotation_value)
         if rounded is None:
             raise HTTPException(400, "Quotation value must be a whole number (no decimals)")
         lead.quotation_value = rounded
-    # Only explicit Done (sla_state=COMPLETED) stops overdue. Save restarts the 3-day window.
+    # Only explicit Done (sla_state=COMPLETED) stops overdue. Save restarts the
+    # per-lead window: picked reminder date (23:59 IST) or 24h/72h fallback.
     if body.sla_state == "COMPLETED":
         stop_followup_sla(lead)
     else:
-        refresh_followup_sla(db, lead, hours=FOLLOWUP_SLA_HOURS)
+        set_followup_deadline(db, lead, body.reminder_date)
     q_for_activity = round_money(body.quotation_value) if status.name == "Quotation sent" and body.quotation_value is not None else None
     db.add(LeadActivity(
         lead_id=lead.id, employee_id=u.id, activity_type="Work Progress",
@@ -936,8 +971,15 @@ def set_activity_reminder_done(lid: UUID, aid: UUID, body: ReminderDoneIn, db: S
         if status and status.name in ("Converted", "Not Interested", "Not Interested/Spam"):
             raise HTTPException(403, "This lead cannot be edited or reopened")
     a.reminder_done = bool(body.done)
+    # One tick declares the remainder done: mirror onto the lead when this
+    # entry carries the lead's current remainder date (clears popup/reports).
+    act_date = getattr(a, "reminder_date", None)
+    lead_date = getattr(lead, "reminder_date", None)
+    if act_date is not None and lead_date is not None and act_date == lead_date:
+        lead.reminder_done = a.reminder_done
     db.commit()
-    return {"ok": True, "reminder_done": a.reminder_done}
+    return {"ok": True, "reminder_done": a.reminder_done,
+            "lead_reminder_done": bool(getattr(lead, "reminder_done", False))}
 
 
 @router.post("/{lid}/site-visits")

@@ -41,6 +41,42 @@ def refresh_followup_sla(db: Session, lead: Lead, *, hours: int | None = None) -
     lead.overdue_digest_at = None
 
 
+def reminder_eod_utc(reminder_date) -> datetime | None:
+    """End of the reminder date in IST (23:59:59) expressed as UTC.
+
+    The reminder picker is date-only, so the lead only becomes overdue after
+    the picked day is over in Asia/Kolkata.
+    """
+    if reminder_date is None:
+        return None
+    try:
+        y, m, d = int(reminder_date.year), int(reminder_date.month), int(reminder_date.day)
+    except Exception:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        eod_ist = datetime(y, m, d, 23, 59, 59, tzinfo=ZoneInfo("Asia/Kolkata"))
+    except Exception:
+        eod_ist = datetime(y, m, d, 23, 59, 59, tzinfo=timezone.utc)
+    return eod_ist.astimezone(timezone.utc)
+
+
+def set_followup_deadline(db: Session, lead: Lead, reminder_date=None) -> None:
+    """Next overdue deadline after a follow-up save.
+
+    - Reminder picked  -> sla_deadline = reminder date 23:59 IST (per-lead overdue).
+    - No reminder      -> fallback to 24h Direct Call / 72h window.
+    Always resets to PENDING and clears the once-per-window mail flag.
+    """
+    deadline = reminder_eod_utc(reminder_date) if reminder_date is not None else None
+    if deadline is None:
+        hours = sla_hours_for_lead(db, lead)
+        deadline = datetime.now(timezone.utc) + timedelta(hours=hours)
+    lead.sla_deadline = deadline
+    lead.sla_state = "PENDING"
+    lead.overdue_digest_at = None
+
+
 def stop_followup_sla(lead: Lead) -> None:
     """Converted (and Not Interested) — no more overdue count or admin digests."""
     lead.sla_state = "COMPLETED"

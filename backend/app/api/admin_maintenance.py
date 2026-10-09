@@ -48,12 +48,10 @@ def _diagnose(db: Session) -> dict:
             "overdue_total": base.filter(Lead.sla_state == "OVERDUE").count(),
             "overdue_uncontacted_assigned": base.filter(
                 Lead.sla_state == "OVERDUE",
-                Lead.first_contact_at.is_(None),
                 Lead.primary_employee_id.isnot(None),
             ).count(),
             "overdue_ready_to_mail": base.filter(
                 Lead.sla_state == "OVERDUE",
-                Lead.first_contact_at.is_(None),
                 Lead.primary_employee_id.isnot(None),
                 Lead.overdue_digest_at.is_(None),
             ).count(),
@@ -85,7 +83,6 @@ def digest_run(
     q = db.query(Lead).filter(
         Lead.is_active.is_(True),
         Lead.sla_state == "OVERDUE",
-        Lead.first_contact_at.is_(None),
         Lead.primary_employee_id.isnot(None),
     )
     if not resend:
@@ -99,7 +96,7 @@ def digest_run(
     if not rows:
         return {
             "mailed": False,
-            "reason": "no mailable OVERDUE rows (already mailed, contacted, unassigned, or still PENDING)",
+            "reason": "no mailable OVERDUE rows (already mailed, unassigned, or still PENDING)",
             "resend": resend,
             "sample": [],
             "diagnostics": diag,
