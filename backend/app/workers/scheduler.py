@@ -320,6 +320,79 @@ def _assignment_retry_sweep(db, now):
         log.error("assignment retry sweep failed: %s", exc)
 
 
+def _reminder_sweep():
+    """Hourly bell entries for today's due remainders (employee side).
+
+    One unread REMINDER_DUE per lead per reminder_date per hour max:
+    skips leads touched via reminder_sent_at within the hour or with a
+    recent unread REMINDER_DUE for the same date. Stops automatically
+    once the employee saves Work Progress (reminder_done=True clears
+    the due filter). Failures only log — they never break the sweep.
+    """
+    db = SessionLocal()
+    try:
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        try:
+            from zoneinfo import ZoneInfo
+            today = now.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        except Exception:
+            today = now.date()
+        cutoff = now - timedelta(hours=1)
+        due = (
+            db.query(Lead)
+            .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
+            .filter(
+                Lead.is_active.is_(True),
+                Lead.primary_employee_id.isnot(None),
+                Lead.sla_state != "COMPLETED",
+                Lead.reminder_date.isnot(None),
+                Lead.reminder_date <= today,
+                Lead.reminder_done.is_(False),
+                or_(LeadStatus.name.is_(None), ~LeadStatus.name.in_(tuple(SLA_STOP_STATUSES))),
+                or_(Lead.reminder_sent_at.is_(None), Lead.reminder_sent_at < cutoff),
+            )
+            .order_by(Lead.reminder_date.asc())
+            .limit(1000)
+            .all()
+        )
+        for lead in due:
+            try:
+                recent = (
+                    db.query(Notification)
+                    .filter(
+                        Notification.user_id == lead.primary_employee_id,
+                        Notification.lead_id == lead.id,
+                        Notification.kind == "REMINDER_DUE",
+                        Notification.is_read.is_(False),
+                        Notification.created_at >= cutoff,
+                    )
+                    .first()
+                )
+                if recent:
+                    continue
+                rem = str(lead.reminder_date) if lead.reminder_date else "—"
+                db.add(Notification(
+                    user_id=lead.primary_employee_id,
+                    lead_id=lead.id,
+                    kind="REMINDER_DUE",
+                    title="Reminder due",
+                    body=f"Reminder date {rem} | {lead.customer_name or '—'} | {lead.enquiry_number}",
+                ))
+                lead.reminder_sent_at = now
+            except Exception as exc:
+                log.error("reminder sweep failed for %s: %s", getattr(lead, "id", "?"), exc)
+        db.commit()
+    except Exception as exc:
+        log.error("reminder sweep failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 def _overdue_digest():
     """Backstop: mail any OVERDUE rows missed earlier (downtime / Brevo failure).
 
@@ -352,6 +425,8 @@ def _overdue_digest():
 def start():
     if not scheduler.running:
         scheduler.add_job(_sla_sweep, "interval", minutes=15, id="sla", replace_existing=True)
+        scheduler.add_job(_reminder_sweep, "interval", hours=1, id="reminder",
+                          replace_existing=True)
         scheduler.add_job(_overdue_digest, "interval", hours=1, id="digest",
                           replace_existing=True)
         scheduler.start()

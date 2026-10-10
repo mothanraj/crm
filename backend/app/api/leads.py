@@ -174,6 +174,21 @@ def _owned_lead(db: Session, lid: UUID, u: User) -> Lead:
     return lead
 
 
+def _clear_reminder_dues(db: Session, lead: Lead) -> None:
+    """Bell hygiene: once the remainder closes (reminder_done=True),
+    mark its unread hourly REMINDER_DUE rows read so the badge clears."""
+    try:
+        if not bool(getattr(lead, "reminder_done", False)):
+            return
+        db.query(Notification).filter(
+            Notification.lead_id == lead.id,
+            Notification.kind == "REMINDER_DUE",
+            Notification.is_read.is_(False),
+        ).update({"is_read": True}, synchronize_session=False)
+    except Exception:
+        pass
+
+
 def _parse_uuid(value: str, field: str) -> UUID | None:
     if not value:
         return None
@@ -708,6 +723,7 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
         prod = db.get(Product, lead.product_id) if lead.product_id else None
         apply_pricing_to_lead(lead, product=prod)
 
+    _clear_reminder_dues(db, lead)
     db.commit()
     return _serialize(lead, db)
 
@@ -813,6 +829,7 @@ def set_status(lid: UUID, body: StatusChange, db: Session = Depends(get_db), u: 
         quotation_value=q_for_activity, reminder_date=body.reminder_date,
         reminder_done=False,
     ))
+    _clear_reminder_dues(db, lead)
     db.commit()
     return {"ok": True, "sla_state": lead.sla_state, "status": status.name, "activity_recorded": True,
             "reminder_date": str(lead.reminder_date) if lead.reminder_date else None,
@@ -977,6 +994,7 @@ def set_activity_reminder_done(lid: UUID, aid: UUID, body: ReminderDoneIn, db: S
     lead_date = getattr(lead, "reminder_date", None)
     if act_date is not None and lead_date is not None and act_date == lead_date:
         lead.reminder_done = a.reminder_done
+    _clear_reminder_dues(db, lead)
     db.commit()
     return {"ok": True, "reminder_done": a.reminder_done,
             "lead_reminder_done": bool(getattr(lead, "reminder_done", False))}

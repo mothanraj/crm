@@ -545,7 +545,7 @@ export function Dashboard() {
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
                   <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
                   <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
-                  <div className="text-xs opacity-85 mt-1 leading-tight">{t.hint}</div>
+                  <div className="text-sm sm:text-base font-semibold tabular-nums mt-1 leading-tight">{t.hint}</div>
                 </div>
               ))}
             </div>

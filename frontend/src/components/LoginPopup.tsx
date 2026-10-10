@@ -26,14 +26,14 @@ function greeting(): string {
 }
 
 const SECTIONS: Array<{ key: Bucket; title: string; hint: string; bar: string; badge: string }> = [
-  { key: 'overdue', title: 'Overdue follow-ups', hint: 'Act now', bar: 'border-[#E03131]', badge: 'bg-[#E03131] text-white' },
   { key: 'reminders', title: 'Reminders due', hint: 'Due today or earlier', bar: 'border-[#E8890C]', badge: 'bg-[#E8890C] text-white' },
+  { key: 'overdue', title: 'Overdue follow-ups', hint: 'Act now', bar: 'border-[#E03131]', badge: 'bg-[#E03131] text-white' },
   { key: 'new', title: 'Newly assigned leads', hint: 'Pending — speak to customer', bar: 'border-[#2F9E44]', badge: 'bg-[#2F9E44] text-white' },
 ];
 
 /**
- * One-time login popup for employees: overdue (red), reminders due (amber),
- * newly assigned pending (green) — priority ordered. Silent when empty.
+ * One-time login popup for employees: reminders due (amber), overdue (red),
+ * newly assigned pending (green) — in that order. Silent when empty.
  * Single fast GET /dashboard/login-pulse (no full /leads download).
  */
 export function EmployeeLoginPopup() {

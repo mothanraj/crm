@@ -2398,6 +2398,67 @@ def login_pulse(
     }
 
 
+@router.get("/dashboard/reminder-pulse")
+def reminder_pulse(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """Hourly polling payload for the employee reminder popup.
+
+    Today's remainder only: own active leads where
+    reminder_date <= today (IST) and reminder_done is False.
+    Returns reminder_date + lead name + enquiry no per row.
+    Silent (empty) when nothing is due so the frontend stays quiet.
+    """
+    empty = {"total": 0, "rows": []}
+    if not _is_employee(u):
+        return empty
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        today = date.today()
+    rows = (
+        db.query(Lead)
+        .filter(
+            Lead.is_active.is_(True),
+            Lead.primary_employee_id == u.id,
+            Lead.sla_state != "COMPLETED",
+            Lead.reminder_date.isnot(None),
+            Lead.reminder_date <= today,
+            Lead.reminder_done.is_(False),
+        )
+        .order_by(Lead.reminder_date.asc().nullsfirst(), Lead.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    total = (
+        db.query(func.count(Lead.id))
+        .filter(
+            Lead.is_active.is_(True),
+            Lead.primary_employee_id == u.id,
+            Lead.sla_state != "COMPLETED",
+            Lead.reminder_date.isnot(None),
+            Lead.reminder_date <= today,
+            Lead.reminder_done.is_(False),
+        )
+        .scalar()
+    ) or 0
+    return {
+        "total": int(total),
+        "rows": [
+            {
+                "id": str(x.id),
+                "enquiry_number": x.enquiry_number,
+                "customer_name": x.customer_name or "—",
+                "reminder_date": x.reminder_date.isoformat() if x.reminder_date else None,
+            }
+            for x in rows
+        ],
+    }
+
+
 @router.get("/notifications")
 def notifs(db: Session = Depends(get_db), u: User = Depends(current_user)):
     rows = db.query(Notification).filter(Notification.user_id == u.id).order_by(Notification.created_at.desc()).limit(50).all()

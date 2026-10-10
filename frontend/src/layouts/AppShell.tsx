@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { EmployeeLoginPopup } from '../components/LoginPopup';
+import { HourlyReminderPopup } from '../components/HourlyReminderPopup';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧', roles: ['ADMIN', 'EMPLOYEE'] },
@@ -33,10 +34,13 @@ export function AppShell() {
     loadUnread();
     const t = setInterval(loadUnread, 60000);
     const onRead = () => setUnread(0);
+    const onDue = () => loadUnread();
     window.addEventListener('crm:notifications-read', onRead);
+    window.addEventListener('crm:reminders-due', onDue);
     return () => {
       clearInterval(t);
       window.removeEventListener('crm:notifications-read', onRead);
+      window.removeEventListener('crm:reminders-due', onDue);
     };
   }, []);
   useEffect(() => {
@@ -54,6 +58,7 @@ export function AppShell() {
     localStorage.removeItem('user_id');
     localStorage.removeItem('user_name');
     try { sessionStorage.removeItem('crm:login-popup'); } catch { /* private mode */ }
+    try { localStorage.removeItem('crm:reminder-snooze-until'); } catch { /* private mode */ }
     navigate('/login', { replace: true });
   };
   return (
@@ -129,6 +134,7 @@ export function AppShell() {
           </div>
         </main>
         {role === 'EMPLOYEE' && <EmployeeLoginPopup />}
+        {role === 'EMPLOYEE' && <HourlyReminderPopup />}
       </div>
     </div>
   );
