@@ -93,6 +93,14 @@ const SLA_STYLES: Record<string, string> = {
   OVERDUE: 'bg-[#E03131]/10 text-[#B32727] ring-[#E03131]/30',
 };
 
+/** Display an ISO YYYY-MM-DD date as DD-MM-YY. Display-only; revolves around raw slice(0,10) values. */
+export function fmtDMY(v: any) {
+  const s = String(v || '').slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s || '—';
+  return `${m[3]}-${m[2]}-${m[1].slice(2)}`;
+}
+
 export function StatusBadge({ value }: { value: string }) {
   const cls = STATUS_STYLES[value] ?? 'bg-graphite-100 text-graphite-600 ring-graphite-200';
   return <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ring-1 ${cls}`}>{value || '—'}</span>;
@@ -112,10 +120,10 @@ export function SlaBadge({ value }: { value: string }) {
 
 export function Card({ title, action, children, className = '' }: { title?: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
-    <section className={`card p-5 ${className}`}>
+    <section className={`card p-4 sm:p-5 min-w-0 overflow-hidden ${className}`}>
       {(title || action) && (
-        <div className="flex items-center justify-between mb-4 shrink-0">
-          {title && <h2 className="text-sm font-semibold uppercase tracking-wide text-graphite-500">{title}</h2>}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 shrink-0">
+          {title && <h2 className="text-[13px] sm:text-sm font-semibold uppercase tracking-wide text-graphite-500 break-words min-w-0">{title}</h2>}
           {action}
         </div>
       )}
@@ -126,12 +134,12 @@ export function Card({ title, action, children, className = '' }: { title?: stri
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-4 sm:mb-6">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 mb-4 sm:mb-6">
       <div className="min-w-0">
-        <h1 className="text-xl sm:text-2xl font-bold text-graphite-900 break-words">{title}</h1>
+        <h1 className="text-lg sm:text-2xl font-bold text-graphite-900 break-words leading-snug">{title}</h1>
         {subtitle && <p className="text-[13px] sm:text-sm text-graphite-500 mt-1 break-words">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2 w-full sm:w-auto">{actions}</div>}
+      {actions && <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full sm:w-auto">{actions}</div>}
     </div>
   );
 }

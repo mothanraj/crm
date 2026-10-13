@@ -280,3 +280,26 @@ class EnquirySequence(Base):
     __tablename__ = "enquiry_sequence"
     id: Mapped[uuid.UUID] = _pk()
     last_number: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class DailyRemark(Base):
+    """Employee's own daily diary: what they did on a given day. Employee-only."""
+    __tablename__ = "daily_remarks"
+    id: Mapped[uuid.UUID] = _pk()
+    employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    remarks: Mapped[str] = mapped_column(Text, default="")
+    tile_key: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts_updated()
+
+
+class DailyTileOverride(Base):
+    """Employee's manual per-tile count overrides for one day. Employee-only."""
+    __tablename__ = "daily_tile_overrides"
+    id: Mapped[uuid.UUID] = _pk()
+    employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    tile_key: Mapped[str] = mapped_column(Text, default="")
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = _ts_updated()

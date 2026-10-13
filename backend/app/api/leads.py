@@ -1,6 +1,7 @@
 import logging
 from datetime import date, datetime, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import func, or_
@@ -394,6 +395,8 @@ def create_lead(body: LeadCreate, db: Session = Depends(get_db), admin: User = D
         errors.append("You have entered wrong Email")
     if not phone and not email:
         errors.append("Enter a phone number or an email (either one is enough)")
+    if body.enquiry_date and body.enquiry_date > datetime.now(ZoneInfo("Asia/Kolkata")).date():
+        errors.append("You have entered wrong Date Received — future dates are not allowed")
 
     cars, car_err = _validate_form_cars(cars_raw, product_name)
     if car_err:
@@ -653,7 +656,10 @@ def update_lead(lid: UUID, body: LeadUpdate, db: Session = Depends(get_db), u: U
     if role != "ADMIN" and any(key in data for key in admin_fields):
         raise HTTPException(403, "Only an admin can edit these lead details")
     if "enquiry_date" in data:
-        lead.enquiry_date = data.pop("enquiry_date")
+        new_enquiry_date = data.pop("enquiry_date")
+        if new_enquiry_date and new_enquiry_date > datetime.now(ZoneInfo("Asia/Kolkata")).date():
+            raise HTTPException(400, "You have entered wrong Date Received — future dates are not allowed")
+        lead.enquiry_date = new_enquiry_date
     if "source_id" in data:
         sid = data.pop("source_id")
         if sid is None:

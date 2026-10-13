@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AppShell } from '../layouts/AppShell';
-import { Analytics, CreateLead, Dashboard, EmployeeDashboard, EmployeeLeads, EmployeeReport, EmployeesPage, ImportPage, LeadDetail, Leads, Login, NotificationsPage, ReassignmentsPage, ReportHistory, Reports } from '../pages';
+import { Analytics, CreateLead, Dashboard, EmployeeDailyReport, EmployeeDashboard, EmployeeLeads, EmployeeReport, EmployeesPage, ImportPage, LeadDetail, Leads, Login, NotificationsPage, ReassignmentsPage, ReportHistory, Reports } from '../pages';
 
 function Role({ children, roles }: { children: React.ReactElement; roles?: string[] }) {
   const token = localStorage.getItem('token');
@@ -40,6 +40,7 @@ export function AppRoutes() {
           <Route path="/reports" element={<Role roles={['ADMIN']}><Reports /></Role>} />
           <Route path="/report-history" element={<Role roles={['ADMIN']}><ReportHistory /></Role>} />
           <Route path="/my-report" element={<Role roles={['EMPLOYEE']}><EmployeeReport /></Role>} />
+          <Route path="/daily-report" element={<Role roles={['EMPLOYEE']}><EmployeeDailyReport /></Role>} />
           <Route path="/analytics" element={<Role roles={['ADMIN']}><Analytics /></Role>} />
           <Route path="/notifications" element={<Role><NotificationsPage /></Role>} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

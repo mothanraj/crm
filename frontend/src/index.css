@@ -24,13 +24,13 @@
 
 @layer components {
   .input {
-    @apply border border-graphite-300 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-500 bg-white text-graphite-900;
+    @apply border border-graphite-300 rounded-lg px-3 py-2 text-[16px] sm:text-sm w-full focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-500 bg-white text-graphite-900;
   }
   .btn-primary {
-    @apply bg-brand-400 hover:bg-brand-500 active:bg-brand-600 text-signalink font-semibold px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:bg-graphite-200 disabled:text-graphite-400;
+    @apply bg-brand-400 hover:bg-brand-500 active:bg-brand-600 text-signalink font-semibold px-4 py-2.5 sm:py-2 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:bg-graphite-200 disabled:text-graphite-400 min-h-[44px] sm:min-h-0;
   }
   .btn-secondary {
-    @apply bg-white border border-graphite-300 hover:bg-graphite-100 text-graphite-700 font-medium px-4 py-2 rounded-lg text-sm transition-colors;
+    @apply bg-white border border-graphite-300 hover:bg-graphite-100 text-graphite-700 font-medium px-4 py-2.5 sm:py-2 rounded-lg text-sm transition-colors min-h-[44px] sm:min-h-0;
   }
   .btn-danger {
     @apply bg-[#E03131] hover:bg-[#C92A2A] text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors;
@@ -51,8 +51,18 @@
 *::-webkit-scrollbar-thumb { @apply bg-graphite-300 rounded-full; }
 
 /* grab-and-move horizontal scroll for wide tables */
-.drag-scroll { cursor: grab; overscroll-behavior-x: contain; }
+.drag-scroll {
+  cursor: grab;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
 .drag-scroll.is-dragging { cursor: grabbing; user-select: none; }
+
+/* dashboard + analytics tables: never squeeze 9 columns into a phone */
+.table-scroll-hint { position: relative; }
+.recharts-wrapper { min-height: 0; }
+.recharts-responsive-container { min-height: 0; min-width: 0; }
 
 /* struck-through (done) reminder dates — static, no animation */
 .reminder-done { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--muted); }

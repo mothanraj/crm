@@ -80,8 +80,15 @@ type FormState = {
   primary_employee_id: string;
 };
 
+/** Local YYYY-MM-DD (not UTC ISO, which can lag IST around midnight). */
+function todayLocalISO(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const emptyForm = (): FormState => ({
-  enquiry_date: new Date().toISOString().slice(0, 10),
+  enquiry_date: todayLocalISO(),
   customer_name: '',
   company_name: '',
   contact_number: '',
@@ -171,6 +178,11 @@ export function CreateLead() {
     const errors: string[] = [];
     const phone = f.contact_number.trim();
     const email = f.email.trim();
+    const today = todayLocalISO();
+
+    if (f.enquiry_date && f.enquiry_date > today) {
+      errors.push('You have entered wrong Date Received — future dates are not allowed');
+    }
 
     if (phone && !isValidPhone(phone)) {
       errors.push('You have entered wrong Contact No. — 10-digit Indian mobile starting with 6–9');
@@ -309,8 +321,8 @@ export function CreateLead() {
             />
           ), 'Assigned automatically when the lead is saved')}
           {field('Date Received', (
-            <input type="date" className="input w-full" value={form.enquiry_date} onChange={(e) => set('enquiry_date', e.target.value)} />
-          ))}
+            <input type="date" className="input w-full" value={form.enquiry_date} max={todayLocalISO()} onChange={(e) => set('enquiry_date', e.target.value)} />
+          ), 'Future dates are not allowed')}
           {field('Full Name', (
             <input className="input w-full" value={form.customer_name} onChange={(e) => set('customer_name', e.target.value)} />
           ))}
@@ -366,11 +378,11 @@ export function CreateLead() {
           ), empLoadError || 'Leave blank to auto-assign by round-robin')}
         </div>
 
-        <div className="flex flex-wrap gap-3 pt-2">
-          <button type="submit" className="btn-primary" disabled={busy}>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 pt-2">
+          <button type="submit" className="btn-primary w-full sm:w-auto" disabled={busy}>
             {busy ? 'Creating…' : 'Create Lead'}
           </button>
-          <button type="button" className="btn-secondary" disabled={busy} onClick={() => setForm(emptyForm())}>
+          <button type="button" className="btn-secondary w-full sm:w-auto" disabled={busy} onClick={() => setForm(emptyForm())}>
             Clear
           </button>
         </div>

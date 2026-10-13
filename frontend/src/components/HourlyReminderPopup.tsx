@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
+import { fmtDMY } from './ui';
 
 const SNOOZE_KEY = 'crm:reminder-snooze-until';
 const HOUR_MS = 60 * 60 * 1000;
@@ -122,7 +123,7 @@ export function HourlyReminderPopup() {
               {rows.map((l) => (
                 <tr key={l.id} className="border-t border-graphite-200">
                   <td className="py-2 pr-2 tabular-nums font-semibold text-[#E8890C] whitespace-nowrap">
-                    {String(l.reminder_date || '').slice(0, 10) || '—'}
+                    {fmtDMY(l.reminder_date)}
                   </td>
                   <td className="py-2 pr-2 font-medium text-graphite-900 break-words">{l.customer_name || '—'}</td>
                   <td className="py-2">

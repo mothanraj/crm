@@ -473,6 +473,102 @@ def build_employee_period_pdf(payload: dict) -> bytes:
     return buffer.getvalue()
 
 
+def build_employee_daily_pdf(payload: dict) -> bytes:
+    """One employee's single-day report: edited tile counts, new leads, remarks."""
+    title = "Employee Daily Report"
+    buffer = BytesIO()
+    width, height = A4
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, leftMargin=36, rightMargin=36,
+        topMargin=122, bottomMargin=42, title=title, author="ESTAR Engineers Pvt Ltd",
+    )
+    generated = datetime.now().strftime("%d %b %Y")
+    logo = _brand_logo()
+    logo_iw, logo_ih = logo.getSize()
+    page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=10, leading=13, alignment=1)
+    left = ParagraphStyle("left", parent=cell, alignment=0)
+    heading = ParagraphStyle(
+        "heading", fontName="Helvetica-Bold", fontSize=14, textColor=NAVY,
+        spaceAfter=6, alignment=1,
+    )
+    subhead = ParagraphStyle(
+        "subhead", fontName="Helvetica-Bold", fontSize=12, textColor=NAVY,
+        spaceBefore=14, spaceAfter=8, alignment=0,
+    )
+    header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=10, leading=14, alignment=1, textColor=colors.HexColor("#334155"))
+
+    def pretty_day(iso: str) -> str:
+        try:
+            return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d-%m-%y")
+        except ValueError:
+            return str(iso or "—")
+
+    story = [
+        Paragraph(title, heading),
+        Paragraph(escape(str(payload.get("employee") or "Employee")), meta),
+        Paragraph(escape(pretty_day(str(payload.get("day") or ""))), meta),
+        Spacer(1, 8),
+    ]
+
+    def styled_table(body: list, widths: list) -> None:
+        table = Table(body, colWidths=widths, hAlign="CENTER")
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf4fa")]),
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(table)
+
+    story.append(Paragraph("Day summary", subhead))
+    tiles = payload.get("tiles") or []
+    tile_body = [[Paragraph(h, header) for h in ("Metric", "Count", "Note")]]
+    for row in tiles:
+        label = str(row.get("label") or "—")
+        note_text = str(row.get("note") or "—")
+        if len(note_text) > 140:
+            note_text = note_text[:139].rstrip() + "…"
+        tile_body.append([
+            Paragraph(escape(label), left),
+            Paragraph(str(int(row.get("count") or 0)), cell),
+            Paragraph(escape(note_text), left),
+        ])
+    if len(tile_body) == 1:
+        tile_body.append([Paragraph("No data", left), Paragraph("0", cell), Paragraph("—", cell)])
+    styled_table(tile_body, [(width - 72) * 0.32, (width - 72) * 0.12, (width - 72) * 0.56])
+
+    story.append(Paragraph("New leads", subhead))
+    leads = payload.get("new_leads") or []
+    lead_body = [[Paragraph(h, header) for h in ("Enquiry", "Customer", "Company / City")]]
+    for lead in leads:
+        company_city = " · ".join(p for p in (lead.get("company_name"), lead.get("city")) if p)
+        lead_body.append([
+            Paragraph(escape(str(lead.get("enquiry_number") or "—")), left),
+            Paragraph(escape(str(lead.get("customer_name") or "—")), left),
+            Paragraph(escape(company_city or "—"), left),
+        ])
+    if len(lead_body) == 1:
+        lead_body.append([Paragraph("No new leads this day", left), Paragraph("—", cell), Paragraph("—", cell)])
+    styled_table(lead_body, [(width - 72) * 0.24, (width - 72) * 0.32, (width - 72) * 0.44])
+
+    story.append(Paragraph("Others", subhead))
+    remarks = payload.get("remarks") or []
+    if not remarks:
+        story.append(Paragraph("Nothing else noted this day.", left))
+    for index, text in enumerate(remarks, start=1):
+        story.append(Paragraph(f"{index}. {escape(str(text or ''))}", left))
+        story.append(Spacer(1, 4))
+
+    doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
+    return buffer.getvalue()
+
+
 def _label_for_axis(text: str, max_len: int = 18) -> str:
     label = " ".join(str(text or "").split())
     if len(label) <= max_len:
@@ -1224,7 +1320,7 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
     story.append(Spacer(1, 8))
 
     headers = [
-        "Enquiry", "Date", "Customer", "City", "Contact", "Cars", "Product", "Source",
+        "Enquiry", "Date", "Customer", "City", "Contact", "Email", "Cars", "Product", "Source",
         "Status", "Progress", "Category", "Remarks", "Employee", "Lead Value", "Quotation",
     ]
     rows = [[Paragraph(h, header) for h in headers]]
@@ -1235,6 +1331,7 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
             Paragraph(escape(str(row.get("customer_name") or "—")), cell_left),
             Paragraph(escape(str(row.get("city") or "—")), cell),
             Paragraph(escape(str(row.get("contact_number") or "—")), cell),
+            Paragraph(escape(str(row.get("email") or "—")), cell_left),
             Paragraph(escape(str(row.get("cars") or "—")), cell),
             Paragraph(escape(str(row.get("product") or "—")), cell_left),
             Paragraph(escape(str(row.get("source") or "—")), cell),
@@ -1247,10 +1344,10 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
             Paragraph(_inr(row.get("quotation_value")) if row.get("quotation_value") not in (None, "—", "") else "—", cell),
         ])
     if len(rows) == 1:
-        rows.append([Paragraph("No leads found", cell), *[Paragraph("—", cell) for _ in range(14)]])
+        rows.append([Paragraph("No leads found", cell), *[Paragraph("—", cell) for _ in range(15)]])
 
     usable = width - 28
-    weights = [0.07, 0.06, 0.08, 0.05, 0.06, 0.04, 0.07, 0.06, 0.06, 0.08, 0.08, 0.10, 0.06, 0.06, 0.07]
+    weights = [0.07, 0.06, 0.07, 0.04, 0.05, 0.08, 0.03, 0.07, 0.05, 0.05, 0.07, 0.07, 0.09, 0.06, 0.06, 0.07]
     col_w = [usable * w for w in weights]
     table = Table(rows, colWidths=col_w, repeatRows=1, hAlign="CENTER")
     style = _centered_table_style(SLATE)

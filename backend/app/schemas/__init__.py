@@ -152,6 +152,22 @@ class QuoteLineIn(BaseModel):
     units: float = 1
 
 
+class DailyRemarkIn(BaseModel):
+    day: date
+    remarks: str = Field(min_length=1, max_length=2000)
+    tile: Optional[str] = Field(default=None, max_length=40)
+
+
+class DailyRemarkUpdate(BaseModel):
+    remarks: str = Field(min_length=1, max_length=2000)
+
+
+class DailyTileIn(BaseModel):
+    day: date
+    tile: str = Field(min_length=1, max_length=40)
+    count: int = Field(ge=0, le=100000)
+
+
 class QuoteFormIn(BaseModel):
     """Editable EEPL quotation form (unit cost × units → total + GST + grand)."""
     unit_cost: float = Field(ge=0)

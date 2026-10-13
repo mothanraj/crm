@@ -9,6 +9,7 @@ const NAV = [
   { to: '/leads', label: 'Leads', icon: '☰', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/create-lead', label: 'Create Lead', icon: '＋', roles: ['ADMIN'] },
   { to: '/my-report', label: 'Reports', icon: '▥', roles: ['EMPLOYEE'] },
+  { to: '/daily-report', label: 'Daily Report', icon: '🗓', roles: ['EMPLOYEE'] },
   { to: '/import', label: 'Import', icon: '⤴', roles: ['ADMIN'] },
   { to: '/employees', label: 'Employees', icon: '👤', roles: ['ADMIN'] },
   { to: '/employee-leads', label: 'Employee Leads', icon: '👥', roles: ['ADMIN'] },

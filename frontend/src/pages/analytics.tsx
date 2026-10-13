@@ -149,7 +149,7 @@ function daysAgoIso(days: number) {
 }
 
 function chip(active: boolean) {
-  return `px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+  return `px-3 py-2 rounded-lg text-sm font-medium transition min-h-[40px] ${
     active ? 'bg-graphite-800 text-white' : 'bg-graphite-100 text-graphite-700 hover:bg-graphite-200'
   }`;
 }
@@ -212,12 +212,12 @@ function GroupedColumnSection({
       {!series.length ? (
         <EmptyState title="No data" hint="Nothing in this date range." />
       ) : (
-        <div className="h-64">
-          <ResponsiveContainer>
+        <div className="h-[260px] sm:h-64">
+          <ResponsiveContainer width="100%" height="100%">
             <BarChart data={series} barCategoryGap="28%" barGap={3}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" tick={{ fontSize: 10 }} minTickGap={16} />
-              <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={48} />
+              <YAxis tick={{ fontSize: 10 }} allowDecimals={money} width={52} />
               <Tooltip formatter={(value: any) => [fmt(Number(value)), metricLabel]} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {multi ? groupKeys.map((key, index) => (
@@ -391,7 +391,7 @@ export function Analytics() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-graphite-500 mb-2">Filter</p>
             <div className="flex flex-wrap items-end gap-2">
-              <label className="text-sm min-w-[16rem]">
+              <label className="text-sm w-full sm:w-auto sm:min-w-[14rem]">
                 <span className="text-graphite-500 text-xs">Choose</span>
                 <select className="input mt-1" value={primary} onChange={(e) => setPrimary(e.target.value)}>
                   {FILTER_OPTIONS.map((o) => (
@@ -400,7 +400,7 @@ export function Analytics() {
                 </select>
               </label>
               {isGroup && (
-                <label className="text-sm min-w-[14rem]">
+                <label className="text-sm w-full sm:w-auto sm:min-w-[14rem]">
                   <span className="text-graphite-500 text-xs">Metric</span>
                   <select className="input mt-1" value={groupMetric} onChange={(e) => setGroupMetric(e.target.value)}>
                     {METRIC_OPTIONS.map((o) => (
@@ -410,7 +410,7 @@ export function Analytics() {
                 </label>
               )}
               {isDimension && selected && 'values' in selected && (
-                <label className="text-sm min-w-[14rem]">
+                <label className="text-sm w-full sm:w-auto sm:min-w-[14rem]">
                   <span className="text-graphite-500 text-xs">{selected.label} value</span>
                   <select className="input mt-1" value={dimValue} onChange={(e) => setDimValue(e.target.value)}>
                     <option value="">{`Select ${selected.label.toLowerCase()}`}</option>
@@ -537,7 +537,7 @@ export function Analytics() {
             </p>
 
             {periodMode ? (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {multiGroup ? (
                   <>
                     <GroupedColumnSection
@@ -633,8 +633,8 @@ export function Analytics() {
                     </div>
                   </div>
                 </div>
-                <div className="overflow-auto flex justify-center">
-                  <table className="text-sm min-w-[480px] max-w-3xl w-full text-center">
+                <div className="drag-scroll overflow-x-auto">
+                  <table className="text-sm min-w-[480px] sm:max-w-3xl w-full text-center">
                     <thead>
                       <tr className="text-graphite-500 border-b border-graphite-200">
                         <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Group'}</th>
@@ -665,8 +665,8 @@ export function Analytics() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-auto flex justify-center">
-                <table className="text-sm min-w-[420px] max-w-3xl w-full text-center">
+              <div className="drag-scroll overflow-x-auto">
+                <table className="text-sm min-w-[480px] sm:max-w-3xl w-full text-center">
                   <thead>
                     <tr className="text-graphite-500 border-b border-graphite-200">
                       <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Label'}</th>

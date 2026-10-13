@@ -6,10 +6,11 @@ import {
 } from 'recharts';
 import { api } from '../services/api';
 import { useDragScroll } from '../hooks/useDragScroll';
-import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, SlaBadge, Spinner, StatusBadge } from '../components/ui';
+import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, fmtDMY, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Analytics } from './analytics';
 export { CreateLead } from './createLead';
+export { EmployeeDailyReport } from './dailyReport';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
@@ -17,8 +18,8 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   if (!rows.length) return <EmptyState title="No data" />;
   const RADIAN = Math.PI / 180;
   return (
-    <div className="w-full h-full min-h-0 flex flex-col">
-      <div className="flex-1 min-h-0 w-full">
+    <div className="w-full flex flex-col">
+      <div className="w-full h-[240px] sm:h-[300px]">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
@@ -49,7 +50,7 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
           </PieChart>
         </ResponsiveContainer>
       </div>
-      <ul className="mt-2 flex flex-wrap justify-center content-start gap-x-3 gap-y-1.5 px-1 shrink-0 max-h-[4.5rem] overflow-y-auto">
+      <ul className="mt-3 flex flex-wrap justify-center content-start gap-x-3 gap-y-1.5 px-1 shrink-0">
         {rows.map((e, i) => (
           <li key={e.name} className="inline-flex items-center gap-1.5 text-[11px] text-graphite-700 max-w-full">
             <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
@@ -61,7 +62,16 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   );
 }
 
-/** Compact funnel table — all columns fit without horizontal scroll. */
+function FunnelHead({ full, short }: { full: string; short: string }) {
+  return (
+    <>
+      <span className="hidden sm:inline">{full}</span>
+      <span className="sm:hidden">{short}</span>
+    </>
+  );
+}
+
+/** Funnel table — horizontally scrolls on phones, full table on desktop. */
 function DashboardFunnelTable({
   labelHeader,
   rows,
@@ -73,70 +83,63 @@ function DashboardFunnelTable({
   totals: { total: number; lead_value?: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   emptyTitle: string;
 }) {
-  const cell = 'td !px-0.5 sm:!px-1 !py-1 text-[10px] sm:text-[11px] text-center align-middle leading-tight break-words [overflow-wrap:anywhere] border-graphite-100 tabular-nums';
-  const head = 'th !px-1 !py-1.5 !text-[8px] sm:!text-[9px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-tight font-semibold break-words [overflow-wrap:anywhere]';
+  const cell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-center align-middle leading-snug border-graphite-100 tabular-nums whitespace-nowrap';
+  const nameCell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-left align-middle leading-snug border-graphite-100 font-medium break-words min-w-[110px] sm:min-w-0';
+  const head = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-snug font-semibold whitespace-nowrap';
+  const firstHead = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white !bg-transparent text-left leading-snug font-semibold whitespace-nowrap';
   return (
-    <div className="rounded-lg border border-graphite-100 overflow-hidden h-full">
-      <table className="w-full table-fixed text-center">
-        <colgroup>
-          <col className="w-[18%]" />
-          <col className="w-[9%]" />
-          <col className="w-[15%]" />
-          <col className="w-[10%]" />
-          <col className="w-[10%]" />
-          <col className="w-[10%]" />
-          <col className="w-[11%]" />
-          <col className="w-[8%]" />
-          <col className="w-[9%]" />
-        </colgroup>
-        <thead>
-          <tr className="bg-[#0e7490] text-white">
-            <th className={head}>{labelHeader}</th>
-            <th className={head}>Total Leads</th>
-            <th className={head}>Total Lead Value</th>
-            <th className={head}>In Followup</th>
-            <th className={head}>Meeting</th>
-            <th className={head}>Site Visit</th>
-            <th className={head}>Quotation sent</th>
-            <th className={head}>Converted</th>
-            <th className={head}>Not Interested</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
-              <td className={`${cell} !text-left !px-1.5 font-medium break-words`}>{r.name}</td>
-              <td className={`${cell} font-bold`}>{r.total ?? 0}</td>
-              <td className={`${cell} whitespace-nowrap`}>{inr(r.lead_value)}</td>
-              <td className={cell}>{r['In Followup'] ?? 0}</td>
-              <td className={cell}>{r.Meeting ?? 0}</td>
-              <td className={cell}>{r['Site Visit'] ?? 0}</td>
-              <td className={cell}>{r['Quotation sent'] ?? 0}</td>
-              <td className={cell}>{r.Converted ?? r.converted ?? 0}</td>
-              <td className={cell}>{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+    <div className="rounded-lg border border-graphite-100 overflow-hidden">
+      <div className="drag-scroll overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <table className="w-full min-w-[680px] sm:min-w-0 text-center border-collapse">
+          <thead>
+            <tr className="bg-[#0e7490] text-white">
+              <th className={`${firstHead} sticky left-0 bg-[#0e7490] z-10`}>{labelHeader}</th>
+              <th className={head}><FunnelHead full="Total Leads" short="Leads" /></th>
+              <th className={head}><FunnelHead full="Total Lead Value" short="Value" /></th>
+              <th className={head}><FunnelHead full="In Followup" short="Follow" /></th>
+              <th className={head}><FunnelHead full="Meeting" short="Meet" /></th>
+              <th className={head}><FunnelHead full="Site Visit" short="Visit" /></th>
+              <th className={head}><FunnelHead full="Quotation sent" short="Quote" /></th>
+              <th className={head}><FunnelHead full="Converted" short="Conv." /></th>
+              <th className={head}><FunnelHead full="Not Interested" short="Not Int." /></th>
             </tr>
-          ))}
-          {rows.length > 0 && (
-            <tr className="bg-graphite-100 font-bold">
-              <td className={`${cell} !text-left !px-1.5`}>TOTAL</td>
-              <td className={cell}>{totals.total}</td>
-              <td className={`${cell} whitespace-nowrap`}>{inr(totals.lead_value)}</td>
-              <td className={cell}>{totals.follow}</td>
-              <td className={cell}>{totals.meeting}</td>
-              <td className={cell}>{totals.siteVisit}</td>
-              <td className={cell}>{totals.quote}</td>
-              <td className={cell}>{totals.converted}</td>
-              <td className={cell}>{totals.notInt}</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
+                <td className={`${nameCell} sticky left-0 z-10 ${i % 2 ? 'bg-[#f0f9ff]' : 'bg-white'}`}>{r.name}</td>
+                <td className={`${cell} font-bold`}>{r.total ?? 0}</td>
+                <td className={cell}>{inr(r.lead_value)}</td>
+                <td className={cell}>{r['In Followup'] ?? 0}</td>
+                <td className={cell}>{r.Meeting ?? 0}</td>
+                <td className={cell}>{r['Site Visit'] ?? 0}</td>
+                <td className={cell}>{r['Quotation sent'] ?? 0}</td>
+                <td className={cell}>{r.Converted ?? r.converted ?? 0}</td>
+                <td className={cell}>{(r['Not Interested'] ?? 0) + (r['Not Interested/Spam'] ?? 0)}</td>
+              </tr>
+            ))}
+            {rows.length > 0 && (
+              <tr className="bg-graphite-100 font-bold">
+                <td className={`${nameCell} sticky left-0 z-10 bg-graphite-100`}>TOTAL</td>
+                <td className={cell}>{totals.total}</td>
+                <td className={cell}>{inr(totals.lead_value)}</td>
+                <td className={cell}>{totals.follow}</td>
+                <td className={cell}>{totals.meeting}</td>
+                <td className={cell}>{totals.siteVisit}</td>
+                <td className={cell}>{totals.quote}</td>
+                <td className={cell}>{totals.converted}</td>
+                <td className={cell}>{totals.notInt}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       {rows.length === 0 && <EmptyState title={emptyTitle} hint="Import leads to populate the funnel." />}
     </div>
   );
 }
 
-/** Table + chart row: equal height cards, stack on small screens. */
+/** Table + chart row: stacked on phones, side-by-side on desktop. */
 function DashboardTableChartRow({
   title,
   labelHeader,
@@ -153,16 +156,12 @@ function DashboardTableChartRow({
   emptyTitle: string;
 }) {
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-stretch">
-      <Card title={title} className="min-w-0 h-full !p-4 flex flex-col">
-        <div className="flex-1 min-h-0 flex flex-col">
-          <DashboardFunnelTable labelHeader={labelHeader} rows={rows} totals={totals} emptyTitle={emptyTitle} />
-        </div>
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-start">
+      <Card title={`${title} — Table`} className="min-w-0 !p-4">
+        <DashboardFunnelTable labelHeader={labelHeader} rows={rows} totals={totals} emptyTitle={emptyTitle} />
       </Card>
-      <Card title={title} className="min-w-0 h-full !p-4 flex flex-col">
-        <div className="flex-1 min-h-0 flex flex-col">
-          <DashboardPie rows={pieRows} />
-        </div>
+      <Card title={`${title} — Chart`} className="min-w-0 !p-4">
+        <DashboardPie rows={pieRows} />
       </Card>
     </div>
   );
@@ -519,17 +518,17 @@ export function Dashboard() {
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
       <div className="w-full">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5 lg:gap-4 items-start w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4 items-start w-full">
           <div className="min-w-0">
             <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Status
             </div>
             <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
-            <div className="grid grid-cols-3 grid-rows-3 gap-2 md:gap-3 min-h-[18rem] sm:min-h-[21rem]">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 md:gap-3">
               {tiles.map((t) => (
-                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.5rem]`}>
-                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
-                  <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-1 py-2.5 sm:px-2 sm:py-3 shadow-sm text-center flex flex-col items-center justify-center min-h-[4.75rem] sm:min-h-[5.5rem]`}>
+                  <div className="text-[9px] sm:text-xs uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
+                  <div className="text-xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
                 </div>
               ))}
             </div>
@@ -540,12 +539,12 @@ export function Dashboard() {
               Category
             </div>
             <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-50/60 p-2 sm:p-2.5 md:p-3 shadow-sm">
-            <div className="grid grid-cols-2 grid-rows-2 gap-2 md:gap-3 min-h-[14rem] sm:min-h-[21rem]">
+            <div className="grid grid-cols-2 gap-1.5 sm:gap-2 md:gap-3">
               {categoryTiles.map((t) => (
-                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-2 py-3 sm:px-2.5 shadow-sm text-center flex flex-col items-center justify-center min-h-[6.5rem]`}>
-                  <div className="text-[11px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
-                  <div className="text-3xl sm:text-4xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
-                  <div className="text-sm sm:text-base font-semibold tabular-nums mt-1 leading-tight">{t.hint}</div>
+                <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-1 py-2.5 sm:px-2 sm:py-3 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.25rem] sm:min-h-[6.5rem]`}>
+                  <div className="text-[9px] sm:text-xs uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
+                  <div className="text-xl sm:text-3xl font-bold mt-1 tabular-nums leading-none">{t.value}</div>
+                  <div className="text-xs sm:text-sm font-semibold tabular-nums mt-1 leading-tight">{t.hint}</div>
                 </div>
               ))}
             </div>
@@ -625,12 +624,12 @@ export function Dashboard() {
         {leadValueByProduct.every((r: any) => !r.lead_value) ? (
           <EmptyState title="No lead values yet" hint="Set product and number of cars on leads to populate this chart." />
         ) : (
-          <div className="h-80">
-            <ResponsiveContainer>
+          <div className="h-[280px] sm:h-80">
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadValueByProduct} margin={{ top: 8, right: 12, left: 8, bottom: 64 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="product" interval={0} angle={-28} textAnchor="end" height={70} tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v).toLocaleString('en-IN', { notation: 'compact' })}`} width={52} />
                 <Tooltip formatter={(v: any) => inr(v)} />
                 <Bar dataKey="lead_value" name="Lead Value" fill="#3F6212" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -834,7 +833,7 @@ export function EmployeeDashboard() {
       {d.warning && (
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-3 mb-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-3 mb-2">
         <div className="min-w-0">
           <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-2 text-center">Summary</div>
           <div className="rounded-xl border border-graphite-200 bg-graphite-50 p-2 sm:p-2.5 md:p-3 shadow-sm">
@@ -867,9 +866,9 @@ export function EmployeeDashboard() {
         <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide mb-3 text-center">Lead progress</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3 auto-rows-fr">
           {progressTiles.map((t) => (
-            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[5.75rem] sm:min-h-[7rem] lg:min-h-[8.25rem] px-2 py-2.5 sm:px-3 sm:py-4 shadow-sm text-center flex flex-col items-center justify-center`}>
-              <div className="text-sm sm:text-base uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
-              <div className="text-3xl sm:text-4xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
+            <div key={t.label} className={`${t.bg} ${t.text} rounded-lg w-full h-full min-h-[5rem] sm:min-h-[7rem] lg:min-h-[8.25rem] px-1.5 py-2.5 sm:px-3 sm:py-4 shadow-sm text-center flex flex-col items-center justify-center`}>
+              <div className="text-[10px] sm:text-sm uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
+              <div className="text-2xl sm:text-4xl font-bold mt-1 sm:mt-1.5 tabular-nums leading-none">{mixCount(t.label, '')}</div>
             </div>
           ))}
         </div>
@@ -898,10 +897,10 @@ export function EmployeeDashboard() {
           </ul>
         )}
       </Card>
-      <div className="grid lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card title="Needs attention — overdue" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
           {overduePending.length === 0 ? <EmptyState title="Nothing overdue" hint="All caught up." /> : (
-            <div className="overflow-x-auto -mx-5 px-5">
+            <div className="drag-scroll overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[560px] text-sm">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Due</th>
@@ -926,7 +925,7 @@ export function EmployeeDashboard() {
         </Card>
         <Card title="My recent leads" action={<Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>}>
           {recent.length === 0 ? <EmptyState title="No leads assigned yet" hint="New Excel imports will appear here once assigned to you." /> : (
-            <div className="overflow-x-auto -mx-5 px-5">
+            <div className="drag-scroll overflow-x-auto -mx-5 px-5">
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">Status</th><th className="th">Overdue</th>
@@ -2474,7 +2473,7 @@ export function Leads() {
                     {role === 'EMPLOYEE' && <div className="min-w-0">
                       <dt className="text-graphite-500 uppercase tracking-wide font-semibold">Reminder Date</dt>
                       <dd className="text-graphite-900 mt-0.5 tabular-nums inline-flex items-center gap-1.5">
-                        <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{(l.reminder_date || '').slice(0, 10) || '—'}</span>
+                        <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>
                         {l.reminder_date && reminderTickable(l) && (
                           <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>
                         )}
@@ -2687,7 +2686,7 @@ export function Leads() {
                             </div>
                             <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {String(entry.reminder_date).slice(0, 10)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{String(l.reminder_date).slice(0, 10)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {fmtDMY(entry.reminder_date)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2917,8 +2916,8 @@ export function Leads() {
                           {(l.work_history || []).some((entry: any) => entry.reminder_date) ? (
                             <div className="space-y-1 text-[11px] text-graphite-500">
                               {l.work_history.map((entry: any, index: number) => entry.reminder_date ? (
-                                <div key={`remhist-${entry.id || index}`} className="tabular-nums inline-flex items-center gap-1">
-                                  <span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{index + 1}. {String(entry.reminder_date).slice(0, 10)}</span>
+                                <div key={`remhist-${entry.id || index}`} className="tabular-nums flex items-center gap-1 whitespace-nowrap">
+                                  <span className={`whitespace-nowrap ${entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{index + 1}. {fmtDMY(entry.reminder_date)}</span>
                                   {entry.id && reminderTickable(l) && (
                                     <button
                                       type="button"
@@ -2936,8 +2935,8 @@ export function Leads() {
                             </div>
                           ) : null}
                           {reminderOf(l) && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
-                            <div className="inline-flex items-center gap-1.5 mt-1">
-                              <span className={`text-sm tabular-nums ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{reminderOf(l)}</span>
+                            <div className="flex items-center gap-1.5 mt-1 whitespace-nowrap">
+                              <span className={`text-[11px] tabular-nums whitespace-nowrap ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>
                               {reminderTickable(l) && (
                                 <button
                                   type="button"
@@ -2945,7 +2944,7 @@ export function Leads() {
                                   aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'}
                                   disabled={savingId === l.id}
                                   onClick={(e) => { e.stopPropagation(); toggleLeadReminder(l); }}
-                                  className={tickBtn(!!l.reminder_done)}
+                                  className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}
                                 >
                                   ✓
                                 </button>
@@ -3828,7 +3827,7 @@ export function LeadDetail({ id }: { id: string }) {
               <p className="text-sm whitespace-pre-wrap">{l.employee_remarks}</p>
               {l.reminder_date && !(l.activities || []).some((a: any) => a.reminder_date && String(a.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (
                 <p className="text-xs text-graphite-500 mt-2 tabular-nums inline-flex items-center gap-1.5">
-                  <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(l.reminder_date).slice(0, 10)}</span>
+                  <span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>
                   {role !== 'EMPLOYEE' && !leadLocked && !frozen && (
                     <button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={toggleDetailReminder} className={`inline-flex items-center justify-center w-7 h-7 rounded-md border text-sm shrink-0 ${l.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
                   )}
@@ -3862,7 +3861,7 @@ export function LeadDetail({ id }: { id: string }) {
                     <p className="text-sm text-graphite-700 mt-1 whitespace-pre-wrap">{a.notes}</p>
                     {a.reminder_date && (
                       <p className="text-xs text-graphite-500 mt-1 tabular-nums inline-flex items-center gap-1.5">
-                        <span className={a.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{String(a.reminder_date).slice(0, 10)}</span>
+                        <span className={a.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(a.reminder_date)}</span>
                         {role !== 'EMPLOYEE' && !leadLocked && !frozen && a.id && (
                           <button type="button" title={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={a.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={busy} onClick={() => toggleDetailEntryReminder(a)} className={`inline-flex items-center justify-center w-6 h-6 rounded-md border text-xs shrink-0 ${a.reminder_done ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>✓</button>
                         )}
@@ -5565,6 +5564,7 @@ export function Reports() {
                         { label: 'Date', cls: '!text-center' },
                         { label: 'Customer', cls: '!text-left' },
                         { label: 'Company', cls: '!text-left' },
+                        { label: 'Email', cls: '!text-left' },
                         { label: 'City', cls: '!text-center' },
                         { label: 'Contact', cls: '!text-center' },
                         { label: 'Cars', cls: '!text-center' },
@@ -5615,6 +5615,7 @@ export function Reports() {
                           <td className={`${cell} !text-center`}>{row.enquiry_date}</td>
                           <td className={`${cell} !text-left`}>{row.customer_name}</td>
                           <td className={`${cell} !text-left`}>{row.company_name}</td>
+                          <td className={`${cell} !text-left`}>{row.email}</td>
                           <td className={`${cell} !text-center`}>{row.city}</td>
                           <td className={`${cell} !text-center`}>{row.contact_number}</td>
                           <td className={`${cell} !text-center`}>{row.cars}</td>

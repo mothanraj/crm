@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
 from app.db.session import get_db
-from app.models import Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
+from app.models import DailyRemark, DailyTileOverride, Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
+from app.schemas import DailyRemarkIn, DailyRemarkUpdate, DailyTileIn
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 from app.services.pricing import PRODUCT_PRICES, calc_lead_value, price_for_product
 
@@ -2484,3 +2485,356 @@ def mark_read(nid: UUID, db: Session = Depends(get_db), u: User = Depends(curren
     n.is_read = True
     db.commit()
     return {"ok": True}
+
+
+def _daily_today_ist() -> date:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        return date.today()
+
+
+def _require_daily_owner(u: User) -> User:
+    if not _is_employee(u):
+        raise HTTPException(403, "This report is for employees")
+    return u
+
+
+def _daily_remark_row(r: DailyRemark) -> dict:
+    return {
+        "id": str(r.id),
+        "day": r.day.isoformat() if r.day else None,
+        "remarks": r.remarks or "",
+        "tile": getattr(r, "tile_key", None) or None,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
+def _validate_daily_tile(tile: str | None) -> str | None:
+    if tile is None:
+        return None
+    key = tile.strip()
+    if key and key not in set(DAILY_TILE_KEYS.values()):
+        raise HTTPException(400, "Unknown tile")
+    return key or None
+
+
+DAILY_PROGRESS = ["In Followup", "Meeting", "Site Visit", "Quotation sent", "Converted", "Not Interested"]
+_DAILY_ALIASES = {"Not Interested/Spam": "Not Interested"}
+DAILY_TILE_KEYS = {
+    "New leads": "new_leads",
+    "In Followup": "followup",
+    "Meeting": "meeting",
+    "Site Visit": "site_visit",
+    "Quotation sent": "quotation",
+    "Converted": "converted",
+}
+
+
+@router.get("/dashboard/daily-report")
+def daily_report(
+    day: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+):
+    """Employee's single-day report: leads assigned that day + work logged that day.
+
+    Employee-only: an employee sees only their own day.
+    """
+    me = _require_daily_owner(u)
+    d = _parse_date(day, "date")
+    if not d:
+        raise HTTPException(400, "Choose a date")
+    if d > _daily_today_ist():
+        raise HTTPException(400, "Future dates are not allowed")
+    assign_day = func.date(func.timezone("Asia/Kolkata", LeadAssignment.assigned_at))
+    new_leads = (
+        db.query(Lead)
+        .join(LeadAssignment, LeadAssignment.lead_id == Lead.id)
+        .filter(
+            LeadAssignment.employee_id == me.id,
+            Lead.is_active.is_(True),
+            assign_day == d,
+        )
+        .order_by(Lead.enquiry_number)
+        .all()
+    )
+    local_day = func.date(func.timezone("Asia/Kolkata", LeadActivity.activity_at))
+    outcomes = (
+        db.query(LeadActivity.outcome)
+        .filter(
+            LeadActivity.employee_id == me.id,
+            LeadActivity.activity_type == "Work Progress",
+            LeadActivity.activity_at.isnot(None),
+            local_day == d,
+        )
+        .all()
+    )
+    counts = {name: 0 for name in DAILY_PROGRESS}
+    for (outcome,) in outcomes:
+        label = _DAILY_ALIASES.get((outcome or "").strip(), (outcome or "").strip())
+        if label in counts:
+            counts[label] += 1
+    overrides = {
+        r.tile_key: int(r.count)
+        for r in db.query(DailyTileOverride)
+        .filter(DailyTileOverride.employee_id == me.id, DailyTileOverride.day == d)
+        .all()
+        if r.tile_key in set(DAILY_TILE_KEYS.values())
+    }
+    return {
+        "day": d.isoformat(),
+        "progress": [{"label": name, "count": counts[name]} for name in DAILY_PROGRESS],
+        "overrides": overrides,
+        "new_leads": [
+            {
+                "id": str(x.id),
+                "enquiry_number": x.enquiry_number,
+                "customer_name": x.customer_name or "—",
+                "company_name": x.company_name or "",
+                "city": x.city or "",
+            }
+            for x in new_leads
+        ],
+        "new_leads_count": len(new_leads),
+    }
+
+
+@router.get("/dashboard/daily-remarks")
+def daily_remarks_list(
+    day: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+):
+    """Employee's own diary entries for a day, newest first."""
+    me = _require_daily_owner(u)
+    d = _parse_date(day, "date")
+    if not d:
+        raise HTTPException(400, "Choose a date")
+    rows = (
+        db.query(DailyRemark)
+        .filter(DailyRemark.employee_id == me.id, DailyRemark.day == d)
+        .order_by(DailyRemark.created_at.desc())
+        .all()
+    )
+    return {"day": d.isoformat(), "remarks": [_daily_remark_row(r) for r in rows]}
+
+
+@router.post("/dashboard/daily-remarks")
+def daily_remarks_create(
+    body: DailyRemarkIn, db: Session = Depends(get_db), u: User = Depends(current_user),
+):
+    """Add one diary entry for a day. Employee-only."""
+    me = _require_daily_owner(u)
+    data = body
+    if not data.day:
+        raise HTTPException(400, "Choose a date")
+    if data.day > _daily_today_ist():
+        raise HTTPException(400, "Future dates are not allowed")
+    text = (data.remarks or "").strip()
+    if not text:
+        raise HTTPException(400, "Remarks cannot be empty")
+    row = DailyRemark(employee_id=me.id, day=data.day, remarks=text[:2000], tile_key=_validate_daily_tile(data.tile))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _daily_remark_row(row)
+
+
+@router.put("/dashboard/daily-remarks/{rid}")
+def daily_remarks_update(
+    rid: UUID, body: DailyRemarkUpdate, db: Session = Depends(get_db), u: User = Depends(current_user),
+):
+    """Edit one of your own diary entries."""
+    me = _require_daily_owner(u)
+    data = body
+    row = db.get(DailyRemark, rid)
+    if not row or row.employee_id != me.id:
+        raise HTTPException(404, "Remark not found")
+    text = (data.remarks or "").strip()
+    if not text:
+        raise HTTPException(400, "Remarks cannot be empty")
+    row.remarks = text[:2000]
+    db.commit()
+    db.refresh(row)
+    return _daily_remark_row(row)
+
+
+@router.delete("/dashboard/daily-remarks/{rid}")
+def daily_remarks_delete(rid: UUID, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    """Delete one of your own diary entries."""
+    me = _require_daily_owner(u)
+    row = db.get(DailyRemark, rid)
+    if not row or row.employee_id != me.id:
+        raise HTTPException(404, "Remark not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+def _daily_effective_counts(db: Session, me: User, d: date, counts: dict, new_leads_count: int) -> tuple[dict, dict]:
+    """Merge stored tile overrides over system counts. Returns (effective, overrides)."""
+    overrides = {
+        r.tile_key: int(r.count)
+        for r in db.query(DailyTileOverride)
+        .filter(DailyTileOverride.employee_id == me.id, DailyTileOverride.day == d)
+        .all()
+        if r.tile_key in set(DAILY_TILE_KEYS.values())
+    }
+    system = {"new_leads": int(new_leads_count)}
+    for name in DAILY_PROGRESS:
+        key = DAILY_TILE_KEYS.get(name)
+        if key:
+            system[key] = int(counts.get(name, 0))
+    effective = {key: overrides.get(key, value) for key, value in system.items()}
+    return effective, overrides
+
+
+@router.put("/dashboard/daily-tiles")
+def daily_tiles_upsert(
+    body: DailyTileIn, db: Session = Depends(get_db), u: User = Depends(current_user),
+):
+    """Overwrite one tile's count for a day. Employee-only, own day."""
+    me = _require_daily_owner(u)
+    if not body.day:
+        raise HTTPException(400, "Choose a date")
+    if body.day > _daily_today_ist():
+        raise HTTPException(400, "Future dates are not allowed")
+    key = (body.tile or "").strip()
+    if key not in set(DAILY_TILE_KEYS.values()):
+        raise HTTPException(400, "Unknown tile")
+    row = (
+        db.query(DailyTileOverride)
+        .filter(
+            DailyTileOverride.employee_id == me.id,
+            DailyTileOverride.day == body.day,
+            DailyTileOverride.tile_key == key,
+        )
+        .first()
+    )
+    if row:
+        row.count = int(body.count)
+    else:
+        row = DailyTileOverride(employee_id=me.id, day=body.day, tile_key=key, count=int(body.count))
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"day": row.day.isoformat(), "tile": row.tile_key, "count": int(row.count)}
+
+
+@router.delete("/dashboard/daily-tiles")
+def daily_tiles_revert(
+    day: str | None = Query(default=None),
+    tile: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+):
+    """Revert one tile to its system count. Employee-only, own day."""
+    me = _require_daily_owner(u)
+    d = _parse_date(day, "date")
+    if not d:
+        raise HTTPException(400, "Choose a date")
+    key = (tile or "").strip()
+    if key not in set(DAILY_TILE_KEYS.values()):
+        raise HTTPException(400, "Unknown tile")
+    row = (
+        db.query(DailyTileOverride)
+        .filter(
+            DailyTileOverride.employee_id == me.id,
+            DailyTileOverride.day == d,
+            DailyTileOverride.tile_key == key,
+        )
+        .first()
+    )
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"ok": True}
+
+
+@router.get("/dashboard/daily-report/pdf")
+def daily_report_pdf(
+    day: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+):
+    """Employee's single-day report as PDF, using edited tile counts."""
+    from app.services.report_pdf import build_employee_daily_pdf
+
+    me = _require_daily_owner(u)
+    d = _parse_date(day, "date")
+    if not d:
+        raise HTTPException(400, "Choose a date")
+    if d > _daily_today_ist():
+        raise HTTPException(400, "Future dates are not allowed")
+    assign_day = func.date(func.timezone("Asia/Kolkata", LeadAssignment.assigned_at))
+    new_leads = (
+        db.query(Lead)
+        .join(LeadAssignment, LeadAssignment.lead_id == Lead.id)
+        .filter(
+            LeadAssignment.employee_id == me.id,
+            Lead.is_active.is_(True),
+            assign_day == d,
+        )
+        .order_by(Lead.enquiry_number)
+        .all()
+    )
+    local_day = func.date(func.timezone("Asia/Kolkata", LeadActivity.activity_at))
+    outcomes = (
+        db.query(LeadActivity.outcome)
+        .filter(
+            LeadActivity.employee_id == me.id,
+            LeadActivity.activity_type == "Work Progress",
+            LeadActivity.activity_at.isnot(None),
+            local_day == d,
+        )
+        .all()
+    )
+    counts = {name: 0 for name in DAILY_PROGRESS}
+    for (outcome,) in outcomes:
+        label = _DAILY_ALIASES.get((outcome or "").strip(), (outcome or "").strip())
+        if label in counts:
+            counts[label] += 1
+    effective, overrides = _daily_effective_counts(db, me, d, counts, len(new_leads))
+    remarks = (
+        db.query(DailyRemark)
+        .filter(DailyRemark.employee_id == me.id, DailyRemark.day == d)
+        .order_by(DailyRemark.created_at.asc())
+        .all()
+    )
+    tile_notes: dict[str, str] = {}
+    for r in remarks:
+        key = getattr(r, "tile_key", None)
+        if key and key not in tile_notes:
+            tile_notes[key] = r.remarks or ""
+    payload = {
+        "employee": me.name or "Employee",
+        "day": d.isoformat(),
+        "tiles": [
+            {"label": "New leads", "count": effective["new_leads"], "edited": "new_leads" in overrides, "note": tile_notes.get("new_leads", "")},
+            {"label": "In Followup", "count": effective["followup"], "edited": "followup" in overrides, "note": tile_notes.get("followup", "")},
+            {"label": "Quotation sent", "count": effective["quotation"], "edited": "quotation" in overrides, "note": tile_notes.get("quotation", "")},
+            {"label": "Meeting", "count": effective["meeting"], "edited": "meeting" in overrides, "note": tile_notes.get("meeting", "")},
+            {"label": "Site Visit", "count": effective["site_visit"], "edited": "site_visit" in overrides, "note": tile_notes.get("site_visit", "")},
+            {"label": "Converted", "count": effective["converted"], "edited": "converted" in overrides, "note": tile_notes.get("converted", "")},
+        ],
+        "new_leads": [
+            {
+                "enquiry_number": x.enquiry_number,
+                "customer_name": x.customer_name or "—",
+                "company_name": x.company_name or "",
+                "city": x.city or "",
+            }
+            for x in new_leads
+        ],
+        "remarks": [_daily_remark_row(r)["remarks"] for r in remarks if not getattr(r, "tile_key", None)],
+    }
+    content = build_employee_daily_pdf(payload)
+    who = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (payload["employee"] or "employee"))
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="daily-report-{who}-{d.isoformat()}.pdf"'},
+    )

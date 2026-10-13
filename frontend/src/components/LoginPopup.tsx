@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
+import { fmtDMY } from './ui';
 
 const POP_FLAG = 'crm:login-popup';
 const ROW_CAP = 8;
@@ -123,7 +124,7 @@ export function EmployeeLoginPopup() {
                         </Link>
                         {s.key === 'reminders' && l.reminder_date && (
                           <span className="text-[11px] font-semibold tabular-nums text-graphite-600 bg-graphite-100 rounded px-1.5 py-0.5 shrink-0">
-                            {String(l.reminder_date).slice(0, 10)}
+                            {fmtDMY(l.reminder_date)}
                           </span>
                         )}
                       </div>
