@@ -98,6 +98,85 @@ def next_enquiry_number(db: Session) -> str:
     return f"ENQ-{seq.last_number:06d}"
 
 
+def parse_enquiry_suffix(value: str | None) -> int | None:
+    """Numeric suffix of 'ENQ-000123' (or plain '123'). None when unparseable."""
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if not text:
+        return None
+    if text.startswith("ENQ-"):
+        text = text[4:]
+    text = text.strip().lstrip("0") or "0"
+    try:
+        number = int(text)
+    except ValueError:
+        return None
+    return number if number >= 0 else None
+
+
+def enquiry_sequence_info(db: Session) -> dict:
+    """Current counter + lead usage (for status display and reset safety checks)."""
+    seq = db.query(EnquirySequence).first()
+    last_number = int(seq.last_number) if seq else 0
+    leads_count = db.query(Lead).count()
+    max_number = 0
+    max_enquiry: str | None = None
+    for (enquiry_number,) in db.query(Lead.enquiry_number).all():
+        number = parse_enquiry_suffix(enquiry_number)
+        if number is not None and number > max_number:
+            max_number = number
+            max_enquiry = enquiry_number
+    next_number = last_number + 1
+    return {
+        "last_number": last_number,
+        "next_number": next_number,
+        "next_enquiry": format_enquiry_number(next_number),
+        "leads_count": leads_count,
+        "max_number": max_number,
+        "max_enquiry": max_enquiry,
+    }
+
+
+def reset_enquiry_sequence(db: Session, to_number: int = 0, *, force: bool = False) -> dict:
+    """Reset the ENQ counter so the next lead is ENQ-{to_number+1:06d}.
+
+    Collapses stray duplicate rows to a single row. Refuses to move the
+    counter below the highest existing ENQ number unless force=True
+    (which would re-issue duplicate enquiry_numbers via the UNIQUE constraint).
+    """
+    if int(to_number) < 0:
+        raise ValueError("to_number must be >= 0")
+    to_number = int(to_number)
+    seqs = db.query(EnquirySequence).with_for_update().all()
+    if not seqs:
+        seq = EnquirySequence(last_number=0)
+        db.add(seq)
+        db.flush()
+        seqs = [seq]
+    seq = seqs[0]
+    for extra in seqs[1:]:
+        db.delete(extra)
+    db.flush()
+    info = enquiry_sequence_info(db)
+    if not force and to_number < info["max_number"]:
+        raise ValueError(
+            f"Cannot reset counter to {to_number}: "
+            f"existing max is {info['max_enquiry']} ({info['max_number']}). "
+            "Use force=True to override (next numbers WILL collide)."
+        )
+    seq.last_number = to_number
+    db.flush()
+    return {
+        "last_number": seq.last_number,
+        "next_number": seq.last_number + 1,
+        "next_enquiry": format_enquiry_number(seq.last_number + 1),
+        "leads_count": info["leads_count"],
+        "max_number": info["max_number"],
+        "max_enquiry": info["max_enquiry"],
+    }
+
+
 def eligible_employees(db: Session) -> list[User]:
     return (
         db.query(User)

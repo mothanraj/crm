@@ -8,7 +8,8 @@ import logging
 import math
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
@@ -16,6 +17,7 @@ from app.core.deps import admin_only
 from app.db.session import get_db
 from app.models import Lead, LeadAssignment, LeadSource, Role, User
 from app.services import email_service
+from app.services.lead_service import enquiry_sequence_info, reset_enquiry_sequence
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +63,39 @@ def _diagnose(db: Session) -> dict:
             ).count(),
         },
     }
+
+
+class EnquirySequenceReset(BaseModel):
+    to_number: int = Field(0, ge=0, description="New last_number; next lead is ENQ-{to+1:06d}")
+    force: bool = Field(False, description="Allow moving below the highest existing ENQ number")
+    confirm: bool = Field(False, description="Must be true to guard against accidental resets")
+
+
+@router.get("/enquiry-sequence/status")
+def enquiry_sequence_status(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    """Current ENQ counter + lead usage (pre-check before a reset)."""
+    return enquiry_sequence_info(db)
+
+
+@router.post("/enquiry-sequence/reset")
+def enquiry_sequence_reset(
+    body: EnquirySequenceReset,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    """Reset the Enq No. counter (default to 0 so next lead is ENQ-000001).
+
+    Blocked below the highest existing ENQ number unless force=True,
+    since the next numbers would collide on the UNIQUE constraint.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "Pass confirm=true to reset the enquiry counter")
+    try:
+        result = reset_enquiry_sequence(db, body.to_number, force=body.force)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.commit()
+    return result
 
 
 @router.get("/overdue-digest/status")
