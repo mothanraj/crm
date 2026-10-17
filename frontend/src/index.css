@@ -103,7 +103,7 @@
   transition: opacity 0.45s ease, transform 0.45s ease, max-height 0.45s ease, padding 0.45s ease, margin 0.45s ease;
 }
 .todo-row:not(.todo-leaving) {
-  max-height: 200px;
+  max-height: 40rem;
   transition: opacity 0.45s ease, transform 0.45s ease;
 }
 

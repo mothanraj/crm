@@ -18,8 +18,8 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   if (!rows.length) return <EmptyState title="No data" />;
   const RADIAN = Math.PI / 180;
   return (
-    <div className="w-full flex flex-col">
-      <div className="w-full h-[240px] sm:h-[300px]">
+    <div className="absolute inset-0 flex flex-col">
+      <div className="w-full flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
@@ -28,8 +28,8 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
               nameKey="name"
               cx="50%"
               cy="50%"
-              innerRadius="38%"
-              outerRadius="72%"
+              innerRadius="44%"
+              outerRadius="80%"
               paddingAngle={1.5}
               labelLine={false}
               label={({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
@@ -65,8 +65,8 @@ function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
 function FunnelHead({ full, short }: { full: string; short: string }) {
   return (
     <>
-      <span className="hidden sm:inline">{full}</span>
-      <span className="sm:hidden">{short}</span>
+      <span className="xl:hidden">{full}</span>
+      <span className="hidden xl:inline">{short}</span>
     </>
   );
 }
@@ -83,14 +83,14 @@ function DashboardFunnelTable({
   totals: { total: number; lead_value?: number; follow: number; meeting: number; siteVisit: number; quote: number; converted: number; notInt: number };
   emptyTitle: string;
 }) {
-  const cell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-center align-middle leading-snug border-graphite-100 tabular-nums whitespace-nowrap';
-  const nameCell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-left align-middle leading-snug border-graphite-100 font-medium break-words min-w-[110px] sm:min-w-0';
-  const head = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-snug font-semibold whitespace-nowrap';
-  const firstHead = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white !bg-transparent text-left leading-snug font-semibold whitespace-nowrap';
+  const cell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-center align-middle leading-snug border-graphite-100 tabular-nums whitespace-nowrap sm:whitespace-normal break-words';
+  const nameCell = 'td !px-2 !py-2 text-[11px] sm:text-xs text-left align-middle leading-snug border-graphite-100 font-medium whitespace-nowrap sm:whitespace-normal break-words';
+  const head = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white !bg-transparent text-center leading-snug font-semibold whitespace-nowrap sm:whitespace-normal break-words';
+  const firstHead = 'th !px-2 !py-2 !text-[10px] sm:!text-[11px] !normal-case !tracking-normal !text-white text-left leading-snug font-semibold whitespace-nowrap sm:whitespace-normal break-words';
   return (
     <div className="rounded-lg border border-graphite-100 overflow-hidden">
       <div className="drag-scroll overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-        <table className="w-full min-w-[680px] sm:min-w-0 text-center border-collapse">
+        <table className="w-full min-w-[640px] sm:min-w-0 text-center border-collapse">
           <thead>
             <tr className="bg-[#0e7490] text-white">
               <th className={`${firstHead} sticky left-0 bg-[#0e7490] z-10`}>{labelHeader}</th>
@@ -156,12 +156,14 @@ function DashboardTableChartRow({
   emptyTitle: string;
 }) {
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-start">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4 items-stretch">
       <Card title={`${title} — Table`} className="min-w-0 !p-4">
         <DashboardFunnelTable labelHeader={labelHeader} rows={rows} totals={totals} emptyTitle={emptyTitle} />
       </Card>
-      <Card title={`${title} — Chart`} className="min-w-0 !p-4">
-        <DashboardPie rows={pieRows} />
+      <Card title={`${title} — Chart`} className="min-w-0 !p-4 flex flex-col">
+        <div className="relative flex-1 min-h-[240px] sm:min-h-[300px] xl:min-h-0">
+          <DashboardPie rows={pieRows} />
+        </div>
       </Card>
     </div>
   );
@@ -518,13 +520,13 @@ export function Dashboard() {
         <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl px-4 py-3 text-sm">⚠ {d.warning}</div>
       )}
       <div className="w-full">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4 items-start w-full">
-          <div className="min-w-0">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4 items-stretch w-full">
+          <div className="min-w-0 flex flex-col">
             <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Status
             </div>
-            <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
-            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 md:gap-3">
+            <div className="flex-1 flex flex-col rounded-xl border border-sky-200 bg-sky-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 md:gap-3 h-full auto-rows-fr">
               {tiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-1 py-2.5 sm:px-2 sm:py-3 shadow-sm text-center flex flex-col items-center justify-center min-h-[4.75rem] sm:min-h-[5.5rem]`}>
                   <div className="text-[9px] sm:text-xs uppercase tracking-wide opacity-95 font-bold leading-tight break-words">{t.label}</div>
@@ -534,12 +536,12 @@ export function Dashboard() {
             </div>
             </div>
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex flex-col">
             <div className="text-base sm:text-lg font-bold text-graphite-700 uppercase tracking-wide text-center leading-none mb-2">
               Category
             </div>
-            <div className="rounded-xl border border-fuchsia-200 bg-fuchsia-50/60 p-2 sm:p-2.5 md:p-3 shadow-sm">
-            <div className="grid grid-cols-2 gap-1.5 sm:gap-2 md:gap-3">
+            <div className="flex-1 flex flex-col rounded-xl border border-fuchsia-200 bg-fuchsia-50/60 p-2 sm:p-2.5 md:p-3 shadow-sm">
+            <div className="grid grid-cols-2 gap-1.5 sm:gap-2 md:gap-3 h-full auto-rows-fr">
               {categoryTiles.map((t) => (
                 <div key={t.label} className={`${t.bg} ${t.text} rounded-lg px-1 py-2.5 sm:px-2 sm:py-3 shadow-sm text-center flex flex-col items-center justify-center min-h-[5.25rem] sm:min-h-[6.5rem]`}>
                   <div className="text-[9px] sm:text-xs uppercase tracking-wide opacity-95 font-bold leading-tight break-words px-0.5">{t.label}</div>
