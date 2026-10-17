@@ -18,11 +18,17 @@ class Settings(BaseSettings):
     OPEN_LEAD_LIMIT: int = 3
     CORS_ORIGINS: str = "http://localhost:5173"
     FRONTEND_URL: str = "http://localhost:5173"
-    # Email via Brevo (transactional). Real key lives in local .env only.
+    # Email via SMTP. Real credentials live in local .env only.
     EMAIL_ENABLED: bool = True
-    BREVO_API_KEY: str = ""
-    BREVO_SENDER_EMAIL: str = ""
-    BREVO_SENDER_NAME: str = "E-Star CRM"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_SSL: bool = True
+    SMTP_USE_TLS: bool = False
+    SMTP_TIMEOUT: int = 30
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_FROM_NAME: str = "E-Star CRM"
     OVERDUE_DIGEST_HOUR: int = 9
 
 

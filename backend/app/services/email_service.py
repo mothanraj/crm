@@ -1,31 +1,31 @@
-"""Transactional email via Brevo REST API (httpx, no extra dependency).
+"""Transactional email via SMTP (stdlib smtplib, no extra dependency).
 
 Failures only log — email must never break imports, assigns, or sweeps.
 
 Logic (Sep 2026):
 - Employee: one batched email on assignment with full customer details.
   Every distinct lead appears once (keyed by lead id). Large lists are
-  split into parts so Brevo accepts the HTML.
+  split into parts so messages stay small.
 - Admin: one daily email listing customers past the 3-day due with no
   talk/status update, including assigned date.
 """
 from __future__ import annotations
 
 import logging
-
-import httpx
+import smtplib
+from email.message import EmailMessage
+from email.utils import formataddr
 
 from app.core.config import settings
 
 log = logging.getLogger(__name__)
 
-BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
-# Keep each message small enough for Brevo. Large Excel imports are split.
+# Keep each message small enough for mail servers. Large Excel imports are split.
 ASSIGNMENT_EMAIL_CHUNK = 25
 
 
 def emails_enabled() -> bool:
-    return bool(settings.EMAIL_ENABLED and settings.BREVO_API_KEY and settings.BREVO_SENDER_EMAIL)
+    return bool(settings.EMAIL_ENABLED and settings.SMTP_HOST and settings.SMTP_FROM_EMAIL)
 
 
 def dedupe_assignment_items(leads: list[dict]) -> list[dict]:
@@ -44,33 +44,38 @@ def dedupe_assignment_items(leads: list[dict]) -> list[dict]:
 
 
 def send_email(to_email: str, to_name: str, subject: str, html: str) -> bool:
-    """POST one transactional email via Brevo. Returns True on accept."""
+    """Send one transactional email via SMTP. Returns True on accept."""
     if not emails_enabled():
         log.info("email disabled — skipping '%s' to %s", subject, to_email)
         return False
     if not to_email:
         log.warning("email skipped — empty recipient for '%s'", subject)
         return False
-    payload = {
-        "sender": {"email": settings.BREVO_SENDER_EMAIL, "name": settings.BREVO_SENDER_NAME},
-        "to": [{"email": to_email, "name": to_name or to_email}],
-        "subject": subject,
-        "htmlContent": html,
-    }
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((settings.SMTP_FROM_NAME, settings.SMTP_FROM_EMAIL))
+    msg["To"] = formataddr((to_name or to_email, to_email))
+    # Plaintext fallback for clients that ignore HTML; HTML is the real body.
+    msg.set_content("Please view this email in an HTML-capable mail client.")
+    msg.add_alternative(html, subtype="html")
     try:
-        resp = httpx.post(
-            BREVO_SEND_URL,
-            json=payload,
-            headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json",
-                     "Accept": "application/json"},
-            timeout=60.0,
-        )
-        if resp.status_code in (200, 201):
-            log.info("email sent '%s' to %s (%s bytes html)", subject, to_email, len(html))
-            return True
-        log.error("Brevo rejected email '%s' to %s: %s %s", subject, to_email,
-                  resp.status_code, resp.text[:300])
-        return False
+        timeout = max(5, int(settings.SMTP_TIMEOUT or 30))
+        if settings.SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, int(settings.SMTP_PORT),
+                                  timeout=timeout) as smtp:
+                if settings.SMTP_USERNAME:
+                    smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, int(settings.SMTP_PORT),
+                              timeout=timeout) as smtp:
+                if settings.SMTP_USE_TLS:
+                    smtp.starttls()
+                if settings.SMTP_USERNAME:
+                    smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                smtp.send_message(msg)
+        log.info("email sent '%s' to %s (%s bytes html)", subject, to_email, len(html))
+        return True
     except Exception as exc:
         log.error("email send failed '%s' to %s: %s", subject, to_email, exc)
         return False
@@ -166,7 +171,7 @@ def build_assignment_email(
 {index_rows}
 </ol>
 {cards}
-<p>— {settings.BREVO_SENDER_NAME}</p>"""
+<p>— {settings.SMTP_FROM_NAME}</p>"""
     return subject, html
 
 
@@ -280,7 +285,7 @@ def build_overdue_digest(date_str: str, groups: list[dict]) -> tuple[str, str]:
         rows += "</ul>"
     html = f"""<p>{intro}</p>
 {rows}
-<p>— {settings.BREVO_SENDER_NAME}</p>"""
+<p>— {settings.SMTP_FROM_NAME}</p>"""
     return subject, html
 
 
