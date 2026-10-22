@@ -5,6 +5,7 @@ OVERDUE_DIGEST_HOUR + once per lead via overdue_digest_at. This endpoint
 lets an admin see WHY no mail arrived and trigger a send on demand.
 """
 import logging
+import json
 import math
 from datetime import datetime, timezone
 
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.deps import admin_only
 from app.db.session import get_db
-from app.models import Lead, LeadAssignment, LeadSource, Role, User
+from app.models import Lead, LeadAssignment, LeadSource, Quotation, Role, User
 from app.services import email_service
 from app.services.lead_service import enquiry_sequence_info, reset_enquiry_sequence
 
@@ -32,6 +33,20 @@ def _mailable_admins(db: Session) -> list[User]:
         .options(joinedload(User.role))
         .all()
     )
+
+
+def _quotation_is_issued(quote: Quotation) -> bool:
+    if quote.amount_excl is not None:
+        try:
+            if float(quote.amount_excl) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    try:
+        data = json.loads(quote.notes or "")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and bool(data.get("issued"))
 
 
 def _diagnose(db: Session) -> dict:
@@ -73,6 +88,10 @@ class EnquirySequenceReset(BaseModel):
     confirm: bool = Field(False, description="Must be true to guard against accidental resets")
 
 
+class QuotationSequenceReset(BaseModel):
+    confirm: bool = Field(False, description="Must be true to guard against accidental resets")
+
+
 @router.get("/enquiry-sequence/status")
 def enquiry_sequence_status(db: Session = Depends(get_db), _: User = Depends(admin_only)):
     """Current ENQ counter + lead usage (pre-check before a reset)."""
@@ -98,6 +117,33 @@ def enquiry_sequence_reset(
         raise HTTPException(400, str(exc)) from exc
     db.commit()
     return result
+
+
+@router.post("/quotation-sequence/reset")
+def quotation_sequence_reset(
+    body: QuotationSequenceReset,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    """Reset the quotation series to Q1 when no saved quotations exist.
+
+    Existing saved quotations are kept immutable, so resetting over an issued
+    series is blocked rather than creating duplicate quotation references.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "Pass confirm=true to reset the quotation series")
+    quotations = db.query(Quotation).all()
+    issued = [q.quotation_number for q in quotations if _quotation_is_issued(q)]
+    if issued:
+        raise HTTPException(
+            409,
+            f"Cannot reset quotation series while {len(issued)} saved quotation(s) exist. Archive or remove them first.",
+        )
+    drafts = [q for q in quotations if not _quotation_is_issued(q)]
+    for draft in drafts:
+        db.delete(draft)
+    db.commit()
+    return {"reset": True, "next_quotation_number": "Q1", "deleted_drafts": len(drafts), "saved_quotations": 0}
 
 
 @router.get("/overdue-digest/status")
