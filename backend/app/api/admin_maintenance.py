@@ -5,6 +5,7 @@ OVERDUE_DIGEST_HOUR + once per lead via overdue_digest_at. This endpoint
 lets an admin see WHY no mail arrived and trigger a send on demand.
 """
 import logging
+import json
 import math
 from datetime import datetime, timezone
 
@@ -18,7 +19,6 @@ from app.db.session import get_db
 from app.models import Lead, LeadAssignment, LeadSource, Quotation, Role, User
 from app.services import email_service
 from app.services.lead_service import enquiry_sequence_info, reset_enquiry_sequence
-from app.services.quotation_form import _quotation_is_issued
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,20 @@ def _mailable_admins(db: Session) -> list[User]:
         .options(joinedload(User.role))
         .all()
     )
+
+
+def _quotation_is_issued(quote: Quotation) -> bool:
+    if quote.amount_excl is not None:
+        try:
+            if float(quote.amount_excl) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    try:
+        data = json.loads(quote.notes or "")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and bool(data.get("issued"))
 
 
 def _diagnose(db: Session) -> dict:
