@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import { api } from '../services/api';
 import { useDragScroll } from '../hooks/useDragScroll';
-import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, fmtDMY, SlaBadge, Spinner, StatusBadge } from '../components/ui';
+import { Card, EmptyState, PageHeader, PROGRESS_HEX, PROGRESS_TILE_BG, PROGRESS_TILE_TEXT, CATEGORY_TILE_BG, CATEGORY_TILE_TEXT, categoryTileBg, categoryTileText, fmtDMY, moneyCell, moneyHeader, SlaBadge, Spinner, StatusBadge } from '../components/ui';
 
 export { Analytics } from './analytics';
 export { CreateLead } from './createLead';
@@ -95,7 +95,7 @@ function DashboardFunnelTable({
             <tr className="bg-[#0e7490] text-white">
               <th className={`${firstHead} sticky left-0 bg-[#0e7490] z-10`}>{labelHeader}</th>
               <th className={head}><FunnelHead full="Total Leads" short="Leads" /></th>
-              <th className={head}><FunnelHead full="Total Lead Value" short="Value" /></th>
+              <th className={`${head} !text-right`}><FunnelHead full={moneyHeader('Total Lead Value')} short={moneyHeader('Value')} /></th>
               <th className={head}><FunnelHead full="In Followup" short="Follow" /></th>
               <th className={head}><FunnelHead full="Meeting" short="Meet" /></th>
               <th className={head}><FunnelHead full="Site Visit" short="Visit" /></th>
@@ -109,7 +109,7 @@ function DashboardFunnelTable({
               <tr key={r.name} className={i % 2 ? 'bg-sky-50/60' : 'bg-white'}>
                 <td className={`${nameCell} sticky left-0 z-10 ${i % 2 ? 'bg-[#f0f9ff]' : 'bg-white'}`}>{r.name}</td>
                 <td className={`${cell} font-bold`}>{r.total ?? 0}</td>
-                <td className={cell}>{inr(r.lead_value)}</td>
+                <td className={`${cell} !text-right`}>{moneyCell(r.lead_value)}</td>
                 <td className={cell}>{r['In Followup'] ?? 0}</td>
                 <td className={cell}>{r.Meeting ?? 0}</td>
                 <td className={cell}>{r['Site Visit'] ?? 0}</td>
@@ -122,7 +122,7 @@ function DashboardFunnelTable({
               <tr className="bg-graphite-100 font-bold">
                 <td className={`${nameCell} sticky left-0 z-10 bg-graphite-100`}>TOTAL</td>
                 <td className={cell}>{totals.total}</td>
-                <td className={cell}>{inr(totals.lead_value)}</td>
+                <td className={`${cell} !text-right`}>{moneyCell(totals.lead_value)}</td>
                 <td className={cell}>{totals.follow}</td>
                 <td className={cell}>{totals.meeting}</td>
                 <td className={cell}>{totals.siteVisit}</td>
@@ -558,7 +558,7 @@ export function Dashboard() {
       <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-2 sm:p-2.5 md:p-3 shadow-sm">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 w-full">
         {[
-          { label: 'Total lead value', value: inr(d.total_lead_value ?? lv.total_lead_value ?? 0), bg: 'bg-[#1e3a5f]' },
+          { label: 'Pending lead value', value: inr(d.pending_lead_value ?? 0), bg: 'bg-[#0e7490]' },
           { label: 'Total quotation value', value: inr(d.total_quotation_value ?? 0), bg: 'bg-[#b45309]' },
           { label: 'Total converted value', value: inr(d.total_converted_lead_value ?? 0), bg: 'bg-[#15803d]' },
         ].map((t) => (
@@ -600,11 +600,11 @@ export function Dashboard() {
         {(d?.quoted_customers || []).length === 0 ? <EmptyState title="No quotation values recorded" /> : (
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 overflow-y-auto max-h-96">
             <table className="w-full min-w-[560px] text-xs sm:text-sm">
-              <thead><tr><th className="th whitespace-nowrap">Enquiry Number</th><th className="th">Customer name</th><th className="th">Employee</th><th className="th text-right whitespace-nowrap">Quotation value</th></tr></thead>
+              <thead><tr><th className="th whitespace-nowrap">Enquiry Number</th><th className="th">Customer name</th><th className="th">Employee</th><th className="th text-right whitespace-nowrap">{moneyHeader('Quotation value')}</th></tr></thead>
               <tbody>{d.quoted_customers.map((lead: any) => <tr key={lead.lead_id}>
                 <td className="td whitespace-nowrap"><Link className="text-brand-700 hover:underline" to={`/leads/${lead.lead_id}`}>{lead.enquiry_number}</Link></td>
                 <td className="td break-words">{lead.customer_name}</td><td className="td break-words">{lead.employee || '—'}</td>
-                <td className="td text-right whitespace-nowrap tabular-nums">{inr(lead.quotation_value)}</td>
+                <td className="td text-right whitespace-nowrap tabular-nums">{moneyCell(lead.quotation_value)}</td>
               </tr>)}</tbody>
             </table>
           </div>
@@ -613,7 +613,7 @@ export function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
         {[
           { label: 'Total Cars', value: Number(lv.total_cars || 0).toLocaleString('en-IN'), bg: 'bg-[#0e7490] border-[#0e7490] text-white' },
-          { label: 'Valued Leads', value: lv.total_leads ?? d.total ?? 0, bg: 'bg-[#15803d] border-[#15803d] text-white' },
+          { label: 'Total Lead Value', value: inr(d.total_lead_value ?? lv.total_lead_value ?? 0), bg: 'bg-[#15803d] border-[#15803d] text-white' },
           { label: 'Conversion Ratio', value: Number(d.quotation_sent_history_count || 0) > 0 ? `${((Number(d.converted_from_quotation || 0) / Number(d.quotation_sent_history_count || 0)) * 100).toFixed(1)}%` : '0.0%', bg: 'bg-[#7c3aed] border-[#7c3aed] text-white' },
         ].map((k) => (
           <div key={k.label} className={`card p-4 text-center border ${k.bg}`}>
@@ -2747,9 +2747,9 @@ export function Leads() {
                 <th className="th whitespace-nowrap align-top w-[170px] text-center">Current status</th>
                 <th className="th whitespace-nowrap align-top w-[160px] text-center">Lead status</th>
                 {role !== 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[170px]">Employee</th>}
-                <th className="th whitespace-nowrap align-top w-[130px] text-right">Lead Value</th>
+                <th className="th whitespace-nowrap align-top w-[130px] text-right">{moneyHeader('Lead Value')}</th>
                 {role === 'EMPLOYEE' && <th className="th whitespace-nowrap align-top w-[120px] text-center">Quotation form</th>}
-                <th className="th text-right whitespace-nowrap align-top w-[180px]">Quotation value</th>
+                <th className="th text-right whitespace-nowrap align-top w-[180px]">{moneyHeader('Quotation value')}</th>
               </tr></thead>
               <tbody>
                 {items.map((l) => (
@@ -2991,7 +2991,7 @@ export function Leads() {
                       )}
                     </td>
                     {role !== 'EMPLOYEE' && <td className="td align-top">{l.primary_employee_id ? nameOf('employees', l.primary_employee_id) : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>}
-                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{inr(l.lead_value)}</td>
+                    <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{moneyCell(l.lead_value)}</td>
                       {role === 'EMPLOYEE' && (
                       <td className="td align-top text-center">
                         {isQuotationUnlocked(l) && !isFrozen(l) ? (
@@ -3070,7 +3070,7 @@ export function Leads() {
                                 title={h.at ? `Saved ${h.at}` : undefined}
                               >
                                 <span className="font-bold text-amber-700/80">{h.revision || `R${idx}`}</span>
-                                <span>{inr(h.quotation_value).replace(/^₹/, '')}</span>
+                                <span>{moneyCell(h.quotation_value)}</span>
                               </span>
                             ))}
                           </div>
@@ -3273,7 +3273,7 @@ export function EmployeeLeads() {
               <table className="w-full min-w-[1280px]">
                 <thead className="bg-graphite-50"><tr>
                   <th className="th">Enquiry</th><th className="th">Customer details</th>
-                  <th className="th min-w-[260px] w-[280px]">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">Lead Value</th><th className="th">Source</th>
+                  <th className="th min-w-[260px] w-[280px]">Contact / Email</th><th className="th text-center">Cars</th><th className="th text-right">{moneyHeader('Lead Value')}</th><th className="th">Source</th>
                   <th className="th">Product</th><th className="th">Status</th><th className="th">Overdue</th>
                   <th className="th">Due date</th>
                   <th className="th">First contact</th><th className="th">Enquiry date</th>
@@ -3292,7 +3292,7 @@ export function EmployeeLeads() {
                         <div className="text-xs mt-1.5 break-words [overflow-wrap:anywhere]">{l.email ? <a className="text-brand-700 hover:underline" href={`mailto:${l.email}`}>{l.email}</a> : <span className="text-graphite-400">No email</span>}</div>
                       </td>
                       <td className="td text-center whitespace-nowrap">{l.quantity_raw || '—'}</td>
-                      <td className="td text-right whitespace-nowrap tabular-nums font-semibold">{inr(l.lead_value)}</td>
+                      <td className="td text-right whitespace-nowrap tabular-nums font-semibold">{moneyCell(l.lead_value)}</td>
                       <td className="td">{l.source_name || nameOf('sources', l.source_id)}</td>
                       <td className="td">{l.product_name || prodName(l, nameOf)}</td>
                       <td className="td"><StatusBadge value={l.primary_employee_id && nameOf('statuses', l.status_id) === 'New Lead' ? 'Assigned' : nameOf('statuses', l.status_id)} /></td>
@@ -5031,14 +5031,14 @@ export function Reports() {
                 <thead><tr className="bg-graphite-100">
                   <th className="th text-center">Source</th>
                   <th className="th text-center">Leads</th>
-                  <th className="th text-center">Lead Value</th>
+                  <th className="th !text-right">{moneyHeader('Lead Value')}</th>
                 </tr></thead>
                 <tbody>
                   {lvSources.map((r: any) => (
                     <tr key={r.source} className="hover:bg-graphite-50">
                       <td className="td text-center">{r.source}</td>
                       <td className="td text-center">{r.leads}</td>
-                      <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                      <td className="td !text-right font-semibold tabular-nums">{moneyCell(r.lead_value)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -5068,14 +5068,14 @@ export function Reports() {
                   <thead><tr className="bg-graphite-100">
                     <th className="th text-center">Period</th>
                     <th className="th text-center">Leads</th>
-                    <th className="th text-center">Lead Value</th>
+                    <th className="th !text-right">{moneyHeader('Lead Value')}</th>
                   </tr></thead>
                   <tbody>
                     {lvPeriod.map((r: any) => (
                       <tr key={r.period} className="hover:bg-graphite-50">
                         <td className="td text-center">{r.label}</td>
                         <td className="td text-center">{r.leads}</td>
-                        <td className="td text-center font-semibold tabular-nums">{inr(r.lead_value)}</td>
+                        <td className="td !text-right font-semibold tabular-nums">{moneyCell(r.lead_value)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5129,9 +5129,9 @@ export function Reports() {
                     <th className="th !bg-transparent !text-center">State</th>
                     <th className="th !bg-transparent !text-center">Parking Type</th>
                     <th className="th !bg-transparent !text-center">No. of Units/Cars</th>
-                    <th className="th !bg-transparent !text-center">Order Value (Excl GST)</th>
-                    <th className="th !bg-transparent !text-center">GST</th>
-                    <th className="th !bg-transparent !text-center !px-2">Grand Total</th>
+                    <th className="th !bg-transparent !text-right">{moneyHeader('Order Value excl. GST')}</th>
+                    <th className="th !bg-transparent !text-right">{moneyHeader('GST')}</th>
+                    <th className="th !bg-transparent !text-right !px-2">{moneyHeader('Grand Total')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5145,18 +5145,18 @@ export function Reports() {
                       <td className="td text-center">{r.state || '—'}</td>
                       <td className="td text-center">{r.parking_type || '—'}</td>
                       <td className="td text-center">{r.units ?? '—'}</td>
-                      <td className="td text-center tabular-nums font-medium">{inr(r.order_value_excl_gst)}</td>
-                      <td className="td text-center tabular-nums">{inr(r.gst)}</td>
-                      <td className="td text-center tabular-nums font-semibold !px-2 whitespace-nowrap">{inr(r.grand_total)}</td>
+                      <td className="td !text-right tabular-nums font-medium">{moneyCell(r.order_value_excl_gst)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(r.gst)}</td>
+                      <td className="td !text-right tabular-nums font-semibold !px-2 whitespace-nowrap">{moneyCell(r.grand_total)}</td>
                     </tr>
                   ))}
                   {quotationReport?.totals && (quotationReport.rows || []).length > 0 && (
                     <tr className="bg-graphite-100 font-bold">
                       <td className="td text-center" colSpan={7}>TOTAL</td>
                       <td className="td text-center" />
-                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.order_value_excl_gst)}</td>
-                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.gst)}</td>
-                      <td className="td text-center tabular-nums">{inr(quotationReport.totals.grand_total)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(quotationReport.totals.order_value_excl_gst)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(quotationReport.totals.gst)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(quotationReport.totals.grand_total)}</td>
                     </tr>
                   )}
                 </tbody>
@@ -5200,7 +5200,7 @@ export function Reports() {
                   <tr className="bg-[#1e3a5f] text-white">
                     <th className="th !text-white !bg-transparent !text-center">Lead Source</th>
                     <th className="th !text-white !bg-transparent !text-center">Total Leads</th>
-                    <th className="th !text-white !bg-transparent !text-center">Total Lead Value</th>
+                    <th className="th !text-white !bg-transparent !text-right">{moneyHeader('Total Lead Value')}</th>
                     <th className="th !text-white !bg-transparent !text-center">In Followup</th>
                     <th className="th !text-white !bg-transparent !text-center">Meeting</th>
                     <th className="th !text-white !bg-transparent !text-center">Site Visit</th>
@@ -5214,7 +5214,7 @@ export function Reports() {
                     <tr key={r.source} className={i % 2 ? 'bg-sky-50/70' : 'bg-white'}>
                       <td className="td font-medium text-center">{r.source}</td>
                       <td className="td font-bold text-center">{r.total}</td>
-                      <td className="td text-center tabular-nums">{inr(r.lead_value)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(r.lead_value)}</td>
                       <td className="td text-center">{r.in_followup}</td>
                       <td className="td text-center">{r.meeting}</td>
                       <td className="td text-center">{r.site_visit}</td>
@@ -5227,7 +5227,7 @@ export function Reports() {
                     <tr className="bg-graphite-100 font-bold">
                       <td className="td text-center">TOTAL</td>
                       <td className="td text-center">{details.totals.total}</td>
-                      <td className="td text-center tabular-nums">{inr(details.totals.lead_value)}</td>
+                      <td className="td !text-right tabular-nums">{moneyCell(details.totals.lead_value)}</td>
                       <td className="td text-center">{details.totals.in_followup}</td>
                       <td className="td text-center">{details.totals.meeting}</td>
                       <td className="td text-center">{details.totals.site_visit}</td>
@@ -5281,14 +5281,17 @@ export function Reports() {
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed text-xs text-center">
                   <thead><tr className="bg-[#0f766e] text-white">
-                    {['Product', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Product', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => {
+                      const money = header === 'Total Lead Value';
+                      return <th key={header} className={`th !text-white !bg-transparent ${money ? '!text-right' : '!text-center'}`}>{money ? moneyHeader(header) : header}</th>;
+                    })}
                   </tr></thead>
                   <tbody>
                     {(productDetails?.rows || []).map((row: any, i: number) => (
                       <tr key={row.product} className={i % 2 ? 'bg-teal-50/70' : 'bg-white'}>
                         <td className="td font-medium text-center">{row.product}</td>
                         <td className="td font-bold text-center">{row.total}</td>
-                        <td className="td text-center tabular-nums">{inr(row.lead_value)}</td>
+                        <td className="td !text-right tabular-nums">{moneyCell(row.lead_value)}</td>
                         <td className="td text-center">{row.in_followup}</td>
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
@@ -5301,7 +5304,7 @@ export function Reports() {
                       <tr className="bg-graphite-100 font-bold">
                         <td className="td text-center">TOTAL</td>
                         <td className="td text-center">{productDetails.totals.total}</td>
-                        <td className="td text-center tabular-nums">{inr(productDetails.totals.lead_value)}</td>
+                        <td className="td !text-right tabular-nums">{moneyCell(productDetails.totals.lead_value)}</td>
                         <td className="td text-center">{productDetails.totals.in_followup}</td>
                         <td className="td text-center">{productDetails.totals.meeting}</td>
                         <td className="td text-center">{productDetails.totals.site_visit}</td>
@@ -5350,14 +5353,17 @@ export function Reports() {
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed text-xs text-center">
                   <thead><tr className="bg-[#0e7490] text-white">
-                    {['Category', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => <th key={header} className="th !text-white !bg-transparent !text-center">{header}</th>)}
+                    {['Category', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'].map((header) => {
+                      const money = header === 'Total Lead Value';
+                      return <th key={header} className={`th !text-white !bg-transparent ${money ? '!text-right' : '!text-center'}`}>{money ? moneyHeader(header) : header}</th>;
+                    })}
                   </tr></thead>
                   <tbody>
                     {(categoryDetails?.rows || []).map((row: any, i: number) => (
                       <tr key={row.category} className={i % 2 ? 'bg-cyan-50/70' : 'bg-white'}>
                         <td className="td font-medium text-center">{row.category}</td>
                         <td className="td font-bold text-center">{row.total}</td>
-                        <td className="td text-center tabular-nums">{inr(row.lead_value)}</td>
+                        <td className="td !text-right tabular-nums">{moneyCell(row.lead_value)}</td>
                         <td className="td text-center">{row.in_followup}</td>
                         <td className="td text-center">{row.meeting}</td>
                         <td className="td text-center">{row.site_visit}</td>
@@ -5370,7 +5376,7 @@ export function Reports() {
                       <tr className="bg-graphite-100 font-bold">
                         <td className="td text-center">TOTAL</td>
                         <td className="td text-center">{categoryDetails.totals.total}</td>
-                        <td className="td text-center tabular-nums">{inr(categoryDetails.totals.lead_value)}</td>
+                        <td className="td !text-right tabular-nums">{moneyCell(categoryDetails.totals.lead_value)}</td>
                         <td className="td text-center">{categoryDetails.totals.in_followup}</td>
                         <td className="td text-center">{categoryDetails.totals.meeting}</td>
                         <td className="td text-center">{categoryDetails.totals.site_visit}</td>
@@ -5498,9 +5504,10 @@ export function Reports() {
                   <table className="w-full table-fixed text-xs text-center">
                     <thead>
                       <tr className="bg-[#4338ca] text-white">
-                        {['Month', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested', 'Sources', 'Products'].map((h) => (
-                          <th key={h} className="th !text-white !bg-transparent !text-center">{h}</th>
-                        ))}
+                        {['Month', 'Total Leads', 'Total Lead Value', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Not Interested', 'Sources', 'Products'].map((h) => {
+                          const money = h === 'Total Lead Value';
+                          return <th key={h} className={`th !text-white !bg-transparent ${money ? '!text-right' : '!text-center'}`}>{money ? moneyHeader(h) : h}</th>;
+                        })}
                       </tr>
                     </thead>
                     <tbody>
@@ -5508,7 +5515,7 @@ export function Reports() {
                         <tr key={row.month_key || row.month} className={i % 2 ? 'bg-indigo-50/60' : 'bg-white'}>
                           <td className="td font-medium text-center">{row.month}</td>
                           <td className="td font-bold text-center">{row.leads}</td>
-                          <td className="td text-center whitespace-nowrap">{inr(row.lead_value)}</td>
+                          <td className="td !text-right whitespace-nowrap tabular-nums">{moneyCell(row.lead_value)}</td>
                           <td className="td text-center">{row.in_followup}</td>
                           <td className="td text-center">{row.meeting}</td>
                           <td className="td text-center">{row.site_visit}</td>
@@ -5577,8 +5584,8 @@ export function Reports() {
                         { label: 'Category', cls: '!text-left' },
                         { label: 'Remarks', cls: '!text-left' },
                         { label: 'Employee', cls: '!text-center' },
-                        { label: 'Lead Value', cls: '!text-right' },
-                        { label: 'Quotation', cls: '!text-right' },
+                        { label: moneyHeader('Lead Value'), cls: '!text-right' },
+                        { label: moneyHeader('Quotation'), cls: '!text-right' },
                       ].map((h) => (
                         <th key={h.label} className={`th !text-white !bg-transparent !px-3 !py-2.5 whitespace-nowrap align-bottom ${h.cls}`}>{h.label}</th>
                       ))}
@@ -5628,8 +5635,8 @@ export function Reports() {
                           <td className={`${cell} !text-left`}>{Array.from({ length: steps }, (_, index) => step(categoryLines, index))}</td>
                           <td className={`${cell} !text-left`}>{Array.from({ length: steps }, (_, index) => step(remarkLines, index))}</td>
                           <td className={`${cell} !text-center capitalize`}>{row.employee}</td>
-                          <td className={`${cell} !text-right !tabular-nums font-semibold`}>{inr(row.lead_value)}</td>
-                          <td className={`${cell} !text-right !tabular-nums`}>{inr(row.quotation_value)}</td>
+                          <td className={`${cell} !text-right !tabular-nums font-semibold`}>{moneyCell(row.lead_value)}</td>
+                          <td className={`${cell} !text-right !tabular-nums`}>{moneyCell(row.quotation_value)}</td>
                         </tr>
                       );
                     })}
@@ -5875,8 +5882,8 @@ export function EmployeesPage() {
                 <table className="w-full min-w-[1280px]">
                   <thead className="bg-graphite-50"><tr>
                     <th className="th">Enquiry</th><th className="th">Customer</th><th className="th">Contact / Email</th><th className="th text-center">Cars</th><th className="th">City</th><th className="th">Source</th><th className="th">Product</th>
-                    <th className="th text-right">Lead Value</th>
-                    <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th">Quotation value</th><th className="th">Completion</th>
+                    <th className="th text-right">{moneyHeader('Lead Value')}</th>
+                    <th className="th">Status</th><th className="th">Remarks</th><th className="th">Category</th><th className="th">Work action</th><th className="th text-right">{moneyHeader('Quotation value')}</th><th className="th">Completion</th>
                   </tr></thead>
                   <tbody>{employeeLeads.map((lead) => (
                     <tr key={lead.id} className={lead.sla_state === 'COMPLETED' ? 'bg-emerald-50/80' : 'hover:bg-graphite-50'}>
@@ -5888,11 +5895,11 @@ export function EmployeesPage() {
                       </td>
                       <td className="td text-center">{lead.quantity_raw || '—'}</td>
                       <td className="td">{lead.city || '—'}</td><td className="td">{lead.source_name || '—'}</td><td className="td">{lead.product_name || '—'}</td>
-                      <td className="td text-right tabular-nums font-semibold">{inr(lead.lead_value)}</td>
+                      <td className="td text-right tabular-nums font-semibold">{moneyCell(lead.lead_value)}</td>
                       <td className="td"><StatusBadge value={lead.primary_employee_id && leadStatusName(lead.status_id) === 'New Lead' ? 'Assigned' : leadStatusName(lead.status_id)} /></td>
                       <td className="td max-w-[240px] truncate" title={lead.employee_remarks || ''}>{lead.employee_remarks || '—'}</td>
                       <td className="td">{lead.customer_review || '—'}</td><td className="td">{leadStatusName(lead.status_id)}</td>
-                      <td className="td">{lead.quotation_value != null ? inr(lead.quotation_value) : '—'}</td>
+                      <td className="td text-right tabular-nums">{moneyCell(lead.quotation_value)}</td>
                       <td className="td">{lead.sla_state === 'COMPLETED' ? 'Completed' : 'Pending'}</td>
                     </tr>
                   ))}</tbody>

@@ -1,5 +1,16 @@
 import React from 'react';
 
+/** Plain number for money table cells; the ₹ symbol belongs in the column header. */
+export function moneyCell(n: unknown): string {
+  if (n == null || n === '') return '—';
+  const value = Math.round(Number(n));
+  if (Number.isNaN(value)) return '—';
+  return value.toLocaleString('en-IN', { maximumFractionDigits: 0, minimumFractionDigits: 0 });
+}
+
+/** Money column header label, e.g. "Lead Value (₹)". */
+export const moneyHeader = (label: string) => `${label} (₹)`;
+
 /* Progress colours used on dashboards, reports, charts, and badges. */
 export const PROGRESS_HEX: Record<string, string> = {
   'In Followup': '#E8890C',

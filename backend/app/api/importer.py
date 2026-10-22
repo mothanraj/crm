@@ -334,54 +334,63 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
     Each lead is mailed at most once. Already-sent rows are skipped. Large
     assignments are split into chunks so mail servers accept 100–1000 leads.
     """
-    now = datetime.now(timezone.utc)
-    try:
-        unique_by_emp: dict = {}
-        for emp_id, lead_ids in (new_by_emp or {}).items():
-            unique_by_emp[emp_id] = list(dict.fromkeys(lead_ids or []))
-        all_ids = [lid for ids in unique_by_emp.values() for lid in ids]
-        leads_by_id = {x.id: x for x in db.query(Lead).filter(Lead.id.in_(all_ids)).all()} if all_ids else {}
-        src_map = {s.id: s.name for s in db.query(LeadSource).all()}
-        prod_map = {p.id: p.name for p in db.query(Product).all()}
-        assigns = db.query(LeadAssignment).filter(
-            LeadAssignment.lead_id.in_(list(leads_by_id)),
-            LeadAssignment.is_current.is_(True),
-        ).all() if leads_by_id else []
-        assign_map = {a.lead_id: a for a in assigns}
-        for emp_id, lead_ids in unique_by_emp.items():
-            try:
-                emp = db.get(User, emp_id)
-                if not emp:
-                    continue
-                leads = [
-                    leads_by_id[lid] for lid in lead_ids
-                    if lid in leads_by_id and leads_by_id[lid].assignment_email_sent_at is None
-                ]
-                if not leads:
-                    continue
-                items = [_lead_email_item_db(x, src_map, prod_map, assign_map) for x in leads]
-                chunk_size = max(1, int(email_service.ASSIGNMENT_EMAIL_CHUNK))
-                for index in range(0, len(items), chunk_size):
-                    chunk_items = items[index:index + chunk_size]
-                    chunk_leads = leads[index:index + chunk_size]
-                    batches = (len(items) + chunk_size - 1) // chunk_size
-                    subject, html = email_service.build_assignment_email(
-                        emp.name, chunk_items,
-                        total=len(items), batch=(index // chunk_size) + 1, batches=batches,
-                    )
-                    if not email_service.send_email(emp.email, emp.name, subject, html):
-                        break
-                    for x in chunk_leads:
-                        x.assignment_email_sent_at = now
-                    db.commit()
-            except Exception as exc:
-                log.error("assignment email batch failed for %s: %s", emp_id, exc)
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-    except Exception as exc:
-        log.error("assignment email dispatch failed: %s", exc)
+    if not new_by_emp:
+        return
+    with email_service.assignment_mail_lock() as locked:
+        if not locked:
+            log.info("assignment email dispatch skipped; another sender owns the lock")
+            return
+        try:
+            unique_by_emp: dict = {}
+            for emp_id, lead_ids in (new_by_emp or {}).items():
+                unique_by_emp[emp_id] = list(dict.fromkeys(lead_ids or []))
+            all_ids = [lid for ids in unique_by_emp.values() for lid in ids]
+            leads_by_id = {x.id: x for x in db.query(Lead).filter(Lead.id.in_(all_ids)).all()} if all_ids else {}
+            src_map = {s.id: s.name for s in db.query(LeadSource).all()}
+            prod_map = {p.id: p.name for p in db.query(Product).all()}
+            assigns = db.query(LeadAssignment).filter(
+                LeadAssignment.lead_id.in_(list(leads_by_id)),
+                LeadAssignment.is_current.is_(True),
+            ).all() if leads_by_id else []
+            assign_map = {a.lead_id: a for a in assigns}
+            with email_service.SMTPMailer() as mailer:
+                for emp_id, lead_ids in unique_by_emp.items():
+                    try:
+                        emp = db.get(User, emp_id)
+                        if not emp:
+                            continue
+                        leads = [
+                            leads_by_id[lid] for lid in lead_ids
+                            if lid in leads_by_id and leads_by_id[lid].assignment_email_sent_at is None
+                        ]
+                        if not leads:
+                            continue
+                        items = [_lead_email_item_db(x, src_map, prod_map, assign_map) for x in leads]
+                        chunk_size = max(1, int(email_service.ASSIGNMENT_EMAIL_CHUNK))
+                        for index in range(0, len(items), chunk_size):
+                            chunk_items = items[index:index + chunk_size]
+                            chunk_leads = leads[index:index + chunk_size]
+                            batches = (len(items) + chunk_size - 1) // chunk_size
+                            subject, html = email_service.build_assignment_email(
+                                emp.name, chunk_items,
+                                total=len(items), batch=(index // chunk_size) + 1, batches=batches,
+                            )
+                            if not email_service.send_email(
+                                emp.email, emp.name, subject, html, mailer=mailer,
+                            ):
+                                break
+                            sent_at = datetime.now(timezone.utc)
+                            for x in chunk_leads:
+                                x.assignment_email_sent_at = sent_at
+                            db.commit()
+                    except Exception as exc:
+                        log.error("assignment email batch failed for %s: %s", emp_id, exc)
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+        except Exception as exc:
+            log.error("assignment email dispatch failed: %s", exc)
 
 
 def _email_assignments_later(groups: dict[str, list[str]]) -> None:

@@ -10,7 +10,7 @@ Email failures only log — they never break the sweep.
 """
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import or_
@@ -137,7 +137,6 @@ def _sla_sweep():
                 ))
         db.commit()
         _send_overdue_now(db, [x for x in overdue if x.overdue_digest_at is None], now)
-        _assignment_retry_sweep(db, now)
     finally:
         db.close()
 
@@ -197,8 +196,13 @@ def _send_overdue_now(db, rows, now) -> bool:
     payload = _digest_groups(db, rows, now)
     date_str = now.strftime("%d-%b-%Y")
     try:
-        results = [email_service.send_overdue_digest(a.email, a.name, payload, date_str)
-                   for a in admins]
+        with email_service.SMTPMailer() as mailer:
+            results = [
+                email_service.send_overdue_digest(
+                    a.email, a.name, payload, date_str, mailer=mailer,
+                )
+                for a in admins
+            ]
     except Exception as exc:
         log.error("overdue immediate send failed: %s", exc)
         db.rollback()
@@ -245,6 +249,14 @@ def _assignment_item(db, lead) -> dict:
 
 
 def _assignment_retry_sweep(db, now):
+    """Resend failed assignment emails without overlapping an active dispatch."""
+    with email_service.assignment_mail_lock() as locked:
+        if not locked:
+            return
+        _assignment_retry_sweep_inner(db, now)
+
+
+def _assignment_retry_sweep_inner(db, now):
     """Resend batched assignment emails that failed earlier (once per lead).
 
     Rows are claimed with FOR UPDATE SKIP LOCKED so two workers never
@@ -252,15 +264,21 @@ def _assignment_retry_sweep(db, now):
     """
     if not email_service.emails_enabled():
         return
+    mailer = email_service.SMTPMailer()
     try:
         # Group first without holding locks; each group is then re-selected
         # FOR UPDATE SKIP LOCKED so a second worker skips rows being mailed
         # instead of double-mailing customer PII. The sent flag is set only
         # after a successful send (fail-open retry).
+        # Grace period: leave rows from an in-progress import to its own sender.
+        grace_cutoff = now - timedelta(
+            seconds=max(0, int(settings.ASSIGNMENT_EMAIL_GRACE_SECONDS))
+        )
         pending = db.query(Lead.id, Lead.primary_employee_id).filter(
             Lead.is_active.is_(True),
             Lead.primary_employee_id.isnot(None),
             Lead.assignment_email_sent_at.is_(None),
+            Lead.created_at < grace_cutoff,
         ).order_by(Lead.created_at.asc()).limit(1000).all()
         if not pending:
             return
@@ -302,11 +320,14 @@ def _assignment_retry_sweep(db, now):
                         owner.name, chunk_items,
                         total=len(items), batch=(index // chunk_size) + 1, batches=batches,
                     )
-                    if not email_service.send_email(owner.email, owner.name, subject, html):
+                    if not email_service.send_email(
+                        owner.email, owner.name, subject, html, mailer=mailer,
+                    ):
                         all_ok = False
                         break
+                    sent_at = datetime.now(timezone.utc)
                     for x in chunk_leads:
-                        x.assignment_email_sent_at = now
+                        x.assignment_email_sent_at = sent_at
                     db.commit()
                 if not all_ok and not any(x.assignment_email_sent_at for x in unique):
                     db.rollback()  # nothing sent — retry next sweep
@@ -318,6 +339,8 @@ def _assignment_retry_sweep(db, now):
                     pass
     except Exception as exc:
         log.error("assignment retry sweep failed: %s", exc)
+    finally:
+        mailer.close()
 
 
 def _reminder_sweep():
@@ -422,9 +445,28 @@ def _overdue_digest():
         db.close()
 
 
+def _assignment_retry_job():
+    db = SessionLocal()
+    try:
+        _assignment_retry_sweep(db, datetime.now(timezone.utc))
+    finally:
+        db.close()
+
+
 def start():
     if not scheduler.running:
-        scheduler.add_job(_sla_sweep, "interval", minutes=15, id="sla", replace_existing=True)
+        scheduler.add_job(
+            _sla_sweep, "interval",
+            minutes=max(1, int(settings.SLA_SWEEP_MINUTES)),
+            id="sla", replace_existing=True, max_instances=1, coalesce=True,
+        )
+        scheduler.add_job(
+            _assignment_retry_job, "interval",
+            minutes=max(1, int(settings.ASSIGNMENT_RETRY_MINUTES)),
+            id="assignment_email_retry", replace_existing=True,
+            max_instances=1, coalesce=True,
+            next_run_time=datetime.now(timezone.utc),
+        )
         scheduler.add_job(_reminder_sweep, "interval", hours=1, id="reminder",
                           replace_existing=True)
         scheduler.add_job(_overdue_digest, "interval", hours=1, id="digest",

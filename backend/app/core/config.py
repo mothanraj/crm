@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     SMTP_TIMEOUT: int = 30
     SMTP_FROM_EMAIL: str = ""
     SMTP_FROM_NAME: str = "E-Star CRM"
+    # Fewer, larger assignment emails cut SMTP handshakes and shared-host rate limits.
+    ASSIGNMENT_EMAIL_CHUNK: int = 50
+    EMAIL_SESSION_MESSAGE_LIMIT: int = 40
+    EMAIL_SEND_ATTEMPTS: int = 3
+    # Failed assignment mails are retried quickly instead of waiting for the SLA sweep.
+    ASSIGNMENT_RETRY_MINUTES: int = 2
+    ASSIGNMENT_EMAIL_GRACE_SECONDS: int = 120
+    SLA_SWEEP_MINUTES: int = 5
     OVERDUE_DIGEST_HOUR: int = 9
 
 

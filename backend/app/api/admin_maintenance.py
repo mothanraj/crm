@@ -196,9 +196,12 @@ def digest_run(
     date_str = now.strftime("%d-%b-%Y")
     results = {}
     try:
-        for a in admins:
-            ok = email_service.send_overdue_digest(a.email, a.name, payload, date_str)
-            results[a.email] = bool(ok)
+        with email_service.SMTPMailer() as mailer:
+            for a in admins:
+                ok = email_service.send_overdue_digest(
+                    a.email, a.name, payload, date_str, mailer=mailer,
+                )
+                results[a.email] = bool(ok)
     except Exception as exc:
         log.error("manual overdue digest send failed: %s", exc)
         db.rollback()
@@ -233,3 +236,21 @@ def digest_run(
         "diagnostics": diag,
         "admins": [a.email for a in admins],
     }
+
+
+@router.get("/email/diagnose")
+def email_diagnose(_: User = Depends(admin_only)):
+    """Check SMTP connect/login/NOOP latency without sending mail."""
+    return email_service.smtp_diagnose()
+
+
+@router.post("/email/test")
+def email_test(admin: User = Depends(admin_only)):
+    """Send one test message to the signed-in admin."""
+    html = (
+        "<p>This is a test email from E-Star CRM.</p>"
+        f"<p>SMTP host: {settings.SMTP_HOST}:{settings.SMTP_PORT}</p>"
+        f"<p>Chunk size: {email_service.ASSIGNMENT_EMAIL_CHUNK}</p>"
+    )
+    ok = email_service.send_email(admin.email, admin.name, "E-Star CRM email test", html)
+    return {"sent": bool(ok), "to": admin.email}

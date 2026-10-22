@@ -1,10 +1,115 @@
+import smtplib
+
+import app.services.email_service as email_service
 from app.services.email_service import (
     ASSIGNMENT_EMAIL_CHUNK,
+    SMTPMailer,
     build_assignment_email,
     build_overdue_digest,
     dedupe_assignment_items,
     send_assignment_email,
+    send_email,
+    smtp_diagnose,
 )
+
+
+class FakeSMTP:
+    instances: list["FakeSMTP"] = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.logins = 0
+        self.sent = []
+        self.quit_called = False
+        self.fail_next = 0
+        FakeSMTP.instances.append(self)
+
+    def login(self, username, password):
+        self.logins += 1
+
+    def send_message(self, msg):
+        if self.fail_next:
+            self.fail_next -= 1
+            raise smtplib.SMTPServerDisconnected("temporary disconnect")
+        self.sent.append(msg)
+
+    def noop(self):
+        return 250, b"OK"
+
+    def quit(self):
+        self.quit_called = True
+
+    def close(self):
+        pass
+
+
+def _smtp_env(monkeypatch, **overrides):
+    FakeSMTP.instances = []
+    values = {
+        "EMAIL_ENABLED": True,
+        "SMTP_HOST": "smtp.test",
+        "SMTP_PORT": 465,
+        "SMTP_USE_SSL": True,
+        "SMTP_USE_TLS": False,
+        "SMTP_USERNAME": "user@test",
+        "SMTP_PASSWORD": "secret",
+        "SMTP_FROM_EMAIL": "from@test",
+        "SMTP_FROM_NAME": "Test",
+        "SMTP_TIMEOUT": 5,
+        "EMAIL_SEND_ATTEMPTS": 2,
+        "EMAIL_SESSION_MESSAGE_LIMIT": 40,
+    }
+    values.update(overrides)
+    for key, value in values.items():
+        monkeypatch.setattr(email_service.settings, key, value)
+    monkeypatch.setattr(email_service.smtplib, "SMTP_SSL", FakeSMTP)
+    return FakeSMTP
+
+
+def test_smtp_mailer_reuses_one_connection(monkeypatch):
+    fake = _smtp_env(monkeypatch)
+    with SMTPMailer() as mailer:
+        assert send_email("a@test", "A", "one", "<p>1</p>", mailer=mailer) is True
+        assert send_email("b@test", "B", "two", "<p>2</p>", mailer=mailer) is True
+    assert len(fake.instances) == 1
+    assert fake.instances[0].logins == 1
+    assert len(fake.instances[0].sent) == 2
+
+
+def test_smtp_mailer_rotates_session_at_limit(monkeypatch):
+    fake = _smtp_env(monkeypatch)
+    with SMTPMailer(message_limit=1, retry_delays=(0,)) as mailer:
+        assert send_email("a@test", "A", "one", "<p>1</p>", mailer=mailer) is True
+        assert send_email("b@test", "B", "two", "<p>2</p>", mailer=mailer) is True
+    assert len(fake.instances) == 2
+    assert all(len(s.sent) == 1 for s in fake.instances)
+
+
+def test_smtp_mailer_retries_transient_error(monkeypatch):
+    fake = _smtp_env(monkeypatch, EMAIL_SEND_ATTEMPTS=2)
+    original_init = FakeSMTP.__init__
+
+    def flaky_init(self, host, port, timeout=None):
+        original_init(self, host, port, timeout)
+        if len(FakeSMTP.instances) == 1:
+            self.fail_next = 1
+
+    monkeypatch.setattr(FakeSMTP, "__init__", flaky_init)
+    with SMTPMailer(retry_delays=(0,)) as mailer:
+        assert mailer.send("a@test", "A", "one", "<p>1</p>") is True
+    assert len(fake.instances) == 2
+    assert len(fake.instances[1].sent) == 1
+
+
+def test_smtp_diagnose_does_not_send(monkeypatch):
+    fake = _smtp_env(monkeypatch)
+    result = smtp_diagnose()
+    assert result["ok"] is True
+    assert result["smtp_code"] == 250
+    assert len(fake.instances) == 1
+    assert fake.instances[0].sent == []
 
 
 def _lead(n: int) -> dict:

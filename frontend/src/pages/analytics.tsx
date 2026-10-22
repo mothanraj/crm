@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { api } from '../services/api';
-import { Card, CATEGORY_HEX, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { Card, CATEGORY_HEX, EmptyState, PageHeader, moneyCell, moneyHeader, Spinner } from '../components/ui';
 
 const METRIC_IDS = new Set(['leads', 'lead_value', 'quotations', 'quotation_value']);
 
@@ -364,6 +364,9 @@ export function Analytics() {
 
   const money = Boolean(data?.money);
   const fmt = (v: number) => (money ? inr(v) : num(v));
+  const fmtCell = (v: number) => (money ? moneyCell(v) : num(v));
+  const moneyCellCls = money ? '!text-right' : 'text-center';
+  const moneyHead = (label: string) => (money ? moneyHeader(label) : label);
   const periodMode = mode === 'period' && data?.mode === 'period';
   const groupKeys: string[] = data?.group_keys || [];
   const multiGroup = Boolean(data?.group_by && groupKeys.length);
@@ -638,8 +641,8 @@ export function Analytics() {
                     <thead>
                       <tr className="text-graphite-500 border-b border-graphite-200">
                         <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Group'}</th>
-                        <th className="py-2 px-3 font-medium text-center">Period A</th>
-                        <th className="py-2 px-3 font-medium text-center">Period B</th>
+                        <th className={`py-2 px-3 font-medium ${moneyCellCls}`}>{moneyHead('Period A')}</th>
+                        <th className={`py-2 px-3 font-medium ${moneyCellCls}`}>{moneyHead('Period B')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -655,8 +658,8 @@ export function Analytics() {
                                 {key}
                               </span>
                             </td>
-                            <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(aVal)}</td>
-                            <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(bVal)}</td>
+                            <td className={`py-2 px-3 tabular-nums font-medium ${moneyCellCls}`}>{fmtCell(aVal)}</td>
+                            <td className={`py-2 px-3 tabular-nums font-medium ${moneyCellCls}`}>{fmtCell(bVal)}</td>
                           </tr>
                         );
                       })}
@@ -671,14 +674,14 @@ export function Analytics() {
                     <tr className="text-graphite-500 border-b border-graphite-200">
                       <th className="py-2 px-3 font-medium text-center">{data.x_title || 'Label'}</th>
                       {multiGroup ? groupKeys.map((key, index) => (
-                        <th key={key} className="py-2 px-2 font-medium text-center whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5 justify-center">
+                        <th key={key} className={`py-2 px-2 font-medium whitespace-nowrap ${moneyCellCls}`}>
+                          <span className={`inline-flex items-center gap-1.5 ${money ? 'justify-end' : 'justify-center'}`}>
                             <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: seriesColor(key, index, data.group_by) }} />
-                            {key}
+                            {moneyHead(key)}
                           </span>
                         </th>
                       )) : null}
-                      <th className="py-2 px-3 font-medium text-center">{multiGroup ? 'Total' : metricLabel}</th>
+                      <th className={`py-2 px-3 font-medium ${moneyCellCls}`}>{moneyHead(multiGroup ? 'Total' : metricLabel)}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -686,18 +689,18 @@ export function Analytics() {
                       <tr key={row.key} className="border-b border-graphite-100">
                         <td className="py-2 px-3 text-center text-graphite-800">{row.label}</td>
                         {multiGroup ? groupKeys.map((key) => (
-                          <td key={key} className="py-2 px-2 text-center tabular-nums font-medium">{fmt(row[key] ?? 0)}</td>
+                          <td key={key} className={`py-2 px-2 tabular-nums font-medium ${moneyCellCls}`}>{fmtCell(row[key] ?? 0)}</td>
                         )) : null}
-                        <td className="py-2 px-3 text-center tabular-nums font-medium">{fmt(row.value)}</td>
+                        <td className={`py-2 px-3 tabular-nums font-medium ${moneyCellCls}`}>{fmtCell(row.value)}</td>
                       </tr>
                     ))}
                     <tr>
                       <td className="py-2 px-3 font-semibold text-center">Total</td>
                       {multiGroup ? groupKeys.map((key) => {
                         const colTotal = (data.rows || series).reduce((sum: number, row: any) => sum + Number(row[key] || 0), 0);
-                        return <td key={key} className="py-2 px-2 text-center tabular-nums font-semibold">{fmt(colTotal)}</td>;
+                        return <td key={key} className={`py-2 px-2 tabular-nums font-semibold ${moneyCellCls}`}>{fmtCell(colTotal)}</td>;
                       }) : null}
-                      <td className="py-2 px-3 text-center tabular-nums font-semibold">{fmt(data.total)}</td>
+                      <td className={`py-2 px-3 tabular-nums font-semibold ${moneyCellCls}`}>{fmtCell(data.total)}</td>
                     </tr>
                   </tbody>
                 </table>

@@ -480,6 +480,14 @@ def _kpis(db: Session, u: User | None = None):
         .scalar()
         or 0
     )
+    # Pending box tracks the same population as the Pending tile (status Assigned).
+    pending_lead_value = _as_rupee(
+        db.query(func.coalesce(func.sum(Lead.lead_value), 0))
+        .join(LeadStatus, Lead.status_id == LeadStatus.id)
+        .filter(Lead.is_active.is_(True), LeadStatus.name == STATUS_ASSIGNED, *emp)
+        .scalar()
+        or 0
+    )
     # A lead leaves the current "Quotation sent" status after it converts, so
     # current-status counts cannot be used for conversion. Keep the live
     # quotation-sent population from its saved work-progress history instead.
@@ -525,6 +533,7 @@ def _kpis(db: Session, u: User | None = None):
         "total": total,
         "lead_value": lead_value,
         "total_lead_value": lead_value["total_lead_value"],
+        "pending_lead_value": pending_lead_value,
         "total_quotation_value": total_quotation_value,
         "total_converted_lead_value": total_converted_lead_value,
         "quotation_sent_history_count": quotation_sent_history_count,
