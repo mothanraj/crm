@@ -332,7 +332,7 @@ def _send_assignment_batches(db: Session, new_by_emp: dict) -> None:
     """Send one batched assignment email per employee. Fail-open (never raises).
 
     Each lead is mailed at most once. Already-sent rows are skipped. Large
-    assignments are split into chunks so Brevo can accept 100–1000 leads.
+    assignments are split into chunks so mail servers accept 100–1000 leads.
     """
     now = datetime.now(timezone.utc)
     try:

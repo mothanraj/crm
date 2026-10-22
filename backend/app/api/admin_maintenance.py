@@ -43,9 +43,11 @@ def _diagnose(db: Session) -> dict:
         "overdue_digest_hour_ist": int(settings.OVERDUE_DIGEST_HOUR),
         "emails_enabled": bool(email_service.emails_enabled()),
         "email_enabled_flag": bool(settings.EMAIL_ENABLED),
-        "brevo_key_set": bool(settings.BREVO_API_KEY),
-        "sender_set": bool(settings.BREVO_SENDER_EMAIL),
-        "sender_name": settings.BREVO_SENDER_NAME,
+        "smtp_host": settings.SMTP_HOST,
+        "smtp_port": int(settings.SMTP_PORT),
+        "smtp_user_set": bool(settings.SMTP_USERNAME),
+        "sender_set": bool(settings.SMTP_FROM_EMAIL),
+        "sender_name": settings.SMTP_FROM_NAME,
         "counts": {
             "pending": base.filter(Lead.sla_state == "PENDING").count(),
             "overdue_total": base.filter(Lead.sla_state == "OVERDUE").count(),
@@ -181,7 +183,7 @@ def digest_run(
     if not email_service.emails_enabled():
         return {
             "mailed": False,
-            "reason": "email not configured (EMAIL_ENABLED/BREVO_API_KEY/BREVO_SENDER_EMAIL)",
+            "reason": "email not configured (EMAIL_ENABLED/SMTP_HOST/SMTP_FROM_EMAIL)",
             "resend": resend,
             "sample": sample,
             "diagnostics": diag,
@@ -256,7 +258,7 @@ def digest_run(
     db.rollback()
     return {
         "mailed": False,
-        "reason": "Brevo rejected or send failed for at least one admin (see backend logs)",
+        "reason": "SMTP rejected or send failed for at least one admin (see backend logs)",
         "resend": resend,
         "sample": sample,
         "results": results,

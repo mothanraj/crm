@@ -1,4 +1,4 @@
-"""APScheduler: SLA sweeps + Brevo email (assignment batches + admin overdue digest).
+"""APScheduler: SLA sweeps + SMTP email (assignment batches + admin overdue digest).
 
 - Every 15 min: mark PENDING leads past sla_deadline as OVERDUE (assignment
   window or each follow-up window after progress updates). Converted /
@@ -394,7 +394,7 @@ def _reminder_sweep():
 
 
 def _overdue_digest():
-    """Backstop: mail any OVERDUE rows missed earlier (downtime / Brevo failure).
+    """Backstop: mail any OVERDUE rows missed earlier (downtime / SMTP failure).
 
     Runs hourly. Normal path mails immediately inside _sla_sweep the moment
     the 72h deadline passes, so this usually finds nothing.
