@@ -1457,6 +1457,7 @@ function QuotationFormModal({
     unit_cost: '',
     units: '',
     extra_lines: [] as { description: string; unit_cost: string; units: string }[],
+    table_copies: 1,
     quotation_date: new Date().toISOString().slice(0, 10),
     quotation_number: '',
     revision: 'R0',
@@ -1500,6 +1501,7 @@ function QuotationFormModal({
             unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
             units: line.units != null ? String(line.units) : '1',
           })) : [],
+          table_copies: Math.max(1, Math.min(Number(d.table_copies) || 1, 10)),
           quotation_date: (d.quotation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
           quotation_number: d.quotation_number || '',
           revision: d.revision || 'R0',
@@ -1534,7 +1536,7 @@ function QuotationFormModal({
   };
   const unitCost = Number(form.unit_cost) || 0;
   const units = Number(form.units) || 0;
-  const amountExcl = rowAmount(form.unit_cost, form.units) + form.extra_lines.reduce((sum, line) => sum + rowAmount(line.unit_cost, line.units), 0);
+  const amountExcl = (rowAmount(form.unit_cost, form.units) + form.extra_lines.reduce((sum, line) => sum + rowAmount(line.unit_cost, line.units), 0)) * form.table_copies;
   const gst = Math.round(amountExcl * 0.18);
   const grand = amountExcl + gst;
   const dateDisp = (() => {
@@ -1580,6 +1582,7 @@ function QuotationFormModal({
         unit_cost: Number(line.unit_cost) || 0,
         units: Number(line.units) > 0 ? Number(line.units) : 1,
       })),
+    table_copies: form.table_copies,
   });
 
   const applySaved = (data: any) => {
@@ -1594,6 +1597,7 @@ function QuotationFormModal({
         unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
         units: line.units != null ? String(line.units) : '1',
       })) : cur.extra_lines,
+      table_copies: Math.max(1, Math.min(Number(data.table_copies) || 1, 10)),
       payment_terms: data.payment_terms || cur.payment_terms,
       delivery_period: data.delivery_period || cur.delivery_period,
       post_warranty: data.post_warranty || cur.post_warranty,
@@ -1787,6 +1791,15 @@ function QuotationFormModal({
                 className="mb-6 text-justify leading-relaxed"
               />
 
+              {editing && <div className="flex items-center justify-between gap-2 mb-2 font-sans">
+                <span className="text-xs text-slate-500">Pricing tables: {form.table_copies}</span>
+                <button type="button" className="rounded border border-[#1e3a5f] px-2 py-1 text-xs font-semibold text-[#1e3a5f] hover:bg-slate-100" title="Duplicate this pricing table" onClick={() => { set({ table_copies: Math.min(form.table_copies + 1, 10) }); }}>+ Add table</button>
+              </div>}
+              {Array.from({ length: form.table_copies }, (_, tableIndex) => <div key={`quote-table-${tableIndex}`} className={tableIndex ? 'break-before-page pt-8' : ''}>
+              {tableIndex > 0 && <div className="mb-2 flex items-center justify-between gap-2 text-xs font-sans font-semibold text-slate-500">
+                <span>Pricing table {tableIndex + 1}</span>
+                {editing && <button type="button" className="rounded border border-red-300 px-2 py-0.5 text-red-600 hover:bg-red-50" title="Remove this table" aria-label={`Remove pricing table ${tableIndex + 1}`} onClick={() => set({ table_copies: Math.max(1, form.table_copies - 1) })}>×</button>}
+              </div>}
               <table className="w-full border-collapse text-[13px] mb-6" style={{ fontFamily: 'Helvetica, Arial, sans-serif' }}>
                 <thead>
                   <tr className="bg-[#1e3a5f] text-white">
@@ -1938,6 +1951,7 @@ function QuotationFormModal({
                   </tr>
                 </tbody>
               </table>
+              </div>)}
 
               <div className="space-y-5 text-[13.5px] leading-relaxed">
                 <div>
@@ -2035,7 +2049,7 @@ function QuotationFormModal({
 }
 
 /* ================= LEADS ================= */
-const REPEATABLE_PROGRESS = new Set(['In Followup', 'Meeting', 'Site Visit', 'Quotation sent']);
+const REPEATABLE_PROGRESS = new Set(['In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent']);
 
 function AutoGrowRemarks({
   value,
@@ -2154,7 +2168,7 @@ export function Leads() {
   }, [search, status, source, category, sla, sort, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
-  const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent', 'Converted', 'Not Interested'];
   const todayISO = new Date().toISOString().slice(0, 10);
   const reminderOf = (lead: any) => (lead.reminder_date || '').slice(0, 10);
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', reminderDate: '', quotationValue: lead.quotation_value ?? '0' };
@@ -2686,7 +2700,7 @@ export function Leads() {
                             </div>
                             <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`}><b>{index + 1}.</b> {entry.remarks}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {fmtDMY(entry.reminder_date)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 text-xs font-semibold text-indigo-600 tabular-nums">{fmtDT(entry.at, 19)}</div>}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {fmtDMY(entry.reminder_date)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2886,7 +2900,7 @@ export function Leads() {
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
                         />
-                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="text-sm whitespace-pre-wrap"><b>{index + 1}.</b> {entry.remarks}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
+                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0 text-sm whitespace-pre-wrap"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 text-xs font-semibold text-indigo-600 tabular-nums">{fmtDT(entry.at, 19)}</div>}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
                       {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
                         <AutoGrowRemarks
                           key={`remark-${index}`}
@@ -3185,7 +3199,7 @@ export function EmployeeLeads() {
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
-  const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent', 'Converted', 'Not Interested'];
   const statusOf = (l: any) => {
     const s = nameOf('statuses', l.status_id);
     return s === 'New Lead' && l.primary_employee_id ? 'Assigned' : s;
@@ -5677,7 +5691,7 @@ export function EmployeesPage() {
   };
   const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
-  const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+  const workActionOptions = ['Assigned', 'In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent', 'Converted', 'Not Interested'];
   const empLeadStatus = (lead: any) => {
     const s = leadStatusName(lead.status_id);
     return s === 'New Lead' && lead.primary_employee_id ? 'Assigned' : s;

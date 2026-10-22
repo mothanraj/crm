@@ -1090,6 +1090,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
     introduction = notes["introduction"] if "introduction" in notes else DEFAULT_INTRODUCTION
     extra_lines = clean_extra_lines(notes.get("extra_lines") or [])
+    table_copies = max(1, min(int(notes.get("table_copies") or 1), 10))
     revision = (quote.revision if quote and _quotation_is_issued(quote) else "R0") or "R0"
     issued = _quotation_is_issued(quote)
     qdate = quote.quotation_date if quote and quote.quotation_date and issued else date.today()
@@ -1099,6 +1100,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         # Preview next count only — not reserved until form Save.
         quotation_number = build_quotation_ref(enquiry_ddmm(lead, qdate), next_quote_seq(db), revision)
     totals = calc_form_totals(unit_cost, units, extra_lines)
+    totals = {key: value * table_copies for key, value in totals.items()}
     return {
         "id": str(quote.id) if quote and issued else None,
         "quotation_number": quotation_number,
@@ -1115,6 +1117,7 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         "unit_cost": int(round(unit_cost)) if unit_cost else 0,
         "units": units,
         "extra_lines": extra_lines,
+        "table_copies": table_copies,
         "amount_excl": totals["amount_excl"] if issued else 0,
         "gst": totals["gst"] if issued else 0,
         "grand_total": totals["grand_total"] if issued else 0,
@@ -1159,6 +1162,8 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
     )
     extra_lines = clean_extra_lines(body.extra_lines)
     totals = calc_form_totals(body.unit_cost, body.units, extra_lines)
+    table_copies = max(1, min(int(body.table_copies or 1), 10))
+    totals = {key: value * table_copies for key, value in totals.items()}
     qdate = body.quotation_date or date_cls.today()
     snap = {
         "unit_cost": int(round(float(body.unit_cost))),
@@ -1172,6 +1177,7 @@ def save_quotation_form(lid: UUID, body: QuoteFormIn, db: Session = Depends(get_
         "introduction": body.introduction if body.introduction is not None else "",
         "units": float(body.units),
         "extra_lines": extra_lines,
+        "table_copies": table_copies,
         "quotation_date": qdate.isoformat() if hasattr(qdate, "isoformat") else str(qdate),
     }
     # Q count is reserved on Save only. First save = R0; later changed saves bump Rn.

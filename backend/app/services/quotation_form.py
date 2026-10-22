@@ -19,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.orm import Session
 
 from app.models import Lead, Quotation
@@ -402,7 +402,9 @@ def build_quotation_form_pdf(data: dict) -> bytes:
     unit_cost = float(data.get("unit_cost") or 0)
     units = float(data.get("units") or 0)
     extra_lines = data.get("extra_lines") or []
+    table_copies = max(1, min(int(data.get("table_copies") or 1), 10))
     totals = calc_form_totals(unit_cost, units, extra_lines)
+    totals = {key: value * table_copies for key, value in totals.items()}
     gst = totals["gst"]
     grand = totals["grand_total"]
 
@@ -513,7 +515,10 @@ def build_quotation_form_pdf(data: dict) -> bytes:
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e2e8f0")),
     ]))
-    story.append(table)
+    for table_index in range(table_copies):
+        if table_index:
+            story.append(PageBreak())
+        story.append(table)
     story.append(Spacer(1, 14))
 
     page1_tail = [

@@ -182,3 +182,4 @@ class QuoteFormIn(BaseModel):
     introduction: str = ""
     quotation_date: Optional[date] = None
     extra_lines: list[QuoteLineIn] = []
+    table_copies: int = Field(default=1, ge=1, le=10)
