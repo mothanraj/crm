@@ -176,9 +176,44 @@ function leadRowColour(lead: any, status: string) {
   return 'bg-white';
 }
 
+const IST_TZ = 'Asia/Kolkata';
+
+type IstParts = { year: string; month: string; day: string; hour: string; minute: string; second: string };
+
+function istParts(v: any): IstParts | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: IST_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(d);
+  const out: Record<string, string> = {};
+  for (const p of parts) if (p.type !== 'literal') out[p.type] = p.value;
+  return out as IstParts;
+}
+
+/** UTC ISO datetime → IST date as DD-MM-YY. */
+function fmtDate(v: any) {
+  const p = istParts(v);
+  return p ? `${p.day}-${p.month}-${p.year.slice(-2)}` : '—';
+}
+
+/** UTC ISO datetime → IST "YYYY-MM-DD HH:MM" (adds :SS when len >= 19). */
 function fmtDT(v: any, len = 16) {
-  if (!v) return '—';
-  return String(v).slice(0, len).replace('T', ' ');
+  const p = istParts(v);
+  if (!p) return '—';
+  const date = `${p.year}-${p.month}-${p.day}`;
+  return len >= 19 ? `${date} ${p.hour}:${p.minute}:${p.second}` : `${date} ${p.hour}:${p.minute}`;
+}
+
+/** UTC ISO datetime → IST "hh:mm:ss AM/PM". */
+function fmtTime(v: any) {
+  const p = istParts(v);
+  if (!p) return '—';
+  const h = Number(p.hour);
+  return `${String(h % 12 || 12).padStart(2, '0')}:${p.minute}:${p.second} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
 function withUpdateStamp(remarks: string) {
@@ -2644,7 +2679,7 @@ export function Leads() {
                             <option value="">Select progress…</option>
                             {actionOptions.map((option) => {
                               const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                              return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                              return <option key={option} value={match?.id || ''}>{option}</option>;
                             })}
                           </select>
                         ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`m-action-${index}`}><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
@@ -2655,7 +2690,7 @@ export function Leads() {
                               <option value="">Select progress…</option>
                               {actionOptions.map((option) => {
                                 const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                                return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                                return <option key={option} value={match?.id || ''}>{option}</option>;
                               })}
                             </select>
                             <AutoGrowRemarks
@@ -2702,7 +2737,7 @@ export function Leads() {
                             </div>
                             <button type="button" className="btn-primary !px-3 !py-2 text-sm mt-2 w-full min-h-[44px]" disabled={savingId === l.id || workFormIncomplete(draft, l)} onClick={() => saveLead(l)}>{savingId === l.id ? 'Saving…' : 'Save'}</button>
                           </>
-                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 text-xs font-semibold text-indigo-600 tabular-nums">{fmtDT(entry.at, 19)}</div>}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {fmtDMY(entry.reminder_date)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
+                        ) : (<div className="text-sm text-graphite-900 mt-1 break-words whitespace-pre-wrap">{l.work_history?.length ? (<>{l.work_history.map((entry: any, index: number) => <div key={`m-remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 inline-flex items-baseline gap-3 text-xs font-semibold text-brand-700 tabular-nums whitespace-nowrap"><span>{fmtDate(entry.at)}</span><span>{fmtTime(entry.at)}</span></div>}{entry.reminder_date ? <span className="mt-0.5 block text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={entry.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>Reminder: {fmtDMY(entry.reminder_date)}</span>{entry.id && reminderTickable(l) && (<button type="button" title={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={entry.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleEntryReminder(l, entry)} className={`${tickBtn(!!entry.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</span> : null}</div>)}{l.reminder_date && !(l.work_history || []).some((entry: any) => entry.reminder_date && String(entry.reminder_date).slice(0, 10) === String(l.reminder_date || '').slice(0, 10)) && (<div className="mt-1 text-xs text-graphite-500 tabular-nums inline-flex items-center gap-1"><span className={l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={`${tickBtn(!!l.reminder_done)} !w-6 !h-6 !text-xs`}>✓</button>)}</div>)}</>) : (<span className="inline-flex items-center gap-1.5 flex-wrap">{l.employee_remarks || '—'}{l.reminder_date ? (<><span className={`text-xs text-graphite-500 ${l.reminder_done ? 'reminder-done' : 'text-[#E8890C] font-medium'}`}>{fmtDMY(l.reminder_date)}</span>{reminderTickable(l) && (<button type="button" title={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} aria-label={l.reminder_done ? 'Mark reminder not done' : 'Mark reminder done'} disabled={savingId === l.id} onClick={() => toggleLeadReminder(l)} className={tickBtn(!!l.reminder_done)}>✓</button>)}</>) : null}</span>)}</div>)}
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2877,7 +2912,7 @@ export function Leads() {
                           <option value="">Select progress…</option>
                           {actionOptions.map((option) => {
                             const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                            return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                            return <option key={option} value={match?.id || ''}>{option}</option>;
                           })}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
@@ -2887,7 +2922,7 @@ export function Leads() {
                             <option value="">Select progress…</option>
                             {actionOptions.map((option) => {
                               const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                              return <option key={option} value={match?.id || l.status_id}>{option}</option>;
+                              return <option key={option} value={match?.id || ''}>{option}</option>;
                             })}
                           </select>
                         </div>
@@ -2902,7 +2937,7 @@ export function Leads() {
                           value={draftFor(l).remarks}
                           onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), remarks: e.target.value } }))}
                         />
-                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0 text-sm whitespace-pre-wrap"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 text-xs font-semibold text-indigo-600 tabular-nums">{fmtDT(entry.at, 19)}</div>}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
+                      ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? l.work_history.map((entry: any, index: number) => <div key={`remark-${index}`} className="border-b border-graphite-100 pb-2 mb-2 last:border-b-0 last:mb-0 text-sm whitespace-pre-wrap"><div><b>{index + 1}.</b> {String(entry.remarks || '').replace(/\n?\[[^\]]*\]\s*$/u, '').trim() || '—'}</div>{entry.at && <div className="mt-1 inline-flex items-baseline gap-3 text-xs font-semibold text-brand-700 tabular-nums whitespace-nowrap"><span>{fmtDate(entry.at)}</span><span>{fmtTime(entry.at)}</span></div>}</div>) : <span className="block whitespace-pre-wrap" title={l.employee_remarks || ''}>{l.employee_remarks || '—'}</span>}</div>)}
                       {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
                         <AutoGrowRemarks
                           key={`remark-${index}`}
@@ -3312,7 +3347,7 @@ export function EmployeeLeads() {
                       <td className="td"><StatusBadge value={l.primary_employee_id && nameOf('statuses', l.status_id) === 'New Lead' ? 'Assigned' : nameOf('statuses', l.status_id)} /></td>
                       <td className="td"><SlaBadge value={l.sla_state} /></td>
                       <td className={`td whitespace-nowrap tabular-nums ${l.sla_state === 'OVERDUE' ? 'text-red-700 font-semibold' : ''}`}>{fmtDT(l.sla_deadline)}</td>
-                      <td className="td whitespace-nowrap">{l.first_contact_at ? `${l.first_contact_method || 'Contacted'} · ${l.first_contact_at.slice(0, 10)}` : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
+                      <td className="td whitespace-nowrap">{l.first_contact_at ? `${l.first_contact_method || 'Contacted'} · ${fmtDate(l.first_contact_at)}` : <span className="text-amber-700 text-xs font-medium">Pending</span>}</td>
                       <td className="td whitespace-nowrap">{l.enquiry_date || '—'}</td>
                     </tr>
                   ))}
@@ -3870,7 +3905,9 @@ export function LeadDetail({ id }: { id: string }) {
           <div className="p-5">
             {tab === 'timeline' && ((l.activities || []).length === 0 ? <EmptyState title="No activity yet" hint="Speak to the customer and update work progress." /> : (
               <ol className="relative border-l-2 border-graphite-200 ml-2 space-y-5">
-                {(l.activities || []).map((a: any) => (
+                {[...(l.activities || [])]
+                  .sort((a: any, b: any) => String(a.at || '').localeCompare(String(b.at || '')))
+                  .map((a: any) => (
                   <li key={a.id} className="ml-5">
                     <span className="absolute -left-[7px] mt-1 w-3 h-3 rounded-full bg-brand-500 ring-4 ring-brand-100" />
                     <div className="flex items-center gap-2 text-sm"><b>{a.type}</b><span className="text-xs text-graphite-400">{fmtDT(a.at)}</span></div>

@@ -601,8 +601,18 @@ def get_lead(lid: UUID, db: Session = Depends(get_db), u: User = Depends(current
         raise HTTPException(404, "Not found")
     if u.role and u.role.name == "EMPLOYEE" and lead.primary_employee_id != u.id:
         raise HTTPException(403, "Not assigned")
-    acts = db.query(LeadActivity).filter_by(lead_id=lid).order_by(LeadActivity.activity_at.desc()).all()
-    hist = db.query(LeadStatusHistory).filter_by(lead_id=lid).order_by(LeadStatusHistory.changed_at.desc()).all()
+    acts = (
+        db.query(LeadActivity)
+        .filter_by(lead_id=lid)
+        .order_by(LeadActivity.activity_at.asc(), LeadActivity.created_at.asc())
+        .all()
+    )
+    hist = (
+        db.query(LeadStatusHistory)
+        .filter_by(lead_id=lid)
+        .order_by(LeadStatusHistory.changed_at.asc(), LeadStatusHistory.id.asc())
+        .all()
+    )
     quotes = db.query(Quotation).filter_by(lead_id=lid).all()
     visits = db.query(SiteVisit).filter_by(lead_id=lid).all()
     docs = db.query(LeadDocument).filter_by(lead_id=lid).all()
