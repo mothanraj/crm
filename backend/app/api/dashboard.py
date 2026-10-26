@@ -1,5 +1,5 @@
 from calendar import month_abbr, monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from collections import defaultdict
 from uuid import UUID
@@ -16,8 +16,10 @@ from app.models import DailyRemark, DailyTileOverride, Lead, LeadActivity, LeadA
 from app.schemas import DailyRemarkIn, DailyRemarkUpdate, DailyTileIn
 from app.services.normalize import CANONICAL_PRODUCTS, CANONICAL_SOURCES, canonical_source
 from app.services.pricing import PRODUCT_PRICES, calc_lead_value, price_for_product
+from app.services.ttl_cache import TTLCache
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+_EMPLOYEE_DASHBOARD_CACHE = TTLCache(ttl_seconds=60, maxsize=512)
 
 # Status buckets used by Excel Details Report / Live Dashboard
 STATUS_PROSPECT = "A - Prospect"
@@ -579,10 +581,86 @@ def _kpis(db: Session, u: User | None = None):
 
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), u: User = Depends(current_user)):
+    cache_key = str(u.id)
+    if _is_employee(u):
+        cached = _EMPLOYEE_DASHBOARD_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     d = _kpis(db, u)
     if d["new_lead_capped"]:
         d["warning"] = "New leads exceeded the threshold."
+    if _is_employee(u):
+        _EMPLOYEE_DASHBOARD_CACHE.set(cache_key, d)
     return d
+
+
+def _queue_item(lead: Lead) -> dict:
+    return {
+        "id": str(lead.id),
+        "enquiry_number": lead.enquiry_number,
+        "customer_name": lead.customer_name,
+        "contact_number": lead.contact_number,
+        "email": lead.email,
+        "quantity_raw": lead.quantity_raw,
+        "company_name": lead.company_name,
+        "city": lead.city,
+        "sla_state": lead.sla_state,
+        "sla_deadline": lead.sla_deadline.isoformat() if lead.sla_deadline else None,
+        "first_contact_at": lead.first_contact_at.isoformat() if lead.first_contact_at else None,
+        "first_contact_method": lead.first_contact_method or "",
+        "status_id": str(lead.status_id),
+        "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+    }
+
+
+@router.get("/dashboard/queue")
+def dashboard_queue(
+    db: Session = Depends(get_db),
+    u: User = Depends(current_user),
+    limit: int = Query(500, ge=1, le=1000),
+):
+    """To-do queue without pulling every assigned lead into the browser."""
+    base = [Lead.is_active.is_(True), *_emp_clauses(u)]
+    pending_filter = [*base, Lead.first_contact_at.is_(None)]
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    struck_filter = [
+        *base,
+        Lead.first_contact_at.isnot(None),
+        Lead.first_contact_at >= cutoff,
+    ]
+
+    pending_count = db.query(func.count(Lead.id)).filter(*pending_filter).scalar() or 0
+    struck_count = db.query(func.count(Lead.id)).filter(*struck_filter).scalar() or 0
+    pending_rows = (
+        db.query(Lead)
+        .filter(*pending_filter)
+        .order_by(Lead.sla_deadline.asc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
+        .limit(limit)
+        .all()
+    )
+    struck_rows = (
+        db.query(Lead)
+        .filter(*struck_filter)
+        .order_by(Lead.first_contact_at.desc(), Lead.id.desc())
+        .limit(limit)
+        .all()
+    )
+    recent_rows = (
+        db.query(Lead)
+        .filter(*base)
+        .order_by(Lead.updated_at.desc(), Lead.id.desc())
+        .limit(5)
+        .all()
+    )
+    items = [_queue_item(lead) for lead in pending_rows]
+    items.extend(_queue_item(lead) for lead in struck_rows)
+    return {
+        "pending_count": pending_count,
+        "struck_count": struck_count,
+        "truncated": pending_count > limit or struck_count > limit,
+        "items": items,
+        "recent": [_queue_item(lead) for lead in recent_rows],
+    }
 
 
 PERIOD_PROGRESS = [

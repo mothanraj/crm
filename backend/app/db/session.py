@@ -1,27 +1,22 @@
 from fastapi import HTTPException
 from sqlalchemy import create_engine
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, TimeoutError as SATimeoutError
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import QueuePool
 
 from app.core.config import settings
 
 _URL = settings.DATABASE_URL or ""
 # Supabase Session pooler (port 5432) caps concurrent clients (~15 on free/pro).
-# NullPool avoids holding idle app-side connections that exhaust that limit.
-# Transaction pooler (port 6543) can use a small QueuePool.
-_USE_NULL_POOL = "pooler.supabase.com" in _URL and ":6543" not in _URL
-
+# A small QueuePool keeps a few warm connections without exhausting that limit.
 engine = create_engine(
     _URL,
     pool_pre_ping=True,
-    poolclass=NullPool if _USE_NULL_POOL else QueuePool,
-    **({} if _USE_NULL_POOL else {
-        "pool_recycle": 180,
-        "pool_size": 2,
-        "max_overflow": 1,
-        "pool_timeout": 20,
-    }),
+    poolclass=QueuePool,
+    pool_recycle=180,
+    pool_size=3,
+    max_overflow=2,
+    pool_timeout=30,
     connect_args={
         "connect_timeout": 10,
         "keepalives": 1,
@@ -44,11 +39,11 @@ def _db_down(exc: BaseException) -> HTTPException:
 def get_db():
     try:
         db = SessionLocal()
-    except (OperationalError, InterfaceError, DBAPIError) as exc:
+    except (OperationalError, InterfaceError, DBAPIError, SATimeoutError) as exc:
         raise _db_down(exc) from exc
     try:
         yield db
-    except (OperationalError, InterfaceError, DBAPIError) as exc:
+    except (OperationalError, InterfaceError, DBAPIError, SATimeoutError) as exc:
         try:
             db.rollback()
         except Exception:

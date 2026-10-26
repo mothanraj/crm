@@ -30,7 +30,11 @@ from app.services.normalize import (
     norm_phone, parse_quantity, normalize_car_count,
 )
 from app.services.pricing import apply_pricing_to_lead, calc_lead_value, round_money
+from app.services.ttl_cache import TTLCache
 from app.utils.storage import get_storage
+
+_EMPLOYEE_SUMMARY_CACHE = TTLCache(ttl_seconds=60, maxsize=1024)
+_LEAD_COUNT_CACHE = TTLCache(ttl_seconds=60, maxsize=2048)
 
 
 def _money_str(v) -> str | None:
@@ -51,6 +55,9 @@ TRACKER_COLS = ["enq", "date", "name", "company", "phone", "city", "cars", "inpu
                 "tech", "secondary", "docs", "svc", "conv", "lost", "tatd", "email", "addl"]
 
 
+_UNSET = object()
+
+
 def _serialize(
     l: Lead,
     db: Session,
@@ -58,6 +65,7 @@ def _serialize(
     product_name: str | None = None,
     source_name: str | None = None,
     work_history: list | None = None,
+    reassignment_request=_UNSET,
 ) -> dict:
     if product_name is None:
         product_name = db.get(Product, l.product_id).name if l.product_id and db.get(Product, l.product_id) else ""
@@ -128,15 +136,15 @@ def _serialize(
         "updated_at": l.updated_at.isoformat() if l.updated_at else None,
         "pending_assignment": l.primary_employee_id is None,
         "work_history": work_history,
-        "reassignment_request": _serialize_reassignment(db, l.id),
+        "reassignment_request": (
+            _serialize_reassignment(db, l.id)
+            if reassignment_request is _UNSET
+            else reassignment_request
+        ),
     }
 
 
-def _serialize_reassignment(db: Session, lead_id) -> dict | None:
-    req = open_reassignment_request(db, lead_id)
-    if not req:
-        return None
-    requester = db.get(User, req.requested_by)
+def _reassignment_dict(req, requester: User | None) -> dict:
     return {
         "id": str(req.id),
         "status": req.status,
@@ -145,6 +153,40 @@ def _serialize_reassignment(db: Session, lead_id) -> dict | None:
         "requested_by_name": requester.name if requester else "—",
         "created_at": req.created_at.isoformat() if req.created_at else None,
         "review_note": req.review_note or "",
+    }
+
+
+def _serialize_reassignment(db: Session, lead_id) -> dict | None:
+    req = open_reassignment_request(db, lead_id)
+    if not req:
+        return None
+    return _reassignment_dict(req, db.get(User, req.requested_by))
+
+
+def _serialize_reassignments(db: Session, lead_ids: list) -> dict:
+    """One request + one requester query for a whole page instead of two per lead."""
+    if not lead_ids:
+        return {}
+    reqs = (
+        db.query(LeadReassignmentRequest)
+        .filter(
+            LeadReassignmentRequest.lead_id.in_(lead_ids),
+            LeadReassignmentRequest.status.in_(("PENDING", "ACCEPTED")),
+        )
+        .order_by(LeadReassignmentRequest.created_at.desc())
+        .all()
+    )
+    latest: dict = {}
+    for req in reqs:
+        latest.setdefault(req.lead_id, req)
+    user_ids = {req.requested_by for req in latest.values() if req.requested_by}
+    requesters = (
+        {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()}
+        if user_ids else {}
+    )
+    return {
+        lead_id: _reassignment_dict(req, requesters.get(req.requested_by))
+        for lead_id, req in latest.items()
     }
 
 
@@ -207,7 +249,8 @@ def _escape_like(s: str) -> str:
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
                employee: str = "", sla: str = "", unassigned: str = "", customer_review: str = "",
-               city: str = "", sort: str = "", page: int = 1, size: int = 20):
+               city: str = "", sort: str = "", light: str = "", page: int = 1, size: int = 20):
+    light_mode = light in ("1", "true", "yes")
     page = max(1, page)
     size = min(max(1, size), 100)
     q = db.query(Lead).filter(Lead.is_active.is_(True))
@@ -240,14 +283,19 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         q = q.filter(Lead.primary_employee_id.is_(None))
     if customer_review:
         q = q.filter(Lead.customer_review == customer_review)
-    total = q.count()
+    count_key = (u.id, search, status, source, product, employee, sla, unassigned, customer_review, city)
+    total = _LEAD_COUNT_CACHE.get(count_key) if light_mode else None
+    if total is None:
+        total = q.count()
+        if light_mode:
+            _LEAD_COUNT_CACHE.set(count_key, total)
     sort_key = (sort or "").strip().lower()
     if sort_key in ("lead_value", "lead_value_asc"):
-        q = q.order_by(Lead.lead_value.asc().nullslast(), Lead.updated_at.desc())
+        q = q.order_by(Lead.lead_value.asc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
     elif sort_key in ("lead_value_desc", "-lead_value"):
-        q = q.order_by(Lead.lead_value.desc().nullslast(), Lead.updated_at.desc())
+        q = q.order_by(Lead.lead_value.desc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
     else:
-        q = q.order_by(Lead.updated_at.desc())
+        q = q.order_by(Lead.updated_at.desc(), Lead.id.desc())
     rows = q.offset((page - 1) * size).limit(size).all()
     # Batch lookup names + work history to avoid N+1 on list pages.
     prod_ids = {r.product_id for r in rows if r.product_id}
@@ -255,9 +303,13 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
     products = {p.id: p.name for p in db.query(Product).filter(Product.id.in_(prod_ids)).all()} if prod_ids else {}
     sources = {s.id: s.name for s in db.query(LeadSource).filter(LeadSource.id.in_(src_ids)).all()} if src_ids else {}
     lead_ids = [r.id for r in rows]
-    hist_by_lead: dict = {lid: [] for lid in lead_ids}
-    quote_value_hist_by_lead: dict = {lid: [] for lid in lead_ids}
-    if lead_ids:
+    hist_by_lead: dict = {}
+    quote_value_hist_by_lead: dict = {}
+    quote_by_lead: dict = {}
+    reassignment_by_lead: dict = {}
+    if lead_ids and not light_mode:
+        hist_by_lead = {lid: [] for lid in lead_ids}
+        quote_value_hist_by_lead = {lid: [] for lid in lead_ids}
         acts = (
             db.query(LeadActivity)
             .filter(LeadActivity.lead_id.in_(lead_ids), LeadActivity.activity_type == "Work Progress")
@@ -308,14 +360,22 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
             bucket[rev] = entry
         for lid in lead_ids:
             quote_value_hist_by_lead[lid] = [rev_latest[lid][r] for r in rev_order[lid] if r in rev_latest[lid]]
-    quote_by_lead: dict = {}
-    if lead_ids:
         for qrow in db.query(Quotation).filter(Quotation.lead_id.in_(lead_ids)).all():
             prev = quote_by_lead.get(qrow.lead_id)
             if not prev or (qrow.revision or "") >= (prev.revision or ""):
                 quote_by_lead[qrow.lead_id] = qrow
+        reassignment_by_lead = _serialize_reassignments(db, lead_ids)
     items = []
     for r in rows:
+        if light_mode:
+            items.append(_serialize(
+                r, db,
+                product_name=products.get(r.product_id, ""),
+                source_name=sources.get(r.source_id, ""),
+                work_history=[],
+                reassignment_request=None,
+            ))
+            continue
         qform = None
         qrow = quote_by_lead.get(r.id)
         # Show REF in the table only after form Save (issued) — open/preview does not count.
@@ -339,11 +399,85 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                 product_name=products.get(r.product_id, ""),
                 source_name=sources.get(r.source_id, ""),
                 work_history=hist_by_lead.get(r.id, []),
+                reassignment_request=reassignment_by_lead.get(r.id),
             ),
             "quotation_form": qform,
             "quotation_value_history": qhist,
         })
     return {"total": total, "items": items}
+
+
+@router.get("/employee-summary")
+def employee_summary(db: Session = Depends(get_db), u: User = Depends(current_user),
+                     employee: str = ""):
+    """Counter tiles for Employee Leads as SQL aggregates, cached for 60s."""
+    if u.role and u.role.name == "EMPLOYEE":
+        target_id = u.id
+    elif employee:
+        target_id = _parse_uuid(employee, "employee")
+    else:
+        target_id = None
+
+    cache_key = str(target_id) if target_id else "all"
+    cached = _EMPLOYEE_SUMMARY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    filters = [Lead.is_active.is_(True)]
+    if target_id:
+        filters.append(Lead.primary_employee_id == target_id)
+
+    review_expr = func.trim(func.coalesce(Lead.customer_review, ""))
+    b_review = Lead.customer_review.in_(("B (6-9 months)", "B (1 year)"))
+    c_review = Lead.customer_review.in_(("C (Planning Stage)", "C (plan stage)", "Planning Stage"))
+    counts = (
+        db.query(
+            func.count(Lead.id),
+            func.count(Lead.id).filter(Lead.first_contact_at.is_(None)),
+            func.count(Lead.id).filter(Lead.sla_state == "OVERDUE"),
+            func.count(Lead.id).filter(Lead.first_contact_at.isnot(None)),
+            func.count(Lead.id).filter(review_expr == ""),
+            func.count(Lead.id).filter(Lead.customer_review == "A+ (Immediate)"),
+            func.count(Lead.id).filter(Lead.customer_review == "A (3-6 months)"),
+            func.count(Lead.id).filter(b_review),
+            func.count(Lead.id).filter(c_review),
+        )
+        .filter(*filters)
+        .one()
+    )
+    total, needs_contact, overdue, responded, unreviewed, cat_aplus, cat_a, cat_b, cat_c = counts
+
+    action_rows = (
+        db.query(LeadStatus.name, func.count(Lead.id))
+        .join(Lead, Lead.status_id == LeadStatus.id)
+        .filter(*filters)
+        .group_by(LeadStatus.name)
+        .all()
+    )
+    work_actions: dict[str, int] = {}
+    for status_name, count in action_rows:
+        action = (status_name or "").strip()
+        if action == "New Lead" and target_id:
+            action = "Assigned"
+        action = action or "—"
+        work_actions[action] = work_actions.get(action, 0) + count
+
+    result = {
+        "total": total,
+        "needs_contact": needs_contact,
+        "overdue": overdue,
+        "responded": responded,
+        "unreviewed": unreviewed,
+        "categories": {
+            "A+ (Immediate)": cat_aplus,
+            "A (3-6 months)": cat_a,
+            "B (6-9 months)": cat_b,
+            "C (Planning Stage)": cat_c,
+        },
+        "work_actions": work_actions,
+    }
+    _EMPLOYEE_SUMMARY_CACHE.set(cache_key, result)
+    return result
 
 
 def _validate_form_cars(raw, product_name: str) -> tuple[int | None, str | None]:

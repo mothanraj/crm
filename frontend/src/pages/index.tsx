@@ -14,6 +14,39 @@ export { EmployeeDailyReport } from './dailyReport';
 
 const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44', '#E8890C', '#84cc16', '#a3a380', '#4d7c0f', '#14b8a6', '#1971C2'];
 
+const LEAD_PAGE_SIZE = 100;
+const LEAD_REQUEST_TIMEOUT = 60000;
+
+function apiError(e: any, fallback: string) {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === 'string' && detail) return `${fallback}: ${detail}`;
+  if (e?.code === 'ECONNABORTED') return `${fallback}: request timed out — please retry.`;
+  if (e?.response?.status) return `${fallback} (HTTP ${e.response.status})`;
+  return fallback;
+}
+
+async function fetchAllLeads(params: Record<string, any> = {}, cap = 500) {
+  const first = await api.get('/leads', {
+    params: { ...params, page: 1, size: LEAD_PAGE_SIZE },
+    timeout: LEAD_REQUEST_TIMEOUT,
+  });
+  const total = first.data.total ?? 0;
+  const max = Math.min(total, cap);
+  let items = (first.data.items || []).slice(0, max);
+  let page = 1;
+  while (items.length < max) {
+    page += 1;
+    const { data } = await api.get('/leads', {
+      params: { ...params, page, size: LEAD_PAGE_SIZE },
+      timeout: LEAD_REQUEST_TIMEOUT,
+    });
+    const batch = data.items || [];
+    if (!batch.length) break;
+    items = items.concat(batch).slice(0, max);
+  }
+  return { items, total, truncated: total > cap };
+}
+
 function DashboardPie({ rows }: { rows: { name: string; value: number }[] }) {
   if (!rows.length) return <EmptyState title="No data" />;
   const RADIAN = Math.PI / 180;
@@ -740,6 +773,8 @@ export function EmployeeDashboard() {
   };
   const [d, setD] = useState<any>(null);
   const [todos, setTodos] = useState<any[]>([]);
+  const [recent, setRecent] = useState<any[]>([]);
+  const [queueCounts, setQueueCounts] = useState({ pending: 0, struck: 0 });
   const [truncated, setTruncated] = useState(false);
   const [leaving, setLeaving] = useState<string[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
@@ -751,7 +786,7 @@ export function EmployeeDashboard() {
   const load = () => {
     setLoading(true); setError('');
     api.get('/masters').then((r) => setMasters(r.data)).catch(() => {});
-    const dashP = api.get('/dashboard').then(
+    const dashP = api.get('/dashboard', { timeout: LEAD_REQUEST_TIMEOUT }).then(
       (r) => setD(r.data),
       (e: any) => setError(e?.response?.data?.detail || 'Failed to load your dashboard. Check backend / login again.'),
     );
@@ -759,15 +794,21 @@ export function EmployeeDashboard() {
       (r) => setNotes(Array.isArray(r.data) ? r.data.slice(0, 5) : []),
       () => {},
     );
-    // Two-step fetch so the to-do queue covers ALL assigned customers, not just page 1.
-    const queueP = api.get('/leads', { params: { page: 1, size: 1 } }).then((r) => {
-      const totalCount = r.data.total ?? 0;
-      const full = Math.min(Math.max(totalCount, 1), TODO_CAP);
-      setTruncated(totalCount > TODO_CAP);
-      return api.get('/leads', { params: { page: 1, size: full } });
+    // Server-side queue: only the to-do rows, not every assigned lead.
+    const queueP = api.get('/dashboard/queue', {
+      params: { limit: TODO_CAP },
+      timeout: LEAD_REQUEST_TIMEOUT,
     }).then(
-      (r) => setTodos(r.data.items || []),
-      () => setError('Failed to load your to-dos. Check your connection.'),
+      (r) => {
+        setTodos(r.data.items || []);
+        setRecent(r.data.recent || []);
+        setQueueCounts({
+          pending: r.data.pending_count ?? 0,
+          struck: r.data.struck_count ?? 0,
+        });
+        setTruncated(!!r.data.truncated);
+      },
+      (e) => setError(apiError(e, 'Failed to load your to-dos. Check your connection.')),
     );
     Promise.allSettled([dashP, notesP, queueP]).finally(() => setLoading(false));
   };
@@ -822,7 +863,6 @@ export function EmployeeDashboard() {
   if (!d) return <Spinner />;
   const statusName = (sid?: string) => masters?.statuses?.find((s: any) => s.id === sid)?.name ?? 'Assigned';
   const overduePending = pending.filter((l: any) => l.sla_state === 'OVERDUE').slice(0, 5);
-  const recent = todos.slice(0, 5);
   const normProgress = (name: string) => name === 'New Lead' ? 'Assigned' : (name === 'Not Interested/Spam' ? 'Not Interested' : name);
   const normCategory = (name: string) => {
     const v = (name || '').trim();
@@ -918,7 +958,7 @@ export function EmployeeDashboard() {
           </div>
         ))}
       </div>
-      <Card title={`My to-dos — new leads (${pending.length})`} action={
+      <Card title={`My to-dos — new leads (${queueCounts.pending})`} action={
         truncated
           ? <span className="text-xs text-graphite-400">showing first 500</span>
           : <Link to="/leads" className="text-xs text-brand-700 font-semibold hover:underline">All my leads →</Link>
@@ -3207,6 +3247,8 @@ export function EmployeeLeads() {
   const [empId, setEmpId] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -3216,22 +3258,31 @@ export function EmployeeLeads() {
       if (list.length > 0) setEmpId((cur) => cur || list[0].id);
     }).catch(() => setError('Failed to load employees'));
   }, []);
-  const [truncated, setTruncated] = useState(false);
+  useEffect(() => {
+    if (!empId) { setSummary(null); return; }
+    let alive = true;
+    api.get('/leads/employee-summary', { params: { employee: empId }, timeout: LEAD_REQUEST_TIMEOUT })
+      .then((r) => { if (alive) setSummary(r.data); })
+      .catch(() => { if (alive) setSummary(null); });
+    return () => { alive = false; };
+  }, [empId]);
   useEffect(() => {
     if (!empId) { setItems([]); setTotal(0); return; }
-    setLoading(true); setError(''); setTruncated(false);
-    // Two-step fetch so summary chips cover ALL assigned customers, not just page 1.
-    api.get('/leads', { params: { employee: empId, page: 1, size: 1 } })
+    let alive = true;
+    setLoading(true); setError('');
+    api.get('/leads', {
+      params: { employee: empId, page, size: LEAD_PAGE_SIZE, light: 1 },
+      timeout: LEAD_REQUEST_TIMEOUT,
+    })
       .then((r) => {
-        const totalCount = r.data.total ?? 0;
-        const full = Math.min(Math.max(totalCount, 1), 500);
-        setTruncated(totalCount > 500);
-        return api.get('/leads', { params: { employee: empId, page: 1, size: full } });
+        if (!alive) return;
+        setItems(r.data.items || []);
+        setTotal(r.data.total ?? 0);
       })
-      .then((r) => { setItems(r.data.items || []); setTotal(r.data.total ?? 0); })
-      .catch(() => setError('Failed to load assigned customers'))
-      .finally(() => setLoading(false));
-  }, [empId]);
+      .catch((e) => { if (alive) setError(apiError(e, 'Failed to load assigned customers')); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [empId, page]);
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
@@ -3241,32 +3292,35 @@ export function EmployeeLeads() {
     const s = nameOf('statuses', l.status_id);
     return s === 'New Lead' && l.primary_employee_id ? 'Assigned' : s;
   };
-  const needsContact = items.filter((l) => !l.first_contact_at).length;
-  const overdue = items.filter((l) => l.sla_state === 'OVERDUE').length;
-  const done = items.filter((l) => !!l.first_contact_at).length;
+  const needsContact = summary?.needs_contact ?? items.filter((l) => !l.first_contact_at).length;
+  const overdue = summary?.overdue ?? items.filter((l) => l.sla_state === 'OVERDUE').length;
+  const done = summary?.responded ?? items.filter((l) => !!l.first_contact_at).length;
   const workActionCounts = workActionOptions.map((label) => ({
     label,
-    value: items.filter((l) => statusOf(l) === label).length,
+    value: summary?.work_actions?.[label] ?? items.filter((l) => statusOf(l) === label).length,
   }));
   const reviewCounts = reviewOptions.map((label) => ({
     label,
-    value: items.filter((l) => {
+    value: summary?.categories?.[label] ?? items.filter((l) => {
       const v = (l.customer_review || '').trim();
       if (label === 'B (6-9 months)') return v === 'B (6-9 months)' || v === 'B (1 year)';
       if (label === 'C (Planning Stage)') return v === 'C (Planning Stage)' || v === 'C (plan stage)' || v === 'Planning Stage';
       return v === label;
     }).length,
   }));
+  const pageCount = Math.max(1, Math.ceil(total / LEAD_PAGE_SIZE));
+  const firstRow = total === 0 ? 0 : (page - 1) * LEAD_PAGE_SIZE + 1;
+  const lastRow = Math.min(page * LEAD_PAGE_SIZE, total);
   return (
     <div>
       <PageHeader title="Employee Leads" subtitle="Select an employee to see all data of their assigned customers." />
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
         <label className="text-xs font-medium text-graphite-600">Employee</label>
-        <select className="input !w-64" value={empId} onChange={(e) => setEmpId(e.target.value)}>
+        <select className="input !w-64" value={empId} onChange={(e) => { setEmpId(e.target.value); setPage(1); }}>
           <option value="">Select employee…</option>
           {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
         </select>
-        {empName && <span className="text-sm text-graphite-500">{total} customer{total === 1 ? '' : 's'} assigned{truncated ? ' (showing first 500)' : ''}</span>}
+        {empName && <span className="text-sm text-graphite-500">{total} customer{total === 1 ? '' : 's'} assigned{total > LEAD_PAGE_SIZE ? ` · page ${page} of ${pageCount}` : ''}</span>}
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
       {!empId ? <EmptyState title="No employee selected" hint="Choose an employee above." /> : loading ? <Spinner /> : items.length === 0 ? (
@@ -3354,6 +3408,16 @@ export function EmployeeLeads() {
                 </tbody>
               </table>
             </div>
+            {total > LEAD_PAGE_SIZE && (
+              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between px-4 py-3 border-t border-graphite-100 text-sm">
+                <span className="text-graphite-600 tabular-nums">Showing {firstRow}–{lastRow} of {total}</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="btn-secondary min-h-[40px]" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</button>
+                  <span className="px-2 text-graphite-600 tabular-nums">Page {page} / {pageCount}</span>
+                  <button type="button" className="btn-secondary min-h-[40px]" disabled={page >= pageCount} onClick={() => setPage((p) => Math.min(pageCount, p + 1))}>Next</button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -5720,6 +5784,7 @@ export function EmployeesPage() {
   const [resetPw, setResetPw] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
   const [employeeLeads, setEmployeeLeads] = useState<any[]>([]);
+  const [employeeLeadsTotal, setEmployeeLeadsTotal] = useState(0);
   const [leadMasters, setLeadMasters] = useState<any>(null);
   const [loadingEmployeeLeads, setLoadingEmployeeLeads] = useState(false);
   const load = () => api.get('/employees').then((r) => setItems(r.data)).catch(() => setError('Failed to load employees'));
@@ -5728,11 +5793,13 @@ export function EmployeesPage() {
     setSelectedEmployee(employee);
     setLoadingEmployeeLeads(true);
     try {
-      const { data } = await api.get('/leads', { params: { employee: employee.id, page: 1, size: 1000 } });
-      setEmployeeLeads(data.items || []);
+      const { items, total } = await fetchAllLeads({ employee: employee.id, light: 1 }, 500);
+      setEmployeeLeads(items);
+      setEmployeeLeadsTotal(total);
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Failed to load employee leads');
+      setError(apiError(err, 'Failed to load employee leads'));
       setEmployeeLeads([]);
+      setEmployeeLeadsTotal(0);
     } finally { setLoadingEmployeeLeads(false); }
   };
   const leadStatusName = (id: string) => leadMasters?.statuses?.find((s: any) => s.id === id)?.name || '—';
@@ -5881,14 +5948,14 @@ export function EmployeesPage() {
         )}
       </Card>
       {selectedEmployee && (
-        <Card title={`${selectedEmployee.name} — Assigned leads (${employeeLeads.length})`} action={
+        <Card title={`${selectedEmployee.name} — Assigned leads (${employeeLeadsTotal})`} action={
           <button type="button" className="btn-secondary !px-3 !py-1 text-xs" onClick={() => setSelectedEmployee(null)}>Close</button>
         }>
           {loadingEmployeeLeads ? <Spinner /> : employeeLeads.length === 0 ? <EmptyState title="No leads assigned" /> : (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
                 {[
-                  { label: 'Total assigned', value: employeeLeads.length },
+                  { label: 'Total assigned', value: employeeLeadsTotal },
                   { label: 'Needs first contact', value: empNeedsContact },
                   { label: 'Overdue', value: empOverdue },
                   { label: 'Responded', value: empContactDone },
