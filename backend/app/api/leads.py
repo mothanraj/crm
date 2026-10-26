@@ -129,6 +129,7 @@ def _serialize(
                 else (l.customer_review or "")
             )
         ),
+        "is_starred": bool(getattr(l, "is_starred", False)),
         "quotation_value": _money_str(l.quotation_value),
         "reminder_date": l.reminder_date.isoformat() if l.reminder_date else None,
         "reminder_done": bool(getattr(l, "reminder_done", False)),
@@ -249,7 +250,7 @@ def _escape_like(s: str) -> str:
 def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
                search: str = "", status: str = "", source: str = "", product: str = "",
                employee: str = "", sla: str = "", unassigned: str = "", customer_review: str = "",
-               city: str = "", sort: str = "", light: str = "", page: int = 1, size: int = 20):
+               city: str = "", starred: str = "", sort: str = "", light: str = "", page: int = 1, size: int = 20):
     light_mode = light in ("1", "true", "yes")
     page = max(1, page)
     size = min(max(1, size), 100)
@@ -283,6 +284,8 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
         q = q.filter(Lead.primary_employee_id.is_(None))
     if customer_review:
         q = q.filter(Lead.customer_review == customer_review)
+    if starred in ("1", "true", "yes"):
+        q = q.filter(Lead.is_starred.is_(True))
     count_key = (u.id, search, status, source, product, employee, sla, unassigned, customer_review, city)
     total = _LEAD_COUNT_CACHE.get(count_key) if light_mode else None
     if total is None:

@@ -57,6 +57,7 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
+    is_starred: Optional[bool] = None
     enquiry_number: Optional[str] = None
     enquiry_date: Optional[date] = None
     customer_name: Optional[str] = None

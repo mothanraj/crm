@@ -104,6 +104,7 @@ class Lead(Base):
     gst_amount: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     lead_value: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
     priority: Mapped[str] = mapped_column(Text, default="")
+    is_starred: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     status_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lead_statuses.id"))
     primary_employee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     technical_employee_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)

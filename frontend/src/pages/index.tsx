@@ -1578,7 +1578,7 @@ function QuotationFormModal({
             unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
             units: line.units != null ? String(line.units) : '1',
           })) : [],
-          table_copies: Math.max(1, Math.min(Number(d.table_copies) || 1, 10)),
+          table_copies: 1,
           quotation_date: (d.quotation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
           quotation_number: d.quotation_number || '',
           revision: d.revision || 'R0',
@@ -1674,7 +1674,7 @@ function QuotationFormModal({
         unit_cost: line.unit_cost != null ? String(line.unit_cost) : '',
         units: line.units != null ? String(line.units) : '1',
       })) : cur.extra_lines,
-      table_copies: Math.max(1, Math.min(Number(data.table_copies) || 1, 10)),
+      table_copies: 1,
       payment_terms: data.payment_terms || cur.payment_terms,
       delivery_period: data.delivery_period || cur.delivery_period,
       post_warranty: data.post_warranty || cur.post_warranty,
@@ -1868,11 +1868,7 @@ function QuotationFormModal({
                 className="mb-6 text-justify leading-relaxed"
               />
 
-              {editing && <div className="flex items-center justify-between gap-2 mb-2 font-sans">
-                <span className="text-xs text-slate-500">Pricing tables: {form.table_copies}</span>
-                <button type="button" className="rounded border border-[#1e3a5f] px-2 py-1 text-xs font-semibold text-[#1e3a5f] hover:bg-slate-100" title="Duplicate this pricing table" onClick={() => { set({ table_copies: Math.min(form.table_copies + 1, 10) }); }}>+ Add table</button>
-              </div>}
-              {Array.from({ length: form.table_copies }, (_, tableIndex) => <div key={`quote-table-${tableIndex}`} className={tableIndex ? 'break-before-page pt-8' : ''}>
+              {Array.from({ length: 1 }, (_, tableIndex) => <div key={`quote-table-${tableIndex}`} className="pt-8">
               {tableIndex > 0 && <div className="mb-2 flex items-center justify-between gap-2 text-xs font-sans font-semibold text-slate-500">
                 <span>Pricing table {tableIndex + 1}</span>
                 {editing && <button type="button" className="rounded border border-red-300 px-2 py-0.5 text-red-600 hover:bg-red-50" title="Remove this table" aria-label={`Remove pricing table ${tableIndex + 1}`} onClick={() => set({ table_copies: Math.max(1, form.table_copies - 1) })}>×</button>}
@@ -2039,7 +2035,7 @@ function QuotationFormModal({
                     <li>One-year Warranty and Maintenance on the installed system.</li>
                   </ol>
                 </div>
-                <div>
+                    <div className="break-before-page pt-6">
                   <div className="font-bold mb-2">Customer Scope:</div>
                   <ol className="list-decimal pl-5 space-y-1">
                     <li>Approval from the Competent Authority. Site Clearance if required.</li>
@@ -2207,6 +2203,7 @@ export function Leads() {
   const [source, setSource] = useState('');
   const [category, setCategory] = useState('');
   const [sla, setSla] = useState('');
+  const [starred, setStarred] = useState('');
   const [sort, setSort] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
   const [conversionToConfirm, setConversionToConfirm] = useState<any>(null);
@@ -2226,7 +2223,7 @@ export function Leads() {
     const t = setTimeout(() => {
       setLoading(true); setError('');
       api.get('/leads', {
-        params: { search, status, source, customer_review: category, sla, page, size, ...(sort ? { sort } : {}) },
+        params: { search, status, source, customer_review: category, sla, starred, page, size, ...(sort ? { sort } : {}) },
         signal: ctrl.signal,
       })
         .then((r) => {
@@ -2242,10 +2239,24 @@ export function Leads() {
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     }, 300);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [search, status, source, category, sla, sort, page]);
+  }, [search, status, source, category, sla, starred, sort, page]);
+  const toggleStar = async (lead: any) => {
+    try { const { data } = await api.put(`/leads/${lead.id}`, { is_starred: !lead.is_starred }); setItems((current) => current.map((item) => item.id === lead.id ? { ...item, ...data } : item)); }
+    catch (e: any) { setError(e?.response?.data?.detail || 'Could not update star'); }
+  };
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
-    masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
+    masters?.[kind]?.find((x: any) => String(x.id) === String(id) || (kind === 'statuses' && x.name === id))?.name ?? '—';
   const actionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent', 'Converted', 'Not Interested'];
+  const statusId = (value?: string) => masters?.statuses?.find((s: any) => s.name === value || String(s.id) === String(value))?.id || value || '';
+  const selectProgress = (lead: any, value: string) => {
+    const selected = value || '';
+    setDrafts((current) => ({ ...current, [lead.id]: { ...draftFor(lead), progress: selected } }));
+    // A quotation form belongs only to the Quotation sent progress. Close any
+    // open form when the employee changes the draft back to another progress.
+    if (selected !== 'Quotation sent') setQuoteFormLead((current: any) => current?.id === lead.id ? null : current);
+    // The main progress editor represents the lead's current working status.
+    if (selected) setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: statusId(selected) } : item));
+  };
   const todayISO = new Date().toISOString().slice(0, 10);
   const reminderOf = (lead: any) => (lead.reminder_date || '').slice(0, 10);
   const draftFor = (lead: any) => drafts[lead.id] || { remarks: lead.employee_remarks || '', review: lead.customer_review || '', progress: lead.employee_remarks ? lead.status_id : '', reminderDate: '', quotationValue: lead.quotation_value ?? '0' };
@@ -2278,9 +2289,8 @@ export function Leads() {
   };
   const statusLabel = (lead: any) => {
     if (role === 'EMPLOYEE') {
-      const draft = draftFor(lead);
-      const editing = canEditWorkFields(lead);
-      if (editing && draft.progress) {
+      const draft = drafts[lead.id];
+      if (draft?.progress) {
         const action = nameOf('statuses', draft.progress);
         if (REPEATABLE_PROGRESS.has(action)) {
           return formatProgressOccurrence(action, countProgressAction(lead.work_history, action) + 1);
@@ -2304,7 +2314,7 @@ export function Leads() {
     if (role !== 'EMPLOYEE') return true;
     const progressName = (statusId?: string | null) => {
       if (!statusId) return '';
-      return String(masters?.statuses?.find((s: any) => s.id === statusId)?.name || '').trim().toLowerCase();
+      return String(nameOf('statuses', statusId) || '').trim().toLowerCase();
     };
     const quoteSent = (statusId?: string | null) => progressName(statusId) === 'quotation sent';
     if (quoteSent(drafts[lead.id]?.progress)) return true;
@@ -2364,7 +2374,7 @@ export function Leads() {
       // Only Done marks COMPLETED. Save / Reopen stay PENDING (restarts 3-day follow-up on backend).
       const nextSla = done ? 'COMPLETED' : 'PENDING';
       const { data } = await api.post(`/leads/${lead.id}/status`, {
-        new_status_id: draft.progress || lead.status_id,
+        new_status_id: statusId(draft.progress) || lead.status_id,
         reason: stampedRemarks,
         method: 'Call',
         customer_review: draft.review,
@@ -2375,7 +2385,7 @@ export function Leads() {
       setItems((current) => current.map((item) => item.id === lead.id
         ? {
           ...item,
-          status_id: draft.progress || item.status_id,
+          status_id: statusId(draft.progress) || item.status_id,
           employee_remarks: stampedRemarks,
           customer_review: draft.review,
           quotation_value: qv || item.quotation_value,
@@ -2399,6 +2409,9 @@ export function Leads() {
       ...current,
       [lead.id]: [...(current[lead.id] || []), { remarks: '', review: '', progress: '', reminderDate: '', quotationValue: '0' }],
     }));
+    // A new follow-up has no saved progress yet, so the lead returns to the
+    // neutral Assigned status until that follow-up is saved.
+    setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: statusId('Assigned') } : item));
   };
   const closeFollowUp = (lead: any) => {
     setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).slice(0, -1) }));
@@ -2459,14 +2472,14 @@ export function Leads() {
       const qv = actionName === 'Quotation sent' ? quotationFromForm(lead) : '';
       const stampedRemarks = withUpdateStamp(form.remarks.trim());
       const { data } = await api.post(`/leads/${lead.id}/status`, {
-        new_status_id: form.progress || lead.status_id,
+        new_status_id: statusId(form.progress) || lead.status_id,
         reason: stampedRemarks,
         method: 'Call',
         customer_review: form.review,
         quotation_value: qv || undefined,
         reminder_date: form.reminderDate || undefined,
       });
-      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: form.progress || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, reminder_date: data.reminder_date ?? item.reminder_date ?? null, reminder_done: data.reminder_done ?? (form.reminderDate ? false : true), sla_state: data.sla_state ?? item.sla_state, work_history: [...((item.work_history || []).map((h: any) => (h.reminder_date && (!form.reminderDate || String(h.reminder_date).slice(0, 10) !== form.reminderDate) ? { ...h, reminder_done: true } : h))), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), reminder_date: form.reminderDate || null, reminder_done: false, at: new Date().toISOString() }] } : item));
+      setItems((current) => current.map((item) => item.id === lead.id ? { ...item, status_id: statusId(form.progress) || item.status_id, employee_remarks: stampedRemarks, customer_review: form.review, quotation_value: qv || item.quotation_value, reminder_date: data.reminder_date ?? item.reminder_date ?? null, reminder_done: data.reminder_done ?? (form.reminderDate ? false : true), sla_state: data.sla_state ?? item.sla_state, work_history: [...((item.work_history || []).map((h: any) => (h.reminder_date && (!form.reminderDate || String(h.reminder_date).slice(0, 10) !== form.reminderDate) ? { ...h, reminder_done: true } : h))), { remarks: stampedRemarks, category: form.review, quotation_value: qv || null, work_action: nameOf('statuses', form.progress || item.status_id), reminder_date: form.reminderDate || null, reminder_done: false, at: new Date().toISOString() }] } : item));
       setFollowupForms((current) => ({ ...current, [lead.id]: (current[lead.id] || []).filter((_, i) => i !== index) }));
     } catch (e: any) { setValidationMessage(e?.response?.data?.detail || 'Could not save follow-up'); }
     finally { setSavingId(null); }
@@ -2496,6 +2509,7 @@ export function Leads() {
           <option value="COMPLETED">Completed</option>
           <option value="NOT_INTERESTED">Not Interested</option>
         </select>
+        <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={starred} onChange={(e) => { setStarred(e.target.value); setPage(1); }}><option value="">All leads</option><option value="1">★ Starred only</option></select>
         <select className="input min-w-0 min-h-[44px] text-base sm:text-sm" value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}>
           <option value="">Sort: Recent</option>
           <option value="lead_value_desc">Lead High</option>
@@ -2715,22 +2729,22 @@ export function Leads() {
                         </div>
                         {editing ? (
                           <select className="input text-base sm:text-sm mt-1 min-h-[44px] w-full" disabled={locked} value={draft.progress}
-                            onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
+                            onChange={(e) => selectProgress(l, e.target.value)}>
                             <option value="">Select progress…</option>
                             {actionOptions.map((option) => {
-                              const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                              return <option key={option} value={match?.id || ''}>{option}</option>;
+                              const match = masters?.statuses?.find((s: any) => String(s.name || '').trim().toLowerCase() === option.trim().toLowerCase());
+                              return <option key={option} value={option}>{option}</option>;
                             })}
                           </select>
                         ) : (<div className="text-sm text-graphite-900 mt-1 break-words">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`m-action-${index}`}><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
                         {!frozen && (followupForms[l.id] || []).map((form, index) => (
                           <div key={`m-follow-${index}`} className="mt-2 space-y-2 rounded-lg border border-graphite-200 p-2">
                             <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.review} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, review: e.target.value } : item) }))}><option value="">Select category…</option>{reviewOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
-                            <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
+                            <select className="input text-base sm:text-sm min-h-[44px] w-full" value={form.progress} onChange={(e) => { const value = e.target.value; setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: value } : item) })); if (!value) setItems((current) => current.map((item) => item.id === l.id ? { ...item, status_id: statusId('Assigned') } : item)); }}>
                               <option value="">Select progress…</option>
                               {actionOptions.map((option) => {
-                                const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                                return <option key={option} value={match?.id || ''}>{option}</option>;
+                                const match = masters?.statuses?.find((s: any) => String(s.name || '').trim().toLowerCase() === option.trim().toLowerCase());
+                                return <option key={option} value={option}>{option}</option>;
                               })}
                             </select>
                             <AutoGrowRemarks
@@ -2857,7 +2871,7 @@ export function Leads() {
                       }
                     }}>
 
-                    <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>{isFrozen(l) ? <span>{l.enquiry_number}</span> : <Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link>}</td>
+                    <td className={`td align-top !px-2 sm:!px-4 sticky left-0 z-10 font-semibold text-brand-700 whitespace-nowrap ${leadRowColour(l, nameOf('statuses', l.status_id))}`}><button type="button" className={`mr-2 text-lg leading-none align-middle ${l.is_starred ? 'text-amber-500' : 'text-graphite-300 hover:text-amber-400'}`} aria-label={l.is_starred ? 'Unstar lead' : 'Star lead'} title={l.is_starred ? 'Remove star' : 'Mark as important'} onClick={() => void toggleStar(l)}>{l.is_starred ? '★' : '☆'}</button>{isFrozen(l) ? <span>{l.enquiry_number}</span> : <Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link>}</td>
                     <td className={`td align-top !px-2 sm:!px-4 sticky left-[144px] sm:left-[160px] z-10 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.15)] ${leadRowColour(l, nameOf('statuses', l.status_id))}`}>
                       <div className="text-base font-semibold text-graphite-900">{l.customer_name || '—'}</div>
                       <div className="text-base text-graphite-700 mt-1.5">{l.company_name || '—'}</div>
@@ -2948,21 +2962,21 @@ export function Leads() {
                     <td className="td align-top">
                       {canEditWorkFields(l) && !isFrozen(l) ? (
                         <select className="input text-xs" disabled={isOutreachLocked(l)} value={draftFor(l).progress}
-                          onChange={(e) => setDrafts((current) => ({ ...current, [l.id]: { ...draftFor(l), progress: e.target.value } }))}>
+                          onChange={(e) => selectProgress(l, e.target.value)}>
                           <option value="">Select progress…</option>
                           {actionOptions.map((option) => {
-                            const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                            return <option key={option} value={match?.id || ''}>{option}</option>;
+                            const match = masters?.statuses?.find((s: any) => String(s.name || '').trim().toLowerCase() === option.trim().toLowerCase());
+                            return <option key={option} value={option}>{option}</option>;
                           })}
                         </select>
                       ) : (<div className="space-y-2 pr-1 text-sm leading-5">{l.work_history?.length ? labeledProgressHistory(l.work_history).map((entry: any, index: number) => <div key={`action-${index}`} className="text-sm"><b>{index + 1}.</b> {entry.displayAction}</div>) : nameOf('statuses', l.status_id)}</div>)}
                       {role === 'EMPLOYEE' && !isFrozen(l) && (followupForms[l.id] || []).map((form, index) => (
                         <div key={`progress-${index}`}>
-                          <select className="input text-xs mt-2" value={form.progress} onChange={(e) => setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: e.target.value } : item) }))}>
+                          <select className="input text-xs mt-2" value={form.progress} onChange={(e) => { const value = e.target.value; setFollowupForms((current) => ({ ...current, [l.id]: current[l.id].map((item, i) => i === index ? { ...item, progress: value } : item) })); if (!value) setItems((current) => current.map((item) => item.id === l.id ? { ...item, status_id: statusId('Assigned') } : item)); }}>
                             <option value="">Select progress…</option>
                             {actionOptions.map((option) => {
-                              const match = masters?.statuses?.find((s: any) => s.name.toLowerCase() === option.toLowerCase());
-                              return <option key={option} value={match?.id || ''}>{option}</option>;
+                              const match = masters?.statuses?.find((s: any) => String(s.name || '').trim().toLowerCase() === option.trim().toLowerCase());
+                              return <option key={option} value={option}>{option}</option>;
                             })}
                           </select>
                         </div>
@@ -3251,6 +3265,7 @@ export function EmployeeLeads() {
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [starred, setStarred] = useState('');
   useEffect(() => {
     api.get('/masters').then((r) => {
       setMasters(r.data);
@@ -3271,7 +3286,7 @@ export function EmployeeLeads() {
     let alive = true;
     setLoading(true); setError('');
     api.get('/leads', {
-      params: { employee: empId, page, size: LEAD_PAGE_SIZE, light: 1 },
+      params: { employee: empId, page, size: LEAD_PAGE_SIZE, light: 1, starred },
       timeout: LEAD_REQUEST_TIMEOUT,
     })
       .then((r) => {
@@ -3282,7 +3297,11 @@ export function EmployeeLeads() {
       .catch((e) => { if (alive) setError(apiError(e, 'Failed to load assigned customers')); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [empId, page]);
+  }, [empId, page, starred]);
+  const toggleStar = async (lead: any) => {
+    try { const { data } = await api.put(`/leads/${lead.id}`, { is_starred: !lead.is_starred }); setItems((current) => current.map((item) => item.id === lead.id ? { ...item, ...data } : item)); }
+    catch (e: any) { setError(e?.response?.data?.detail || 'Could not update star'); }
+  };
   const nameOf = (kind: 'statuses' | 'sources' | 'employees' | 'products', id?: string) =>
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
@@ -3320,6 +3339,7 @@ export function EmployeeLeads() {
           <option value="">Select employee…</option>
           {masters?.employees?.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
         </select>
+        <select className="input !w-48" value={starred} onChange={(e) => setStarred(e.target.value)}><option value="">All leads</option><option value="1">★ Starred only</option></select>
         {empName && <span className="text-sm text-graphite-500">{total} customer{total === 1 ? '' : 's'} assigned{total > LEAD_PAGE_SIZE ? ` · page ${page} of ${pageCount}` : ''}</span>}
       </div>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>}
@@ -3384,7 +3404,7 @@ export function EmployeeLeads() {
                 <tbody>
                   {items.map((l) => (
                     <tr key={l.id} className={leadRowColour(l, nameOf('statuses', l.status_id))}>
-                      <td className="td font-semibold text-brand-700 whitespace-nowrap"><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
+                      <td className="td font-semibold text-brand-700 whitespace-nowrap"><button type="button" className={`mr-2 text-lg ${l.is_starred ? 'text-amber-500' : 'text-graphite-300'}`} aria-label={l.is_starred ? 'Unstar lead' : 'Star lead'} onClick={() => void toggleStar(l)}>{l.is_starred ? '★' : '☆'}</button><Link to={`/leads/${l.id}`}>{l.enquiry_number}</Link></td>
                       <td className="td">
                         <div className="font-medium text-graphite-900">{l.customer_name || '—'}</div>
                         <div className="text-sm text-graphite-700 mt-1.5">{l.company_name || '—'}</div>
@@ -3465,7 +3485,13 @@ export function LeadDetail({ id }: { id: string }) {
     api.get('/masters').then((r) => setMasters(r.data)).catch(() => {});
   }, [id]);
   useEffect(() => {
-    if (l?.status_id) setProgressId((cur) => cur || l.status_id);
+    // Initialise the form from the lead only when a different lead is opened.
+    // Do not re-apply the lead's current status after the employee picks a
+    // different progress option (notably Drawing sent / Drawing received).
+    if (l?.status_id && masters?.statuses) {
+      const currentStatus = masters.statuses.find((s: any) => String(s.id) === String(l.status_id));
+      setProgressId((cur) => cur || currentStatus?.name || String(l.status_id));
+    }
     if (l) {
       setProductId(l.product_id || '');
       setCars(l.quantity_raw || (l.quantity_num != null ? String(l.quantity_num) : ''));
@@ -3482,7 +3508,7 @@ export function LeadDetail({ id }: { id: string }) {
         email: l.email || '',
       });
     }
-  }, [l?.status_id, l?.id, l?.product_id, l?.quantity_raw, l?.quantity_num, l?.updated_at, l?.enquiry_number, l?.enquiry_date, l?.customer_name, l?.company_name, l?.contact_number, l?.city, l?.source_id, l?.email]);
+  }, [masters?.statuses, l?.status_id, l?.id, l?.product_id, l?.quantity_raw, l?.quantity_num, l?.updated_at, l?.enquiry_number, l?.enquiry_date, l?.customer_name, l?.company_name, l?.contact_number, l?.city, l?.source_id, l?.email]);
   if (loadError && !l) {
     return (
       <div className="card p-8 text-center">
@@ -3523,8 +3549,9 @@ export function LeadDetail({ id }: { id: string }) {
     if (!reminderDate) { setErr('Select a reminder date'); return; }
     setBusy(true); setErr(''); setOkMsg('');
     try {
+      const selectedStatus = masters?.statuses?.find((s: any) => s.name === progressId);
       await api.post(`/leads/${id}/status`, {
-        new_status_id: progressId,
+        new_status_id: selectedStatus?.id || progressId,
         reason: remarks.trim(),
         method,
         reminder_date: reminderDate || undefined,
@@ -3898,9 +3925,13 @@ export function LeadDetail({ id }: { id: string }) {
                 )}
                 <div>
                   <label className="text-xs font-medium text-graphite-600">Work progress</label>
-                  <select className="input mt-1" value={progressId} onChange={(e) => setProgressId(e.target.value)}>
+                  <select
+                    className="input mt-1"
+                    value={progressId || ''}
+                    onChange={(e) => setProgressId(String(e.target.value))}
+                  >
                     <option value="">Select progress…</option>
-                    {masters?.statuses?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {masters?.statuses?.map((s: any) => <option key={String(s.id)} value={s.name}>{s.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -6201,3 +6232,4 @@ export function NotificationsPage() {
     </div>
   );
 }
+
