@@ -1547,6 +1547,7 @@ function QuotationFormModal({
   const [editing, setEditing] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [savedOnce, setSavedOnce] = useState(false);
+  const [leadDefaults, setLeadDefaults] = useState<any>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1586,6 +1587,16 @@ function QuotationFormModal({
         setSavedOnce(alreadySaved);
         setEditing(Boolean(startInEdit) || !alreadySaved);
         setDirty(false);
+        setLeadDefaults({
+          product_name: d.lead_product_name || d.product_name || '',
+          units: d.lead_units,
+          unit_cost: d.lead_unit_cost,
+          to_name: d.lead_to_name || '',
+          to_address: d.lead_to_address || '',
+          city: d.lead_city || '',
+          subject: d.lead_subject || '',
+          product_description: d.lead_product_description || '',
+        });
         // Table REF only after Save — opening must not reserve / show count in the list.
         if (alreadySaved) {
           onSaved(lead.id, {
@@ -1751,6 +1762,36 @@ function QuotationFormModal({
     setErr('');
   };
 
+  const useCurrentLeadDetails = async () => {
+    if (!editing) return;
+    setBusy(true); setErr(''); setOk('');
+    try {
+      // Re-read from the server so the button always copies the latest saved
+      // lead, even if the modal was opened a while ago.
+      const { data } = await api.get(`/leads/${lead.id}/quotation-form`);
+      const nextUnits = Number(data.lead_units);
+      if (!(nextUnits > 0)) {
+        setErr('This lead has no number of cars to copy.');
+        return;
+      }
+      setForm((cur) => ({
+        ...cur,
+        to_name: data.lead_to_name || cur.to_name,
+        to_address: data.lead_to_address || cur.to_address,
+        subject: data.lead_subject || cur.subject,
+        product_description: data.lead_product_description || cur.product_description,
+        unit_cost: String(data.lead_unit_cost ?? 0),
+        units: String(nextUnits),
+      }));
+      setDirty(true);
+      setOk('Current lead details loaded — review and Save to create the next revision.');
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Could not load the latest lead details');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
       <div
@@ -1773,6 +1814,17 @@ function QuotationFormModal({
                 Edit
               </button>
             ) : null}
+            {editing ? (
+              <button
+                type="button"
+                className="bg-white/15 hover:bg-white/25 text-white text-xs px-3 py-1.5 rounded"
+                disabled={busy || !leadDefaults}
+                title="Copy product, cars, rate, customer name, address and city from the lead"
+                onClick={() => void useCurrentLeadDetails()}
+              >
+                Use lead details
+              </button>
+            ) : null}
             <button type="button" className="bg-white/15 hover:bg-white/25 text-white text-xs px-3 py-1.5 rounded" disabled={busy} onClick={() => void downloadPdf()}>
               {busy ? 'Working…' : (editing && dirty ? 'Save & PDF' : 'Download PDF')}
             </button>
@@ -1787,7 +1839,7 @@ function QuotationFormModal({
 
         <div className="px-4 py-2 bg-[#1e4a7a] text-[11px] text-white/90 font-sans shrink-0">
           {editing
-            ? 'Edit mode — first Save and PDF stays R0. Edit again, save, and the next PDF is R1.'
+            ? 'Edit mode — use "Use lead details" to copy the latest product, cars, rate, name, address and city. First Save and PDF stays R0; edit and save again for R1.'
             : 'Preview — Download PDF keeps this revision. Click Edit, change, and Save to move R0 to R1.'}
         </div>
 

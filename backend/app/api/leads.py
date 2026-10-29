@@ -1232,6 +1232,17 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
     product_description = (notes.get("product_description") or "").strip() or (
         f"Design, Manufacture, Supply and Erection of {product_name}"
     )
+    # Current lead values, unfrozen by any saved quotation. The form uses these
+    # only when the user explicitly clicks "Use current lead details".
+    lead_units = float(lead.quantity_num) if lead.quantity_num is not None else 0
+    lead_unit_cost = float(lead.price_per_car) if lead.price_per_car is not None else 0
+    lead_to_name = (lead.company_name or lead.customer_name or "").strip()
+    lead_to_address = "\n".join(address_parts)
+    lead_cars_label = (
+        int(lead_units) if lead_units and float(lead_units) == int(float(lead_units)) else (lead_units or "")
+    )
+    lead_subject = f"Offer for {product_name}- {lead_cars_label} Cars"
+    lead_product_description = f"Design, Manufacture, Supply and Erection of {product_name}"
     payment_terms = (notes.get("payment_terms") or "").strip() or DEFAULT_PAYMENT_TERMS
     delivery_period = normalize_delivery_period(notes.get("delivery_period"))
     post_warranty = (notes.get("post_warranty") or "").strip() or DEFAULT_POST_WARRANTY
@@ -1276,6 +1287,15 @@ def _quotation_form_dict(db: Session, lead: Lead, quote: Quotation | None = None
         "product_name": product_name,
         "issued": issued,
         "preview": not issued,
+        # Live lead snapshot for the explicit "Use current lead details" action.
+        "lead_product_name": product_name,
+        "lead_units": lead_units,
+        "lead_unit_cost": int(round(lead_unit_cost)) if lead_unit_cost else 0,
+        "lead_to_name": lead_to_name,
+        "lead_to_address": lead_to_address,
+        "lead_city": lead.city or "",
+        "lead_subject": lead_subject,
+        "lead_product_description": lead_product_description,
     }
 
 
