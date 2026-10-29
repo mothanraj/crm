@@ -3358,7 +3358,7 @@ export function EmployeeLeads() {
     masters?.[kind]?.find((x: any) => x.id === id)?.name ?? '—';
   const empName = masters?.employees?.find((x: any) => x.id === empId)?.name ?? '';
   const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
-  const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Drawing received', 'Drawing sent', 'Quotation sent', 'Converted', 'Not Interested'];
+  const workActionOptions = ['In Followup', 'Meeting', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const statusOf = (l: any) => {
     const s = nameOf('statuses', l.status_id);
     return s === 'New Lead' && l.primary_employee_id ? 'Assigned' : s;
