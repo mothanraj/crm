@@ -333,12 +333,12 @@ def _dashboard_history_payload(
         cur_cat = _normalize_history_category(review) or "Uncategorized"
         category_leads.setdefault(cur_cat, set()).add(lid)
 
-    for lid, lead_value, *_rest in rows_q:
-        if lid in converted_ids:
-            try:
-                converted_lead_value += float(lead_value or 0)
-            except (TypeError, ValueError):
-                pass
+    converted_rows = [
+        (lid, lead_value, quote_val)
+        for lid, lead_value, _cars, _review, _source, _product, _status, _emp, quote_val in rows_q
+        if lid in converted_ids
+    ]
+    converted_lead_value = sum(_converted_amounts(db, converted_rows).values())
 
     def _matrix_rows(buckets: dict, label_key: str, ordered: list[str]) -> tuple[list, dict]:
         extras = sorted(k for k in buckets if k not in ordered and buckets[k].get("total", 0))
@@ -474,14 +474,16 @@ def _kpis(db: Session, u: User | None = None):
         .scalar()
         or 0
     )
-    # Converted box uses each converted lead's latest quotation value (not lead_value).
-    total_converted_lead_value = _as_rupee(
-        db.query(func.coalesce(func.sum(Lead.quotation_value), 0))
+    # Converted value: the quotation value only when a quotation existed before
+    # conversion; a direct conversion keeps the lead value even if a quotation
+    # form is saved on the converted lead later.
+    converted_rows = (
+        db.query(Lead.id, Lead.lead_value, Lead.quotation_value)
         .join(LeadStatus, Lead.status_id == LeadStatus.id)
         .filter(Lead.is_active.is_(True), LeadStatus.name == STATUS_CONVERTED, *emp)
-        .scalar()
-        or 0
+        .all()
     )
+    total_converted_lead_value = sum(_converted_amounts(db, converted_rows).values())
     # Pending box tracks the same population as the Pending tile (status Assigned).
     pending_lead_value = _as_rupee(
         db.query(func.coalesce(func.sum(Lead.lead_value), 0))
@@ -744,7 +746,7 @@ def _employee_period_payload(
             category_leads[cat].add(lead_id)
     total_lead_value = 0
     total_quotation_value = 0
-    converted_quotation_value = 0
+    converted_rows = []
     category_values = {name: 0 for name in CUSTOMER_REVIEW_ORDER}
     if period_lead_ids:
         for lead in db.query(Lead).filter(Lead.id.in_(period_lead_ids)).all():
@@ -754,7 +756,8 @@ def _employee_period_payload(
                 if lead.id in lead_ids:
                     category_values[category] += _as_rupee(lead.lead_value)
             if lead.id in converted_lead_ids:
-                converted_quotation_value += _as_rupee(lead.quotation_value)
+                converted_rows.append((lead.id, lead.lead_value, lead.quotation_value))
+    converted_value = sum(_converted_amounts(db, converted_rows).values())
     return {
         "employee_id": str(subject.id),
         "employee": subject.name or "Employee",
@@ -765,7 +768,8 @@ def _employee_period_payload(
         "category": [{"label": name, "count": len(category_leads[name]), "lead_value": category_values[name]} for name in CUSTOMER_REVIEW_ORDER],
         "total_lead_value": total_lead_value,
         "total_quotation_value": total_quotation_value,
-        "converted_quotation_value": converted_quotation_value,
+        # Kept for API compatibility; now means quotation value or lead value.
+        "converted_quotation_value": converted_value,
     }
 
 
@@ -817,6 +821,78 @@ def _as_rupee(v) -> int:
         return int(round(float(v or 0)))
     except (TypeError, ValueError):
         return 0
+
+
+def _event_time_maps(db: Session, lead_ids: list) -> tuple[dict, dict]:
+    """First conversion and first quotation time per lead.
+
+    Both Work Progress activities and status history are checked so older or
+    imported leads are still covered.
+    """
+    conversion_at: dict = {}
+    quotation_at: dict = {}
+    if not lead_ids:
+        return conversion_at, quotation_at
+
+    def earliest(current, candidate):
+        return candidate if current is None or candidate < current else current
+
+    for lid, activity_type, outcome, at in (
+        db.query(
+            LeadActivity.lead_id,
+            LeadActivity.activity_type,
+            LeadActivity.outcome,
+            LeadActivity.activity_at,
+        )
+        .filter(LeadActivity.lead_id.in_(lead_ids))
+        .all()
+    ):
+        if at is None:
+            continue
+        label = (outcome or "").strip()
+        if activity_type == "Work Progress" and label == STATUS_CONVERTED:
+            conversion_at[lid] = earliest(conversion_at.get(lid), at)
+        if activity_type == "Quotation Form" or (
+            activity_type == "Work Progress" and label == STATUS_QUOTE
+        ):
+            quotation_at[lid] = earliest(quotation_at.get(lid), at)
+
+    for lid, status_name, at in (
+        db.query(LeadStatusHistory.lead_id, LeadStatus.name, LeadStatusHistory.changed_at)
+        .join(LeadStatus, LeadStatusHistory.new_status_id == LeadStatus.id)
+        .filter(LeadStatusHistory.lead_id.in_(lead_ids))
+        .all()
+    ):
+        if at is None:
+            continue
+        if status_name == STATUS_CONVERTED:
+            conversion_at[lid] = earliest(conversion_at.get(lid), at)
+        if status_name == STATUS_QUOTE:
+            quotation_at[lid] = earliest(quotation_at.get(lid), at)
+
+    return conversion_at, quotation_at
+
+
+def _converted_amounts(db: Session, leads: list) -> dict:
+    """Map each lead id to its converted value.
+
+    A quotation counts only when it existed before the lead converted. When no
+    conversion event exists (legacy/imported data), quotation presence is used
+    as the fallback. A quotation of 0 is still a real quotation.
+    """
+    rows = [(lid, lead_value, quotation_value) for lid, lead_value, quotation_value in leads]
+    if not rows:
+        return {}
+    conversion_at, quotation_at = _event_time_maps(db, [row[0] for row in rows])
+    amounts: dict = {}
+    for lid, lead_value, quotation_value in rows:
+        converted_at = conversion_at.get(lid)
+        quoted_at = quotation_at.get(lid)
+        use_quote = quotation_value is not None and (
+            converted_at is None or (quoted_at is not None and quoted_at <= converted_at)
+        )
+        amounts[lid] = _as_rupee(quotation_value if use_quote else lead_value)
+    return amounts
 
 
 def _lead_value_analytics(db: Session, u: User | None = None) -> dict:
