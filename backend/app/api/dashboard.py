@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -1123,6 +1124,183 @@ def reports_lead_value(
     return _lead_value_for_range(db, start, end, resolved, u)
 
 
+def _lead_value_xlsx(
+    payload: dict,
+    start: date | None,
+    end: date | None,
+    resolved: str,
+) -> BytesIO:
+    """Styled Excel mirror of the Lead Value Report page.
+
+    Same blocks in the same order as the webpage — brand header, the four
+    KPI tiles, then Product / Source / Week-or-Day as tables (charts stay on
+    screen). No TOTAL rows and no columns beyond what the page shows; the
+    period heading stays and swaps its table for the page's empty-state note
+    when there are no dated leads.
+    """
+    NAVY, GREEN, LIGHT, ZEBRA, GREY = "1E3A5F", "3F6212", "ECFDF3", "EDF4FA", "64748B"
+    RUPEE = '[>=10000000]"₹"##\\,##\\,##\\,##0;[>=100000]"₹"##\\,##\\,##0;"₹"##,##0'
+    COUNT = "#,##0"
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Lead Value Report"
+    ws.sheet_view.showGridLines = False
+    for col, width in zip("ABCD", (34, 16, 26, 26)):
+        ws.column_dimensions[col].width = width
+
+    navy_bottom = Border(left=thin, right=thin, top=thin, bottom=Side(style="medium", color=NAVY))
+
+    def merge_row(row: int, text: str, *, font: Font, fill: str | None = None, height: float = 18, bordered: bool = True) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for c in range(1, 5):
+            cc = ws.cell(row=row, column=c)
+            if bordered:
+                cc.border = border
+            if fill:
+                cc.fill = PatternFill("solid", fgColor=fill)
+        ws.row_dimensions[row].height = height
+
+    def section_heading(row: int, text: str) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font = Font(name="Calibri", size=12, bold=True, color=NAVY)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row].height = 20
+
+    def note_row(row: int, text: str) -> None:
+        merge_row(row, text, font=Font(name="Calibri", size=10, italic=True, color=GREY), height=16)
+
+    def sheet_table(row: int, col_a: str, rows: list[tuple]) -> int:
+        """Table with headers A · B · C:D merged, matching the page's 3-col tables."""
+        a = ws.cell(row=row, column=1, value=col_a)
+        b = ws.cell(row=row, column=2, value="Leads")
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
+        c = ws.cell(row=row, column=3, value="Lead Value (₹)")
+        for cell in (a, b, c):
+            cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor=GREEN)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for col in range(1, 5):
+            ws.cell(row=row, column=col).border = border
+        ws.row_dimensions[row].height = 18
+        r = row + 1
+        for i, (label, count, value) in enumerate(rows):
+            fill = ZEBRA if i % 2 else "FFFFFF"
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=4)
+            ca = ws.cell(row=r, column=1, value=label)
+            cb = ws.cell(row=r, column=2, value=int(count or 0))
+            cc = ws.cell(row=r, column=3, value=float(value or 0))
+            ca.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cb.alignment = Alignment(horizontal="center", vertical="center")
+            cb.number_format = COUNT
+            cc.alignment = Alignment(horizontal="right", vertical="center", indent=1)
+            cc.number_format = RUPEE
+            for col in range(1, 5):
+                cell = ws.cell(row=r, column=col)
+                cell.border = border
+                cell.fill = PatternFill("solid", fgColor=fill)
+                cell.font = Font(name="Calibri", size=10, color="1F2937")
+            ws.row_dimensions[r].height = 16
+            r += 1
+        return r
+
+    # Brand header — same information as the PDF page header + body heading
+    merge_row(1, "ESTAR ENGINEERS PVT LTD", font=Font(name="Calibri", size=13, bold=True, color=NAVY), height=20, bordered=False)
+    merge_row(2, "LEAD VALUE REPORT", font=Font(name="Calibri", size=20, bold=True, color=GREEN), height=30, bordered=False)
+    rng = f"{start.isoformat() if start else 'All'} → {end.isoformat() if end else 'All'}  ·  Mode: {resolved}"
+    merge_row(3, rng, font=Font(name="Calibri", size=10, italic=True, color=GREY), height=16, bordered=False)
+    merge_row(4, f"Generated: {datetime.now().strftime('%d %b %Y')}", font=Font(name="Calibri", size=9, color=GREY), height=14, bordered=False)
+    for c in range(1, 5):
+        ws.cell(row=4, column=c).border = navy_bottom
+    ws.row_dimensions[5].height = 8
+
+    # KPI strip — green labels over light values, one tile per page tile
+    kpi_headers = ["Total Lead Value", "Total Leads", "Total Cars", "Average Lead Value"]
+    kpi_values = [
+        float(payload.get("total_lead_value") or 0),
+        int(payload.get("total_leads") or 0),
+        int(payload.get("total_cars") or 0),
+        float(payload.get("average_lead_value") or 0),
+    ]
+    for col, (label, value) in enumerate(zip(kpi_headers, kpi_values), start=1):
+        hc = ws.cell(row=6, column=col, value=label)
+        hc.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+        hc.fill = PatternFill("solid", fgColor=GREEN)
+        hc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        hc.border = border
+        vc = ws.cell(row=7, column=col, value=value)
+        vc.font = Font(name="Calibri", size=13, bold=True, color=NAVY)
+        vc.fill = PatternFill("solid", fgColor=LIGHT)
+        vc.alignment = Alignment(horizontal="center", vertical="center")
+        vc.border = border
+        vc.number_format = COUNT if col in (2, 3) else RUPEE
+    ws.row_dimensions[6].height = 26
+    ws.row_dimensions[7].height = 24
+    ws.row_dimensions[8].height = 8
+
+    row = 9
+    # 1. Lead value by product — page plots every canonical product, so the table lists them all
+    section_heading(row, "Lead Value by Product")
+    row += 1
+    product_rows = [(r.get("product"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_product") or []]
+    if product_rows:
+        row = sheet_table(row, "Product", product_rows)
+    else:
+        note_row(row, "No lead value in this range.")
+        row += 1
+    row += 1
+
+    # 2. Lead value by source — chart then the same source table as the page
+    section_heading(row, "Lead Value by Source")
+    row += 1
+    source_rows = [(r.get("source"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_source") or []]
+    if source_rows:
+        row = sheet_table(row, "Source", source_rows)
+    else:
+        note_row(row, "No source lead value in this range.")
+        row += 1
+    row += 1
+
+    # 3. Lead value by week / day — page always shows this heading
+    section_heading(row, "Lead Value by Day" if resolved == "week" else "Lead Value by Week")
+    row += 1
+    period_rows = [(r.get("label") or r.get("period"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_period") or []]
+    if period_rows:
+        row = sheet_table(row, "Period", period_rows)
+    else:
+        note_row(row, "No dated leads in this range.")
+        row += 1
+
+    # Print setup — landscape A4, fit to one page wide, brand footer like the PDF
+    ws.freeze_panes = "A5"
+    ws.print_title_rows = "1:4"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = 9  # A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins.left = 0.4
+    ws.page_margins.right = 0.4
+    ws.page_margins.top = 0.5
+    ws.page_margins.bottom = 0.5
+    ws.page_margins.header = 0.3
+    ws.page_margins.footer = 0.3
+    ws.oddFooter.left.text = "&8&K64748BESTAR Engineers Pvt Ltd"
+    ws.oddFooter.center.text = "&8&K64748BLead Value Report"
+    ws.oddFooter.right.text = "&8&K64748BGenerated &D  ·  Page &P of &N"
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 @router.get("/reports/lead-value/export")
 def reports_lead_value_export(
     db: Session = Depends(get_db),
@@ -1133,31 +1311,15 @@ def reports_lead_value_export(
     from_date: str | None = None,
     to_date: str | None = None,
 ):
+    """Styled Excel mirror of the Lead Value Report page: KPI tiles + the tables shown there."""
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _lead_value_for_range(db, start, end, resolved, u)
-    headers = ["Product", "Sources", "Leads", "Lead Value"]
-    body = [[r["product"], r.get("sources") or "—", r["leads"], r["lead_value"]] for r in payload["by_product"]]
-    body.append(["TOTAL", "", payload["total_leads"], payload["total_lead_value"]])
-    body.append(["", "", "", ""])
-    body.append(["Source", "", "Leads", "Lead Value"])
-    for r in payload.get("by_source") or []:
-        body.append([r["source"], "", r["leads"], r["lead_value"]])
-    body.append([
-        "TOTAL",
-        "",
-        sum(int(r["leads"]) for r in (payload.get("by_source") or [])),
-        sum(int(r["lead_value"]) for r in (payload.get("by_source") or [])),
-    ])
-    body.append(["", "", "", ""])
-    body.append(["Period", "", "Leads", "Lead Value"])
-    for r in payload["by_period"]:
-        body.append([r.get("label") or r.get("period"), "", r["leads"], r["lead_value"]])
-    return _xlsx_download(
-        f"lead-value-{start or 'all'}-to-{end or 'all'}.xlsx",
-        headers,
-        body,
-        title="Lead Value Report",
+    buf = _lead_value_xlsx(payload, start, end, resolved)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="lead-value-report.xlsx"'},
     )
 
 

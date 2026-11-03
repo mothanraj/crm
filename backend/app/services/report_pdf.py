@@ -14,7 +14,15 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    KeepTogether,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 
 LOGO = Path(__file__).resolve().parents[1] / "assets" / "company-logo.jpg"
@@ -84,6 +92,29 @@ def _inr(n) -> str:
     return f"Rs. {s}"
 
 
+def _inr_group(n) -> str:
+    """Whole rupees with Indian digit grouping, like the webpage money cells.
+
+    ``_inr`` keeps the plain 3-digit grouping used by the other reports; the
+    Lead Value Report prints exactly what its page table prints (32,33,50,000).
+    """
+    try:
+        v = int(round(float(n or 0)))
+    except (TypeError, ValueError):
+        return "—"
+    digits = str(abs(v))
+    if len(digits) > 3:
+        head, tail = digits[:-3], digits[-3:]
+        parts: list[str] = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            parts.insert(0, head)
+        digits = ",".join(parts) + "," + tail
+    return ("-" if v < 0 else "") + digits
+
+
 def _centered_table_style(header_color=NAVY) -> TableStyle:
     return TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), header_color),
@@ -98,6 +129,24 @@ def _centered_table_style(header_color=NAVY) -> TableStyle:
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("LINEBELOW", (0, -1), (-1, -1), 0.5, header_color),
+    ])
+
+
+def _data_table_style(header_color=NAVY) -> TableStyle:
+    """Plain zebra table for exports that mirror a webpage table.
+
+    Unlike ``_centered_table_style`` there is no emphasised last row, because
+    these tables deliberately carry no TOTAL row.
+    """
+    return TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#edf4fa")]),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ])
 
 
@@ -600,15 +649,23 @@ def _vertical_bar_chart(
     title: str,
     value_format: str = "%d",
     show_values: bool = True,
+    plot_height: float = 190.0,
+    label_band: float | None = None,
+    keep_zero_labels: bool = False,
 ) -> Drawing | None:
     """Grouped vertical bars mirroring the webpage charts — one colour per
     series, counts on bars, centred legend on top, angled names below.
 
     series: list of (legend name, values per label, hex colour).
-    All-zero rows are dropped from the chart only (tables keep full set).
+    All-zero rows are dropped from the chart only (tables keep full set),
+    unless ``keep_zero_labels`` is set — the Lead Value Report charts keep
+    zero bars so the axis matches the webpage's chart exactly.
     """
     series = [(nm, [float(v or 0) for v in vals], col) for nm, vals, col in series]
-    keep = [i for i in range(len(labels)) if any(vals[i] > 0 for _, vals, _ in series)]
+    if keep_zero_labels:
+        keep = list(range(len(labels)))
+    else:
+        keep = [i for i in range(len(labels)) if any(vals[i] > 0 for _, vals, _ in series)]
     if not keep:
         return None
     labels = [str(labels[i] or "") for i in keep]
@@ -638,8 +695,8 @@ def _vertical_bar_chart(
         leg_rows.append(cur)
     leg_h = len(leg_rows) * 15.0 + 6.0
     left_pad, right_pad, top_pad = 52.0, 16.0, 26.0
-    label_band = 84.0 if n > 4 else 66.0
-    plot_h = 190.0
+    label_band = float(label_band) if label_band is not None else (84.0 if n > 4 else 66.0)
+    plot_h = float(plot_height)
     plot_w = max(240.0, chart_w - left_pad - right_pad)
     drawing_h = top_pad + leg_h + 6.0 + plot_h + label_band + 8.0
     drawing = Drawing(chart_w, drawing_h)
@@ -1131,7 +1188,8 @@ def build_lead_value_pdf(payload: dict) -> bytes:
     heading = ParagraphStyle("heading", fontName="Helvetica-Bold", fontSize=13,
                              textColor=GREEN, spaceAfter=8, keepWithNext=True, alignment=1)
     subhead = ParagraphStyle("subhead", fontName="Helvetica-Bold", fontSize=11,
-                             textColor=NAVY, spaceBefore=12, spaceAfter=8, alignment=1)
+                             textColor=NAVY, spaceBefore=12, spaceAfter=8, alignment=1,
+                             keepWithNext=True)
     header = ParagraphStyle("header", parent=cell, fontName="Helvetica-Bold", textColor=colors.white, alignment=1)
     meta = ParagraphStyle("meta", fontName="Helvetica", fontSize=9, leading=12, alignment=1, textColor=colors.HexColor("#334155"))
 
@@ -1144,10 +1202,10 @@ def build_lead_value_pdf(payload: dict) -> bytes:
     # KPI strip
     kpi_headers = ["Total Lead Value", "Total Leads", "Total Cars", "Average Lead Value"]
     kpi_vals = [
-        _inr(payload.get("total_lead_value")),
+        f"Rs. {_inr_group(payload.get('total_lead_value'))}",
         str(payload.get("total_leads") or 0),
         str(int(float(payload.get("total_cars") or 0))),
-        _inr(payload.get("average_lead_value")),
+        f"Rs. {_inr_group(payload.get('average_lead_value'))}",
     ]
     kpi = Table(
         [[Paragraph(h, header) for h in kpi_headers], [Paragraph(v, cell) for v in kpi_vals]],
@@ -1165,111 +1223,98 @@ def build_lead_value_pdf(payload: dict) -> bytes:
     ]))
     story.append(kpi)
 
-    # By product
-    story.append(Paragraph("Lead Value by Product", subhead))
-    prod_rows = [[Paragraph(h, header) for h in ("Product", "Sources", "Leads", "Lead Value")]]
-    for row in payload.get("by_product") or []:
-        prod_rows.append([
-            Paragraph(escape(str(row.get("product") or "—")), cell),
-            Paragraph(escape(str(row.get("sources") or "—")), cell),
-            Paragraph(str(row.get("leads") or 0), cell),
-            Paragraph(_inr(row.get("lead_value")), cell),
-        ])
-    if len(prod_rows) == 1:
-        prod_rows.append([
-            Paragraph("No data", cell), Paragraph("—", cell),
-            Paragraph("0", cell), Paragraph(_inr(0), cell),
-        ])
-    prod_rows.append([
-        Paragraph("TOTAL", header),
-        Paragraph("", cell),
-        Paragraph(str(payload.get("total_leads") or 0), cell),
-        Paragraph(_inr(payload.get("total_lead_value")), cell),
-    ])
     usable = width - 72
-    prod_table = Table(
-        prod_rows,
-        colWidths=[usable * 0.32, usable * 0.36, usable * 0.14, usable * 0.18],
-        repeatRows=1,
-        hAlign="CENTER",
-    )
-    prod_table.setStyle(_centered_table_style(GREEN))
-    story.append(prod_table)
 
-    # By source
-    story.append(Paragraph("Lead Value by Source", subhead))
-    src_rows = [[Paragraph(h, header) for h in ("Source", "Leads", "Lead Value")]]
+    def chart_block(
+        heading_text: str,
+        empty_text: str,
+        labels_values: list[tuple],
+        colour: str,
+    ) -> None:
+        """One bar chart, exactly the values the webpage plots for that block.
+
+        Heading, caption and chart are kept on one page so a chart never
+        starts on the page after its own title. ``colour`` matches the bar
+        colour of the same chart on the webpage. Zero-value bars are kept so
+        the axis matches the webpage's chart exactly; the empty-state note
+        shows only when every value is zero.
+        """
+        pairs = [(str(label or ""), float(value or 0)) for label, value in labels_values]
+        heading_p = Paragraph(heading_text, subhead)
+        if not any(v > 0 for _, v in pairs):
+            story.append(KeepTogether([heading_p, Paragraph(escape(empty_text), meta)]))
+            return
+        share = _share_caption("Share of total value", pairs)
+        caption = Paragraph(escape(share) if share else "Values in Rs. lakh", meta)
+        chart = _vertical_bar_chart(
+            [label for label, _ in pairs],
+            [("Lead Value (Rs. lakh)", [value / 1e5 for _, value in pairs], colour)],
+            usable,
+            "Lead Value (Rs. lakh)",
+            value_format="%.1f",
+            plot_height=110.0,
+            label_band=72.0,
+            keep_zero_labels=True,
+        )
+        if chart is not None:
+            story.append(KeepTogether([heading_p, caption, Spacer(1, 6), chart]))
+        else:
+            story.append(KeepTogether([heading_p, caption, Paragraph(escape(empty_text), meta)]))
+
+    # 1. Lead value by product — chart only, like the webpage.
+    chart_block(
+        "Lead Value by Product",
+        "No lead value in this range.",
+        [(row.get("product"), row.get("lead_value")) for row in payload.get("by_product") or []],
+        "#3F6212",
+    )
+
+    # 2. Lead value by source — chart then the same table as the webpage.
+    chart_block(
+        "Lead Value by Source",
+        "No source lead value in this range.",
+        [(row.get("source"), row.get("lead_value")) for row in payload.get("by_source") or []],
+        "#0e7490",
+    )
+
+    src_rows = [[Paragraph(h, header) for h in ("Source", "Leads", "Lead Value (Rs.)")]]
     for row in payload.get("by_source") or []:
         src_rows.append([
             Paragraph(escape(str(row.get("source") or "—")), cell),
             Paragraph(str(row.get("leads") or 0), cell),
-            Paragraph(_inr(row.get("lead_value")), cell),
+            Paragraph(_inr_group(row.get("lead_value")), cell),
         ])
     if len(src_rows) == 1:
-        src_rows.append([Paragraph("No data", cell), Paragraph("0", cell), Paragraph(_inr(0), cell)])
-    source_total_leads = sum(int(r.get("leads") or 0) for r in (payload.get("by_source") or []))
-    source_total_value = sum(float(r.get("lead_value") or 0) for r in (payload.get("by_source") or []))
-    src_rows.append([
-        Paragraph("TOTAL", header),
-        Paragraph(str(source_total_leads), cell),
-        Paragraph(_inr(source_total_value), cell),
-    ])
+        src_rows.append([Paragraph("No data", cell), Paragraph("0", cell), Paragraph(_inr_group(0), cell)])
     pw = usable / 3
     src_table = Table(src_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
-    src_table.setStyle(_centered_table_style(GREEN))
+    src_table.setStyle(_data_table_style(GREEN))
     story.append(src_table)
 
-    # By period
-    story.append(Paragraph("Lead Value by Period", subhead))
-    per_rows = [[Paragraph(h, header) for h in ("Period", "Leads", "Lead Value")]]
-    for row in payload.get("by_period") or []:
-        per_rows.append([
-            Paragraph(escape(str(row.get("label") or row.get("period") or "—")), cell),
-            Paragraph(str(row.get("leads") or 0), cell),
-            Paragraph(_inr(row.get("lead_value")), cell),
-        ])
-    if len(per_rows) == 1:
-        per_rows.append([Paragraph("No dated leads", cell), Paragraph("0", cell), Paragraph(_inr(0), cell)])
-    period_total_leads = sum(int(r.get("leads") or 0) for r in (payload.get("by_period") or []))
-    period_total_value = sum(float(r.get("lead_value") or 0) for r in (payload.get("by_period") or []))
-    per_rows.append([
-        Paragraph("TOTAL", header),
-        Paragraph(str(period_total_leads), cell),
-        Paragraph(_inr(period_total_value), cell),
-    ])
-    per_table = Table(per_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
-    per_table.setStyle(_centered_table_style(GREEN))
-    story.append(per_table)
-
-    # Same ₹ bar charts as the webpage (values plotted in lakhs).
-    value_charts = [
-        ("Lead Value by Product — Chart", [(str(r.get("product") or ""), r.get("lead_value")) for r in payload.get("by_product") or []]),
-        ("Lead Value by Source — Chart", [(str(r.get("source") or ""), r.get("lead_value")) for r in payload.get("by_source") or []]),
-        ("Lead Value by Period — Chart", [(str(r.get("label") or r.get("period") or ""), r.get("lead_value")) for r in payload.get("by_period") or []]),
-    ]
-    for chart_heading, raw_pairs in value_charts:
-        pairs = [(lab, float(v or 0)) for lab, v in raw_pairs if float(v or 0) > 0]
-        if not pairs:
-            continue
-        story.append(PageBreak())
-        story.append(Paragraph(chart_heading, heading))
-        share = _share_caption("Share of total value", pairs)
-        if share:
-            story.append(Paragraph(escape(share), meta))
-        else:
-            story.append(Paragraph("Values in ₹ lakh", meta))
-        story.append(Spacer(1, 8))
-        chart = _vertical_bar_chart(
-            [lab for lab, _ in pairs],
-            [("Lead Value (₹ lakh)", [v / 1e5 for _, v in pairs], "#3F6212")],
-            usable,
-            f"{chart_heading} (₹ lakh)",
-            value_format="%.1f",
-        )
-        if chart is not None:
-            story.append(chart)
-        else:
-            story.append(Paragraph("No chart data for this selection.", meta))
+    # 3. Lead value by week / day — the webpage always shows this heading and
+    # swaps the chart/table for an empty state when there are no dated leads.
+    period_rows = payload.get("by_period") or []
+    period_title = "Lead Value by Day" if payload.get("mode") == "week" else "Lead Value by Week"
+    chart_block(
+        period_title,
+        "No dated leads in this range.",
+        [
+            (row.get("label") or row.get("period"), row.get("lead_value"))
+            for row in period_rows
+        ],
+        "#65A30D",
+    )
+    if period_rows:
+        per_rows = [[Paragraph(h, header) for h in ("Period", "Leads", "Lead Value (Rs.)")]]
+        for row in period_rows:
+            per_rows.append([
+                Paragraph(escape(str(row.get("label") or row.get("period") or "—")), cell),
+                Paragraph(str(row.get("leads") or 0), cell),
+                Paragraph(_inr_group(row.get("lead_value")), cell),
+            ])
+        per_table = Table(per_rows, colWidths=[pw * 1.4, pw * 0.6, pw], repeatRows=1, hAlign="CENTER")
+        per_table.setStyle(_data_table_style(GREEN))
+        story.append(per_table)
 
     doc.build(story, onFirstPage=page_header, onLaterPages=page_header)
     return buffer.getvalue()
