@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
@@ -128,6 +128,46 @@ def _is_employee(u: User | None) -> bool:
 def _require_reports(u: User) -> None:
     if not u.role or u.role.name != "ADMIN":
         raise HTTPException(403, "Reports require an admin role")
+
+
+def _parse_uuid(value: str | None, field: str) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, f"Invalid {field} filter")
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+SLA_FILTERS = ("PENDING", "OVERDUE", "COMPLETED", "NOT_INTERESTED")
+
+
+def _detailed_lead_filters(
+    search: str = "",
+    status: str = "",
+    source: str = "",
+    customer_review: str = "",
+    sla: str = "",
+    starred: str = "",
+    sort: str = "",
+) -> dict:
+    """Lead-page filters shared by the Detailed Lead Report table, Excel and PDF."""
+    sla = (sla or "").strip()
+    if sla and sla not in SLA_FILTERS:
+        raise HTTPException(400, "Invalid sla filter")
+    return {
+        "search": (search or "").strip(),
+        "status": _parse_uuid(status, "status"),
+        "source": _parse_uuid(source, "source"),
+        "customer_review": (customer_review or "").strip(),
+        "sla": sla,
+        "starred": (starred or "").strip().lower() in ("1", "true", "yes"),
+        "sort": (sort or "").strip(),
+    }
 
 
 def _emp_clauses(u: User | None):
@@ -1705,6 +1745,7 @@ def report_pdf(
     year: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
     from_month: str | None = None, to_month: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     from app.services.report_pdf import build_report_pdf
@@ -1723,7 +1764,7 @@ def report_pdf(
         filename = "monthly-lead-volume.pdf"
     elif report_type == "detailed":
         start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
-        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
         content = build_report_pdf(payload, "detailed")
         filename = "detailed-lead-report.pdf"
     else:
@@ -2106,13 +2147,51 @@ def _detailed_leads_payload(
     from_month: str | None = None,
     to_month: str | None = None,
     mode: str = "month",
+    lead_filters: dict | None = None,
 ) -> dict:
-    """Row-level lead details (same fields as the Leads page) for a date span."""
+    """Row-level lead details (same fields as the Leads page) for a date span.
+
+    ``lead_filters`` mirrors the Leads page filters (search, status, source,
+    category, lead status, starred, sort) so the table, Excel and PDF agree.
+    """
+    lf = lead_filters or {}
+    search = str(lf.get("search") or "").strip()
+    status_id = lf.get("status")
+    source_id = lf.get("source")
+    customer_review = str(lf.get("customer_review") or "").strip()
+    sla = str(lf.get("sla") or "").strip()
+    starred = bool(lf.get("starred"))
+    sort_key = str(lf.get("sort") or "").strip().lower()
+
     filters = [Lead.is_active.is_(True)]
     if start:
         filters.append(Lead.enquiry_date >= start)
     if end:
         filters.append(Lead.enquiry_date <= end)
+    if search:
+        like = f"%{_escape_like(search)}%"
+        filters.append(or_(
+            Lead.customer_name.ilike(like, escape="\\"),
+            Lead.company_name.ilike(like, escape="\\"),
+            Lead.contact_number.ilike(like, escape="\\"),
+            Lead.enquiry_number.ilike(like, escape="\\"),
+            Lead.email.ilike(like, escape="\\"),
+            Lead.city.ilike(like, escape="\\"),
+        ))
+    if status_id:
+        filters.append(Lead.status_id == status_id)
+    if source_id:
+        filters.append(Lead.source_id == source_id)
+    if customer_review:
+        filters.append(Lead.customer_review == customer_review)
+    if sla == "NOT_INTERESTED":
+        filters.append(Lead.status_id.in_(
+            select(LeadStatus.id).where(LeadStatus.name.in_(STATUS_NOT_INT))
+        ))
+    elif sla:
+        filters.append(Lead.sla_state == sla)
+    if starred:
+        filters.append(Lead.is_starred.is_(True))
     q = (
         db.query(
             Lead,
@@ -2126,8 +2205,13 @@ def _detailed_leads_payload(
         .outerjoin(Product, Lead.product_id == Product.id)
         .outerjoin(User, Lead.primary_employee_id == User.id)
         .filter(*filters)
-        .order_by(Lead.enquiry_date.desc(), Lead.enquiry_number)
     )
+    if sort_key in ("lead_value", "lead_value_asc"):
+        q = q.order_by(Lead.lead_value.asc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
+    elif sort_key in ("lead_value_desc", "-lead_value"):
+        q = q.order_by(Lead.lead_value.desc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
+    else:
+        q = q.order_by(Lead.enquiry_date.desc(), Lead.enquiry_number)
     leads = q.all()
     lead_ids = [lead.id for lead, *_ in leads]
     history_by_lead: dict = defaultdict(list)
@@ -2197,9 +2281,38 @@ def _detailed_leads_payload(
         "to_month": to_month,
         "effective_from": start.isoformat() if start else None,
         "effective_to": end.isoformat() if end else None,
+        "filters": _detailed_filter_labels(db, lf),
         "count": len(rows),
         "rows": rows,
     }
+
+
+def _detailed_filter_labels(db: Session, lf: dict) -> dict:
+    """Human readable summary of the applied lead filters (for UI + PDF)."""
+    labels: dict = {}
+    search = str(lf.get("search") or "").strip()
+    if search:
+        labels["search"] = search
+    status_id = lf.get("status")
+    if status_id:
+        row = db.query(LeadStatus.name).filter(LeadStatus.id == status_id).first()
+        labels["status"] = row[0] if row else str(status_id)
+    source_id = lf.get("source")
+    if source_id:
+        row = db.query(LeadSource.name).filter(LeadSource.id == source_id).first()
+        labels["source"] = row[0] if row else str(source_id)
+    if lf.get("customer_review"):
+        labels["category"] = lf["customer_review"]
+    sla = str(lf.get("sla") or "").strip()
+    if sla:
+        labels["lead_status"] = {"PENDING": "Pending", "COMPLETED": "Completed", "NOT_INTERESTED": "Not Interested"}.get(sla, sla)
+    if lf.get("starred"):
+        labels["starred"] = "Starred only"
+    sort_key = str(lf.get("sort") or "").strip().lower()
+    if sort_key:
+        labels["sort"] = {"lead_value": "Lead value: low to high", "lead_value_asc": "Lead value: low to high",
+                          "lead_value_desc": "Lead value: high to low", "-lead_value": "Lead value: high to low"}.get(sort_key, sort_key)
+    return labels
 
 
 @router.get("/reports/detailed-leads")
@@ -2213,10 +2326,11 @@ def detailed_leads(
     from_month: str | None = None,
     to_month: str | None = None,
     year: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
-    return _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+    return _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
 
 
 @router.get("/reports/detailed-leads/export")
@@ -2230,10 +2344,11 @@ def detailed_leads_export(
     from_month: str | None = None,
     to_month: str | None = None,
     year: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
-    payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+    payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
     headers = [
         "Enquiry No", "Enquiry Date", "Customer", "Company", "City", "Contact", "Email",
         "Cars", "Product", "Source", "Current Status", "Progress", "Category", "Employee",

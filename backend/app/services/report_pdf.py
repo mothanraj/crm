@@ -1317,6 +1317,21 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
         f"  ·  Leads: {payload.get('count', len(payload.get('rows') or []))}"
     )
     story.append(Paragraph(escape(rng), meta))
+    applied = payload.get("filters") or {}
+    if applied:
+        labels = {
+            "search": "Search",
+            "status": "Status",
+            "source": "Source",
+            "category": "Category",
+            "lead_status": "Lead status",
+            "starred": "Starred",
+            "sort": "Sort",
+        }
+        summary = "  ·  ".join(
+            f"{labels.get(key, key)}: {value}" for key, value in applied.items()
+        )
+        story.append(Paragraph(escape(f"Filters: {summary}"), meta))
     story.append(Spacer(1, 8))
 
     headers = [

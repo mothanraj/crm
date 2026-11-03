@@ -2243,10 +2243,14 @@ function countProgressAction(history: any[] | undefined, action: string) {
   return (history || []).filter((h) => (h.work_action || '') === action).length;
 }
 
+/** Shared with the Detailed Lead Report filters so both screens offer the same options. */
+const REVIEW_OPTIONS = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
+const STATUS_FILTERS = ['Assigned', 'In Followup', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
+
 export function Leads() {
   const role = localStorage.getItem('role') || '';
   const tableScroll = useDragScroll<HTMLDivElement>();
-  const reviewOptions = ['A+ (Immediate)', 'A (3-6 months)', 'B (6-9 months)', 'C (Planning Stage)'];
+  const reviewOptions = REVIEW_OPTIONS; // shared list — also used by the Detailed Lead Report filters
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [masters, setMasters] = useState<any>(null);
@@ -2260,7 +2264,6 @@ export function Leads() {
   const [validationMessage, setValidationMessage] = useState('');
   const [conversionToConfirm, setConversionToConfirm] = useState<any>(null);
   const [page, setPage] = useState(1);
-  const STATUS_FILTERS = ['Assigned', 'In Followup', 'Site Visit', 'Quotation sent', 'Converted', 'Not Interested'];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { remarks: string; review: string; progress: string; reminderDate: string; quotationValue?: string }>>({});
@@ -4598,6 +4601,27 @@ type ReportFilter = {
   toDate: string;
 };
 
+/** Same filters the admin Leads page offers — applied to the Detailed Lead Report. */
+type LeadFilters = {
+  search: string;
+  status: string;
+  source: string;
+  customer_review: string;
+  sla: string;
+  starred: string;
+  sort: string;
+};
+
+const LEAD_FILTER_LABELS: Record<string, string> = {
+  search: 'Search',
+  status: 'Status',
+  source: 'Source',
+  category: 'Category',
+  lead_status: 'Lead status',
+  starred: 'Starred',
+  sort: 'Sort',
+};
+
 export function Reports() {
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
@@ -4605,6 +4629,9 @@ export function Reports() {
   const defaultYear = String(today.getFullYear());
   const emptyFilter = (): ReportFilter => ({
     mode: 'custom', month: defaultMonth, week: defaultWeek, year: defaultYear, fromDate: '', toDate: '',
+  });
+  const emptyLeadFilters = (): LeadFilters => ({
+    search: '', status: '', source: '', customer_review: '', sla: '', starred: '', sort: '',
   });
 
   type ReportId = 'dashboard_history' | 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
@@ -4639,6 +4666,14 @@ export function Reports() {
     mode: 'month',
     month: defaultMonth,
   }));
+  const [detailedLeadFilters, setDetailedLeadFilters] = useState<LeadFilters>(emptyLeadFilters);
+  /** Params of the last successful Apply, so Excel/PDF always match the table on screen. */
+  const [appliedDetailedParams, setAppliedDetailedParams] = useState<Record<string, string>>({});
+  const detailedTableScroll = useDragScroll<HTMLDivElement>();
+  const [masters, setMasters] = useState<any>(null);
+  useEffect(() => {
+    api.get('/masters').then((r) => setMasters(r.data)).catch(() => { /* dropdowns stay usable with defaults */ });
+  }, []);
 
   const [leadValueReport, setLeadValueReport] = useState<any>(null);
   const [quotationReport, setQuotationReport] = useState<any>(null);
@@ -4694,6 +4729,24 @@ export function Reports() {
     if (f.toDate) p.to_date = f.toDate;
     return p;
   };
+
+  /** Empty values are dropped so the backend keeps its defaults. */
+  const leadFilterParams = (f: LeadFilters): Record<string, string> => {
+    const p: Record<string, string> = {};
+    if (f.search) p.search = f.search;
+    if (f.status) p.status = f.status;
+    if (f.source) p.source = f.source;
+    if (f.customer_review) p.customer_review = f.customer_review;
+    if (f.sla) p.sla = f.sla;
+    if (f.starred) p.starred = f.starred;
+    if (f.sort) p.sort = f.sort;
+    return p;
+  };
+
+  const detailedParams = (lf: LeadFilters = detailedLeadFilters, f: ReportFilter = detailedFilter): Record<string, string> => ({
+    ...toParams(f),
+    ...leadFilterParams(lf),
+  });
 
   const validate = (f: ReportFilter): string | null => {
     if (f.mode === 'custom' && f.fromDate && f.toDate && f.fromDate > f.toDate) {
@@ -4827,13 +4880,15 @@ export function Reports() {
     } finally { setMonthlyBusy(false); }
   };
 
-  const loadDetailed = async (f: ReportFilter = detailedFilter) => {
+  const loadDetailed = async (f: ReportFilter = detailedFilter, lf: LeadFilters = detailedLeadFilters) => {
     const problem = validate(f);
     if (problem) { setDetailedErr(problem); return; }
     setDetailedBusy(true); setDetailedErr('');
     try {
-      const { data } = await api.get('/reports/detailed-leads', { params: toParams(f) });
+      const params = detailedParams(lf, f);
+      const { data } = await api.get('/reports/detailed-leads', { params });
       setDetailedReport(data);
+      setAppliedDetailedParams(params);
     } catch (e: any) {
       setDetailedErr(apiErr(e, 'Detailed lead report failed'));
     } finally { setDetailedBusy(false); }
@@ -4865,6 +4920,8 @@ export function Reports() {
     kind: 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed' | 'dashboard_history',
     f: ReportFilter | { fromMonth: string; toMonth: string },
     setErr: (s: string) => void,
+    /** Sends exactly these params (date + lead filters of the last Apply) instead of re-deriving them. */
+    overrideParams?: Record<string, string>,
   ) => {
     setPdfBusy(true); setErr('');
     const names = {
@@ -4878,10 +4935,14 @@ export function Reports() {
       dashboard_history: 'dashboard-history-report.pdf',
     };
     try {
-      const params = kind === 'monthly'
-        ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
-        : { ...toParams(f as ReportFilter), report_type: kind };
-      if (kind === 'monthly') {
+      const params = overrideParams
+        ? { ...overrideParams, report_type: kind }
+        : kind === 'monthly'
+          ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
+          : { ...toParams(f as ReportFilter), report_type: kind };
+      if (overrideParams) {
+        // Params come from the last successful Apply — already validated.
+      } else if (kind === 'monthly') {
         const mf = f as { fromMonth: string; toMonth: string };
         if (mf.fromMonth && mf.toMonth && mf.fromMonth > mf.toMonth) {
           setErr('From month must be on or before To month.');
@@ -5737,32 +5798,125 @@ export function Reports() {
           <div className="bg-[#0f172a] text-white px-5 py-3 font-semibold tracking-wide">DETAILED LEAD REPORT</div>
           <div className="p-5 space-y-4">
             {filterBar(
-              detailedFilter, setDetailedFilter, detailedBusy, () => loadDetailed(detailedFilter),
+              detailedFilter, setDetailedFilter, detailedBusy,
+              () => loadDetailed(detailedFilter, detailedLeadFilters),
               () => {
-                const p = toParams(detailedFilter);
-                const name = detailedFilter.mode === 'month'
-                  ? `detailed-leads-${detailedFilter.month}.xlsx`
-                  : detailedFilter.mode === 'week'
-                    ? `detailed-leads-week-${detailedFilter.week}.xlsx`
-                    : `detailed-leads-${detailedFilter.fromDate || 'all'}_to_${detailedFilter.toDate || 'all'}.xlsx`;
+                const p = appliedDetailedParams;
+                const mode = p.mode || detailedFilter.mode;
+                const name = mode === 'month'
+                  ? `detailed-leads-${p.month || detailedFilter.month}.xlsx`
+                  : mode === 'week'
+                    ? `detailed-leads-week-${p.week || detailedFilter.week}.xlsx`
+                    : `detailed-leads-${p.from_date || 'all'}_to_${p.to_date || 'all'}.xlsx`;
                 return dl('/reports/detailed-leads/export', name, p, setDetailedErr);
               },
               !detailedReport,
-              () => void downloadPdf('detailed', detailedFilter, setDetailedErr),
+              () => { if (detailedReport) void downloadPdf('detailed', detailedFilter, setDetailedErr, appliedDetailedParams); },
             )}
+            <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-graphite-500">Lead filters</div>
+                  <div className="text-xs text-graphite-500">Same filters as the Leads page — click Apply to refresh the table and both downloads.</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1 text-xs"
+                  disabled={detailedBusy}
+                  onClick={() => setDetailedLeadFilters(emptyLeadFilters())}
+                >
+                  Clear lead filters
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <input
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  placeholder="🔍 Search name, phone, enquiry, city…"
+                  value={detailedLeadFilters.search}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, search: e.target.value })}
+                />
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.customer_review}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, customer_review: e.target.value })}
+                >
+                  <option value="">Category</option>
+                  {REVIEW_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.status}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, status: e.target.value })}
+                >
+                  <option value="">Status</option>
+                  {STATUS_FILTERS.map((name) => masters?.statuses?.find((s: any) => s.name === name)).filter(Boolean).map((s: any) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.source}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, source: e.target.value })}
+                >
+                  <option value="">Sources</option>
+                  {masters?.sources?.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.sla}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, sla: e.target.value })}
+                >
+                  <option value="">Lead status</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="NOT_INTERESTED">Not Interested</option>
+                </select>
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.starred}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, starred: e.target.value })}
+                >
+                  <option value="">All leads</option>
+                  <option value="1">★ Starred only</option>
+                </select>
+                <select
+                  className="input min-w-0 min-h-[44px] text-base sm:text-sm"
+                  value={detailedLeadFilters.sort}
+                  onChange={(e) => setDetailedLeadFilters({ ...detailedLeadFilters, sort: e.target.value })}
+                >
+                  <option value="">Sort: Recent</option>
+                  <option value="lead_value_desc">Lead High</option>
+                  <option value="lead_value">Lead Low</option>
+                </select>
+              </div>
+            </div>
             {detailedErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{detailedErr}</div>}
             {detailedReport && (
-              <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
-                <span><b>From:</b> {detailedReport.effective_from || detailedReport.from_month || 'All'}</span>
-                <span><b>To:</b> {detailedReport.effective_to || detailedReport.to_month || 'All'}</span>
-                <span><b>Mode:</b> {detailedReport.mode || detailedFilter.mode}</span>
-                <span><b>Leads:</b> {detailedReport.count ?? (detailedReport.rows || []).length}</span>
+              <div className="space-y-2">
+                <div className="text-sm text-graphite-700 flex flex-wrap gap-6">
+                  <span><b>From:</b> {detailedReport.effective_from || detailedReport.from_month || 'All'}</span>
+                  <span><b>To:</b> {detailedReport.effective_to || detailedReport.to_month || 'All'}</span>
+                  <span><b>Mode:</b> {detailedReport.mode || detailedFilter.mode}</span>
+                  <span><b>Leads:</b> {detailedReport.count ?? (detailedReport.rows || []).length}</span>
+                </div>
+                {Object.keys(detailedReport.filters || {}).length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(detailedReport.filters as Record<string, string>).map(([key, value]) => (
+                      <span key={key} className="text-xs rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-graphite-700">
+                        {LEAD_FILTER_LABELS[key] || key}: <b>{value}</b>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {detailedBusy && !detailedReport ? <Spinner /> : !(detailedReport?.rows || []).length ? (
               <EmptyState title="No leads in this range" hint="Pick Weekly, Monthly, or a custom date range and Apply." />
             ) : (
-              <div className="overflow-x-auto">
+              <div
+                ref={detailedTableScroll.ref}
+                className={`overflow-x-auto drag-scroll ${detailedTableScroll.dragging ? 'is-dragging' : ''}`}
+              >
                 <table className="text-sm border-collapse table-auto">
                   <thead>
                     <tr className="bg-[#0f172a] text-white">
