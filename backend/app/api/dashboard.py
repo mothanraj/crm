@@ -7,7 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import and_, case, func
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import current_user
@@ -128,6 +129,46 @@ def _is_employee(u: User | None) -> bool:
 def _require_reports(u: User) -> None:
     if not u.role or u.role.name != "ADMIN":
         raise HTTPException(403, "Reports require an admin role")
+
+
+def _parse_uuid(value: str | None, field: str) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, f"Invalid {field} filter")
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+SLA_FILTERS = ("PENDING", "OVERDUE", "COMPLETED", "NOT_INTERESTED")
+
+
+def _detailed_lead_filters(
+    search: str = "",
+    status: str = "",
+    source: str = "",
+    customer_review: str = "",
+    sla: str = "",
+    starred: str = "",
+    sort: str = "",
+) -> dict:
+    """Lead-page filters shared by the Detailed Lead Report table, Excel and PDF."""
+    sla = (sla or "").strip()
+    if sla and sla not in SLA_FILTERS:
+        raise HTTPException(400, "Invalid sla filter")
+    return {
+        "search": (search or "").strip(),
+        "status": _parse_uuid(status, "status"),
+        "source": _parse_uuid(source, "source"),
+        "customer_review": (customer_review or "").strip(),
+        "sla": sla,
+        "starred": (starred or "").strip().lower() in ("1", "true", "yes"),
+        "sort": (sort or "").strip(),
+    }
 
 
 def _emp_clauses(u: User | None):
@@ -350,12 +391,12 @@ def _dashboard_history_payload(
         cur_cat = _normalize_history_category(review) or "Uncategorized"
         category_leads.setdefault(cur_cat, set()).add(lid)
 
-    for lid, lead_value, *_rest in rows_q:
-        if lid in converted_ids:
-            try:
-                converted_lead_value += float(lead_value or 0)
-            except (TypeError, ValueError):
-                pass
+    converted_rows = [
+        (lid, lead_value, quote_val)
+        for lid, lead_value, _cars, _review, _source, _product, _status, _emp, quote_val in rows_q
+        if lid in converted_ids
+    ]
+    converted_lead_value = sum(_converted_amounts(db, converted_rows).values())
 
     def _matrix_rows(buckets: dict, label_key: str, ordered: list[str]) -> tuple[list, dict]:
         extras = sorted(k for k in buckets if k not in ordered and buckets[k].get("total", 0))
@@ -491,14 +532,16 @@ def _kpis(db: Session, u: User | None = None):
         .scalar()
         or 0
     )
-    # Converted box uses each converted lead's latest quotation value (not lead_value).
-    total_converted_lead_value = _as_rupee(
-        db.query(func.coalesce(func.sum(Lead.quotation_value), 0))
+    # Converted value: the quotation value only when a quotation existed before
+    # conversion; a direct conversion keeps the lead value even if a quotation
+    # form is saved on the converted lead later.
+    converted_rows = (
+        db.query(Lead.id, Lead.lead_value, Lead.quotation_value)
         .join(LeadStatus, Lead.status_id == LeadStatus.id)
         .filter(Lead.is_active.is_(True), LeadStatus.name == STATUS_CONVERTED, *emp)
-        .scalar()
-        or 0
+        .all()
     )
+    total_converted_lead_value = sum(_converted_amounts(db, converted_rows).values())
     # Pending box tracks the same population as the Pending tile (status Assigned).
     pending_lead_value = _as_rupee(
         db.query(func.coalesce(func.sum(Lead.lead_value), 0))
@@ -761,7 +804,7 @@ def _employee_period_payload(
             category_leads[cat].add(lead_id)
     total_lead_value = 0
     total_quotation_value = 0
-    converted_quotation_value = 0
+    converted_rows = []
     category_values = {name: 0 for name in CUSTOMER_REVIEW_ORDER}
     if period_lead_ids:
         for lead in db.query(Lead).filter(Lead.id.in_(period_lead_ids)).all():
@@ -771,7 +814,8 @@ def _employee_period_payload(
                 if lead.id in lead_ids:
                     category_values[category] += _as_rupee(lead.lead_value)
             if lead.id in converted_lead_ids:
-                converted_quotation_value += _as_rupee(lead.quotation_value)
+                converted_rows.append((lead.id, lead.lead_value, lead.quotation_value))
+    converted_value = sum(_converted_amounts(db, converted_rows).values())
     return {
         "employee_id": str(subject.id),
         "employee": subject.name or "Employee",
@@ -782,7 +826,8 @@ def _employee_period_payload(
         "category": [{"label": name, "count": len(category_leads[name]), "lead_value": category_values[name]} for name in CUSTOMER_REVIEW_ORDER],
         "total_lead_value": total_lead_value,
         "total_quotation_value": total_quotation_value,
-        "converted_quotation_value": converted_quotation_value,
+        # Kept for API compatibility; now means quotation value or lead value.
+        "converted_quotation_value": converted_value,
     }
 
 
@@ -834,6 +879,78 @@ def _as_rupee(v) -> int:
         return int(round(float(v or 0)))
     except (TypeError, ValueError):
         return 0
+
+
+def _event_time_maps(db: Session, lead_ids: list) -> tuple[dict, dict]:
+    """First conversion and first quotation time per lead.
+
+    Both Work Progress activities and status history are checked so older or
+    imported leads are still covered.
+    """
+    conversion_at: dict = {}
+    quotation_at: dict = {}
+    if not lead_ids:
+        return conversion_at, quotation_at
+
+    def earliest(current, candidate):
+        return candidate if current is None or candidate < current else current
+
+    for lid, activity_type, outcome, at in (
+        db.query(
+            LeadActivity.lead_id,
+            LeadActivity.activity_type,
+            LeadActivity.outcome,
+            LeadActivity.activity_at,
+        )
+        .filter(LeadActivity.lead_id.in_(lead_ids))
+        .all()
+    ):
+        if at is None:
+            continue
+        label = (outcome or "").strip()
+        if activity_type == "Work Progress" and label == STATUS_CONVERTED:
+            conversion_at[lid] = earliest(conversion_at.get(lid), at)
+        if activity_type == "Quotation Form" or (
+            activity_type == "Work Progress" and label == STATUS_QUOTE
+        ):
+            quotation_at[lid] = earliest(quotation_at.get(lid), at)
+
+    for lid, status_name, at in (
+        db.query(LeadStatusHistory.lead_id, LeadStatus.name, LeadStatusHistory.changed_at)
+        .join(LeadStatus, LeadStatusHistory.new_status_id == LeadStatus.id)
+        .filter(LeadStatusHistory.lead_id.in_(lead_ids))
+        .all()
+    ):
+        if at is None:
+            continue
+        if status_name == STATUS_CONVERTED:
+            conversion_at[lid] = earliest(conversion_at.get(lid), at)
+        if status_name == STATUS_QUOTE:
+            quotation_at[lid] = earliest(quotation_at.get(lid), at)
+
+    return conversion_at, quotation_at
+
+
+def _converted_amounts(db: Session, leads: list) -> dict:
+    """Map each lead id to its converted value.
+
+    A quotation counts only when it existed before the lead converted. When no
+    conversion event exists (legacy/imported data), quotation presence is used
+    as the fallback. A quotation of 0 is still a real quotation.
+    """
+    rows = [(lid, lead_value, quotation_value) for lid, lead_value, quotation_value in leads]
+    if not rows:
+        return {}
+    conversion_at, quotation_at = _event_time_maps(db, [row[0] for row in rows])
+    amounts: dict = {}
+    for lid, lead_value, quotation_value in rows:
+        converted_at = conversion_at.get(lid)
+        quoted_at = quotation_at.get(lid)
+        use_quote = quotation_value is not None and (
+            converted_at is None or (quoted_at is not None and quoted_at <= converted_at)
+        )
+        amounts[lid] = _as_rupee(quotation_value if use_quote else lead_value)
+    return amounts
 
 
 def _lead_value_analytics(db: Session, u: User | None = None) -> dict:
@@ -1024,6 +1141,183 @@ def reports_lead_value(
     return _lead_value_for_range(db, start, end, resolved, u)
 
 
+def _lead_value_xlsx(
+    payload: dict,
+    start: date | None,
+    end: date | None,
+    resolved: str,
+) -> BytesIO:
+    """Styled Excel mirror of the Lead Value Report page.
+
+    Same blocks in the same order as the webpage — brand header, the four
+    KPI tiles, then Product / Source / Week-or-Day as tables (charts stay on
+    screen). No TOTAL rows and no columns beyond what the page shows; the
+    period heading stays and swaps its table for the page's empty-state note
+    when there are no dated leads.
+    """
+    NAVY, GREEN, LIGHT, ZEBRA, GREY = "1E3A5F", "3F6212", "ECFDF3", "EDF4FA", "64748B"
+    RUPEE = '[>=10000000]"₹"##\\,##\\,##\\,##0;[>=100000]"₹"##\\,##\\,##0;"₹"##,##0'
+    COUNT = "#,##0"
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Lead Value Report"
+    ws.sheet_view.showGridLines = False
+    for col, width in zip("ABCD", (34, 16, 26, 26)):
+        ws.column_dimensions[col].width = width
+
+    navy_bottom = Border(left=thin, right=thin, top=thin, bottom=Side(style="medium", color=NAVY))
+
+    def merge_row(row: int, text: str, *, font: Font, fill: str | None = None, height: float = 18, bordered: bool = True) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for c in range(1, 5):
+            cc = ws.cell(row=row, column=c)
+            if bordered:
+                cc.border = border
+            if fill:
+                cc.fill = PatternFill("solid", fgColor=fill)
+        ws.row_dimensions[row].height = height
+
+    def section_heading(row: int, text: str) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font = Font(name="Calibri", size=12, bold=True, color=NAVY)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[row].height = 20
+
+    def note_row(row: int, text: str) -> None:
+        merge_row(row, text, font=Font(name="Calibri", size=10, italic=True, color=GREY), height=16)
+
+    def sheet_table(row: int, col_a: str, rows: list[tuple]) -> int:
+        """Table with headers A · B · C:D merged, matching the page's 3-col tables."""
+        a = ws.cell(row=row, column=1, value=col_a)
+        b = ws.cell(row=row, column=2, value="Leads")
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
+        c = ws.cell(row=row, column=3, value="Lead Value (₹)")
+        for cell in (a, b, c):
+            cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor=GREEN)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for col in range(1, 5):
+            ws.cell(row=row, column=col).border = border
+        ws.row_dimensions[row].height = 18
+        r = row + 1
+        for i, (label, count, value) in enumerate(rows):
+            fill = ZEBRA if i % 2 else "FFFFFF"
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=4)
+            ca = ws.cell(row=r, column=1, value=label)
+            cb = ws.cell(row=r, column=2, value=int(count or 0))
+            cc = ws.cell(row=r, column=3, value=float(value or 0))
+            ca.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cb.alignment = Alignment(horizontal="center", vertical="center")
+            cb.number_format = COUNT
+            cc.alignment = Alignment(horizontal="right", vertical="center", indent=1)
+            cc.number_format = RUPEE
+            for col in range(1, 5):
+                cell = ws.cell(row=r, column=col)
+                cell.border = border
+                cell.fill = PatternFill("solid", fgColor=fill)
+                cell.font = Font(name="Calibri", size=10, color="1F2937")
+            ws.row_dimensions[r].height = 16
+            r += 1
+        return r
+
+    # Brand header — same information as the PDF page header + body heading
+    merge_row(1, "ESTAR ENGINEERS PVT LTD", font=Font(name="Calibri", size=13, bold=True, color=NAVY), height=20, bordered=False)
+    merge_row(2, "LEAD VALUE REPORT", font=Font(name="Calibri", size=20, bold=True, color=GREEN), height=30, bordered=False)
+    rng = f"{start.isoformat() if start else 'All'} → {end.isoformat() if end else 'All'}  ·  Mode: {resolved}"
+    merge_row(3, rng, font=Font(name="Calibri", size=10, italic=True, color=GREY), height=16, bordered=False)
+    merge_row(4, f"Generated: {datetime.now().strftime('%d %b %Y')}", font=Font(name="Calibri", size=9, color=GREY), height=14, bordered=False)
+    for c in range(1, 5):
+        ws.cell(row=4, column=c).border = navy_bottom
+    ws.row_dimensions[5].height = 8
+
+    # KPI strip — green labels over light values, one tile per page tile
+    kpi_headers = ["Total Lead Value", "Total Leads", "Total Cars", "Average Lead Value"]
+    kpi_values = [
+        float(payload.get("total_lead_value") or 0),
+        int(payload.get("total_leads") or 0),
+        int(payload.get("total_cars") or 0),
+        float(payload.get("average_lead_value") or 0),
+    ]
+    for col, (label, value) in enumerate(zip(kpi_headers, kpi_values), start=1):
+        hc = ws.cell(row=6, column=col, value=label)
+        hc.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+        hc.fill = PatternFill("solid", fgColor=GREEN)
+        hc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        hc.border = border
+        vc = ws.cell(row=7, column=col, value=value)
+        vc.font = Font(name="Calibri", size=13, bold=True, color=NAVY)
+        vc.fill = PatternFill("solid", fgColor=LIGHT)
+        vc.alignment = Alignment(horizontal="center", vertical="center")
+        vc.border = border
+        vc.number_format = COUNT if col in (2, 3) else RUPEE
+    ws.row_dimensions[6].height = 26
+    ws.row_dimensions[7].height = 24
+    ws.row_dimensions[8].height = 8
+
+    row = 9
+    # 1. Lead value by product — page plots every canonical product, so the table lists them all
+    section_heading(row, "Lead Value by Product")
+    row += 1
+    product_rows = [(r.get("product"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_product") or []]
+    if product_rows:
+        row = sheet_table(row, "Product", product_rows)
+    else:
+        note_row(row, "No lead value in this range.")
+        row += 1
+    row += 1
+
+    # 2. Lead value by source — chart then the same source table as the page
+    section_heading(row, "Lead Value by Source")
+    row += 1
+    source_rows = [(r.get("source"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_source") or []]
+    if source_rows:
+        row = sheet_table(row, "Source", source_rows)
+    else:
+        note_row(row, "No source lead value in this range.")
+        row += 1
+    row += 1
+
+    # 3. Lead value by week / day — page always shows this heading
+    section_heading(row, "Lead Value by Day" if resolved == "week" else "Lead Value by Week")
+    row += 1
+    period_rows = [(r.get("label") or r.get("period"), r.get("leads"), r.get("lead_value")) for r in payload.get("by_period") or []]
+    if period_rows:
+        row = sheet_table(row, "Period", period_rows)
+    else:
+        note_row(row, "No dated leads in this range.")
+        row += 1
+
+    # Print setup — landscape A4, fit to one page wide, brand footer like the PDF
+    ws.freeze_panes = "A5"
+    ws.print_title_rows = "1:4"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = 9  # A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins.left = 0.4
+    ws.page_margins.right = 0.4
+    ws.page_margins.top = 0.5
+    ws.page_margins.bottom = 0.5
+    ws.page_margins.header = 0.3
+    ws.page_margins.footer = 0.3
+    ws.oddFooter.left.text = "&8&K64748BESTAR Engineers Pvt Ltd"
+    ws.oddFooter.center.text = "&8&K64748BLead Value Report"
+    ws.oddFooter.right.text = "&8&K64748BGenerated &D  ·  Page &P of &N"
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 @router.get("/reports/lead-value/export")
 def reports_lead_value_export(
     db: Session = Depends(get_db),
@@ -1034,31 +1328,15 @@ def reports_lead_value_export(
     from_date: str | None = None,
     to_date: str | None = None,
 ):
+    """Styled Excel mirror of the Lead Value Report page: KPI tiles + the tables shown there."""
     _require_reports(u)
     start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
     payload = _lead_value_for_range(db, start, end, resolved, u)
-    headers = ["Product", "Sources", "Leads", "Lead Value"]
-    body = [[r["product"], r.get("sources") or "—", r["leads"], r["lead_value"]] for r in payload["by_product"]]
-    body.append(["TOTAL", "", payload["total_leads"], payload["total_lead_value"]])
-    body.append(["", "", "", ""])
-    body.append(["Source", "", "Leads", "Lead Value"])
-    for r in payload.get("by_source") or []:
-        body.append([r["source"], "", r["leads"], r["lead_value"]])
-    body.append([
-        "TOTAL",
-        "",
-        sum(int(r["leads"]) for r in (payload.get("by_source") or [])),
-        sum(int(r["lead_value"]) for r in (payload.get("by_source") or [])),
-    ])
-    body.append(["", "", "", ""])
-    body.append(["Period", "", "Leads", "Lead Value"])
-    for r in payload["by_period"]:
-        body.append([r.get("label") or r.get("period"), "", r["leads"], r["lead_value"]])
-    return _xlsx_download(
-        f"lead-value-{start or 'all'}-to-{end or 'all'}.xlsx",
-        headers,
-        body,
-        title="Lead Value Report",
+    buf = _lead_value_xlsx(payload, start, end, resolved)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="lead-value-report.xlsx"'},
     )
 
 
@@ -1652,6 +1930,7 @@ def report_pdf(
     year: str | None = None,
     from_date: str | None = None, to_date: str | None = None,
     from_month: str | None = None, to_month: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     from app.services.report_pdf import build_report_pdf
@@ -1670,7 +1949,7 @@ def report_pdf(
         filename = "monthly-lead-volume.pdf"
     elif report_type == "detailed":
         start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
-        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
         content = build_report_pdf(payload, "detailed")
         filename = "detailed-lead-report.pdf"
     else:
@@ -2053,13 +2332,51 @@ def _detailed_leads_payload(
     from_month: str | None = None,
     to_month: str | None = None,
     mode: str = "month",
+    lead_filters: dict | None = None,
 ) -> dict:
-    """Row-level lead details (same fields as the Leads page) for a date span."""
+    """Row-level lead details (same fields as the Leads page) for a date span.
+
+    ``lead_filters`` mirrors the Leads page filters (search, status, source,
+    category, lead status, starred, sort) so the table, Excel and PDF agree.
+    """
+    lf = lead_filters or {}
+    search = str(lf.get("search") or "").strip()
+    status_id = lf.get("status")
+    source_id = lf.get("source")
+    customer_review = str(lf.get("customer_review") or "").strip()
+    sla = str(lf.get("sla") or "").strip()
+    starred = bool(lf.get("starred"))
+    sort_key = str(lf.get("sort") or "").strip().lower()
+
     filters = [Lead.is_active.is_(True)]
     if start:
         filters.append(Lead.enquiry_date >= start)
     if end:
         filters.append(Lead.enquiry_date <= end)
+    if search:
+        like = f"%{_escape_like(search)}%"
+        filters.append(or_(
+            Lead.customer_name.ilike(like, escape="\\"),
+            Lead.company_name.ilike(like, escape="\\"),
+            Lead.contact_number.ilike(like, escape="\\"),
+            Lead.enquiry_number.ilike(like, escape="\\"),
+            Lead.email.ilike(like, escape="\\"),
+            Lead.city.ilike(like, escape="\\"),
+        ))
+    if status_id:
+        filters.append(Lead.status_id == status_id)
+    if source_id:
+        filters.append(Lead.source_id == source_id)
+    if customer_review:
+        filters.append(Lead.customer_review == customer_review)
+    if sla == "NOT_INTERESTED":
+        filters.append(Lead.status_id.in_(
+            select(LeadStatus.id).where(LeadStatus.name.in_(STATUS_NOT_INT))
+        ))
+    elif sla:
+        filters.append(Lead.sla_state == sla)
+    if starred:
+        filters.append(Lead.is_starred.is_(True))
     q = (
         db.query(
             Lead,
@@ -2073,8 +2390,13 @@ def _detailed_leads_payload(
         .outerjoin(Product, Lead.product_id == Product.id)
         .outerjoin(User, Lead.primary_employee_id == User.id)
         .filter(*filters)
-        .order_by(Lead.enquiry_date.desc(), Lead.enquiry_number)
     )
+    if sort_key in ("lead_value", "lead_value_asc"):
+        q = q.order_by(Lead.lead_value.asc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
+    elif sort_key in ("lead_value_desc", "-lead_value"):
+        q = q.order_by(Lead.lead_value.desc().nullslast(), Lead.updated_at.desc(), Lead.id.desc())
+    else:
+        q = q.order_by(Lead.enquiry_date.desc(), Lead.enquiry_number)
     leads = q.all()
     lead_ids = [lead.id for lead, *_ in leads]
     history_by_lead: dict = defaultdict(list)
@@ -2144,9 +2466,38 @@ def _detailed_leads_payload(
         "to_month": to_month,
         "effective_from": start.isoformat() if start else None,
         "effective_to": end.isoformat() if end else None,
+        "filters": _detailed_filter_labels(db, lf),
         "count": len(rows),
         "rows": rows,
     }
+
+
+def _detailed_filter_labels(db: Session, lf: dict) -> dict:
+    """Human readable summary of the applied lead filters (for UI + PDF)."""
+    labels: dict = {}
+    search = str(lf.get("search") or "").strip()
+    if search:
+        labels["search"] = search
+    status_id = lf.get("status")
+    if status_id:
+        row = db.query(LeadStatus.name).filter(LeadStatus.id == status_id).first()
+        labels["status"] = row[0] if row else str(status_id)
+    source_id = lf.get("source")
+    if source_id:
+        row = db.query(LeadSource.name).filter(LeadSource.id == source_id).first()
+        labels["source"] = row[0] if row else str(source_id)
+    if lf.get("customer_review"):
+        labels["category"] = lf["customer_review"]
+    sla = str(lf.get("sla") or "").strip()
+    if sla:
+        labels["lead_status"] = {"PENDING": "Pending", "COMPLETED": "Completed", "NOT_INTERESTED": "Not Interested"}.get(sla, sla)
+    if lf.get("starred"):
+        labels["starred"] = "Starred only"
+    sort_key = str(lf.get("sort") or "").strip().lower()
+    if sort_key:
+        labels["sort"] = {"lead_value": "Lead value: low to high", "lead_value_asc": "Lead value: low to high",
+                          "lead_value_desc": "Lead value: high to low", "-lead_value": "Lead value: high to low"}.get(sort_key, sort_key)
+    return labels
 
 
 @router.get("/reports/detailed-leads")
@@ -2160,10 +2511,11 @@ def detailed_leads(
     from_month: str | None = None,
     to_month: str | None = None,
     year: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
-    return _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+    return _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
 
 
 @router.get("/reports/detailed-leads/export")
@@ -2177,10 +2529,11 @@ def detailed_leads_export(
     from_month: str | None = None,
     to_month: str | None = None,
     year: str | None = None,
+    lead_filters: dict = Depends(_detailed_lead_filters),
 ):
     _require_reports(u)
     start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month, year)
-    payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved)
+    payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
     headers = [
         "Enquiry No", "Enquiry Date", "Customer", "Company", "City", "Contact", "Email",
         "Cars", "Product", "Source", "Current Status", "Progress", "Category", "Employee",
