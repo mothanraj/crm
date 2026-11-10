@@ -3097,7 +3097,7 @@ export function Leads() {
                     <td className="td align-top text-right whitespace-nowrap tabular-nums font-semibold text-graphite-900">{moneyCell(l.lead_value)}</td>
                       {role === 'EMPLOYEE' && (
                       <td className="td align-top text-center">
-                        {isQuotationUnlocked(l) && !isFrozen(l) ? (
+                        {(isQuotationUnlocked(l) || Boolean(l.quotation_form?.quotation_number)) && !isFrozen(l) ? (
                           <>
                             <div className="flex flex-col items-center gap-1">
                               <button
@@ -3156,7 +3156,7 @@ export function Leads() {
                     )}
                     <td className="td align-top text-right whitespace-nowrap">
                       {(() => {
-                        if (!isQuotationUnlocked(l)) return <span className="text-graphite-400">—</span>;
+                        if (!isQuotationUnlocked(l) && !l.quotation_form?.quotation_number) return <span className="text-graphite-400">—</span>;
                         const history = (l.quotation_value_history || []).filter((h: any) => h?.quotation_value != null && h.quotation_value !== '');
                         const rows = history.length
                           ? history

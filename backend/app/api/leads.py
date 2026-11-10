@@ -363,21 +363,37 @@ def list_leads(db: Session = Depends(get_db), u: User = Depends(current_user),
             bucket[rev] = entry
         for lid in lead_ids:
             quote_value_hist_by_lead[lid] = [rev_latest[lid][r] for r in rev_order[lid] if r in rev_latest[lid]]
-        for qrow in db.query(Quotation).filter(Quotation.lead_id.in_(lead_ids)).all():
-            prev = quote_by_lead.get(qrow.lead_id)
-            if not prev or (qrow.revision or "") >= (prev.revision or ""):
-                quote_by_lead[qrow.lead_id] = qrow
         reassignment_by_lead = _serialize_reassignments(db, lead_ids)
+    # Employee Leads uses light mode, but quotation references are still
+    # needed to show saved quotations (for example Q3 and Q9) in the list.
+    if lead_ids:
+        for qrow in (
+            db.query(Quotation)
+            .filter(Quotation.lead_id.in_(lead_ids))
+            .order_by(Quotation.quotation_date.desc().nullslast(), Quotation.revision.desc())
+            .all()
+        ):
+            if qrow.lead_id not in quote_by_lead:
+                quote_by_lead[qrow.lead_id] = qrow
     items = []
     for r in rows:
         if light_mode:
+            qrow = quote_by_lead.get(r.id)
+            qform = None
+            if qrow is not None and _quotation_is_issued(qrow):
+                qform = {
+                    "quotation_number": qrow.quotation_number,
+                    "revision": qrow.revision,
+                    "amount_excl": _money_str(qrow.amount_excl),
+                    "grand_total": _money_str(qrow.grand_total),
+                }
             items.append(_serialize(
                 r, db,
                 product_name=products.get(r.product_id, ""),
                 source_name=sources.get(r.source_id, ""),
                 work_history=[],
                 reassignment_request=None,
-            ))
+            ) | {"quotation_form": qform})
             continue
         qform = None
         qrow = quote_by_lead.get(r.id)

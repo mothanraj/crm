@@ -248,6 +248,23 @@ def _dashboard_history_payload(
     lead_ids = [r[0] for r in rows_q]
     events = _history_events_by_lead(db, lead_ids)
 
+    # Quotation Sent in this report follows the quotation report's source of
+    # truth: saved quotation forms.  Use the quotation date, not the lead
+    # enquiry date or employee work-progress events.
+    quote_history_q = (
+        db.query(func.count(func.distinct(Quotation.lead_id)))
+        .join(Lead, Lead.id == Quotation.lead_id)
+        .filter(
+            Lead.is_active.is_(True),
+            Quotation.quotation_date.isnot(None),
+        )
+    )
+    if start:
+        quote_history_q = quote_history_q.filter(Quotation.quotation_date >= start)
+    if end:
+        quote_history_q = quote_history_q.filter(Quotation.quotation_date <= end)
+    quote_history_count = int(quote_history_q.scalar() or 0)
+
     progress_tiles = {
         "in_followup": 0,
         "meeting": 0,
@@ -390,7 +407,7 @@ def _dashboard_history_payload(
             "in_followup": int(progress_tiles["in_followup"]),
             "meeting": int(progress_tiles["meeting"]),
             "site_visit": int(progress_tiles["site_visit"]),
-            "quote_sent": int(progress_tiles["quote_sent"]),
+            "quote_sent": quote_history_count,
             "converted": len(converted_ids),
             "not_interested": int(progress_tiles["not_interested"]),
             "total_cars": int(round(total_cars)),
@@ -1053,25 +1070,22 @@ def _as_rupee_int(v) -> int:
 
 
 def _quotation_report_payload(db: Session, start: date | None, end: date | None, mode: str) -> dict:
-    """Quotation report: only leads whose progress is Quotation sent, ordered by REF series (Q1…Qn)."""
+    """Historical quotation report based on saved/issued quotation records."""
     from app.services.pricing import GST_RATE
     from app.services.quotation_form import parse_quote_seq
 
     rows: list[dict] = []
-    # One row per Quotation-sent lead (latest quotation form values when present).
+    # Load active leads with their latest saved quotation.  Current lead status
+    # is intentionally not used: a quotation remains historical data even if
+    # the lead later becomes Converted or moves to another status.
     lead_q = (
         db.query(Lead, Product, LeadStatus)
         .outerjoin(Product, Lead.product_id == Product.id)
         .join(LeadStatus, Lead.status_id == LeadStatus.id)
         .filter(
             Lead.is_active.is_(True),
-            LeadStatus.name == STATUS_QUOTE,
         )
     )
-    if start:
-        lead_q = lead_q.filter(Lead.enquiry_date >= start)
-    if end:
-        lead_q = lead_q.filter(Lead.enquiry_date <= end)
     leads = lead_q.all()
 
     lead_ids = [lead.id for lead, _p, _s in leads]
@@ -1133,6 +1147,13 @@ def _quotation_report_payload(db: Session, start: date | None, end: date | None,
         # Count only after quotation form was saved (has REF) — open/preview alone does not count.
         if not ref:
             continue
+        # Reports are based on when the quotation was issued, not when the lead
+        # was created/enquired.  This keeps a 2026 quotation out of a 2025
+        # report even when its lead was created in 2025.
+        if start and (dt is None or dt < start):
+            continue
+        if end and (dt is None or dt > end):
+            continue
         rows.append({
             "ref": ref,
             "date": dt.isoformat() if dt else None,
@@ -1181,9 +1202,10 @@ def reports_quotations(
     week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    year: str | None = None,
 ):
     _require_reports(u)
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
     return _quotation_report_payload(db, start, end, resolved)
 
 
@@ -1196,9 +1218,10 @@ def reports_quotations_export(
     week: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    year: str | None = None,
 ):
     _require_reports(u)
-    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week)
+    start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
     payload = _quotation_report_payload(db, start, end, resolved)
     headers = [
         "S.No", "REF", "Date", "Enquiry No", "Customer Name", "State", "Parking Type",
