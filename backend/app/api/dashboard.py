@@ -1958,7 +1958,7 @@ def build_report_payload(db: Session, u: User, report_type: str, params: dict) -
     }[report_type](db, start, end, resolved)
 
 
-@router.get("/reports/pdf")
+@router.get("/reports/pdf", status_code=202)
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
     report_type: str = Query(..., pattern="^(" + "|".join(REPORT_TYPES) + ")$"),
