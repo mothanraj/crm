@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Lead, LeadAssignment, LeadSource, LeadStatus, Notification, Product, User
 from app.services.lead_service import SLA_STOP_STATUSES, is_direct_call_name
-from app.services import email_service
+from app.services import email_service, export_jobs
 
 log = logging.getLogger(__name__)
 
@@ -471,6 +471,13 @@ def start():
                           replace_existing=True)
         scheduler.add_job(_overdue_digest, "interval", hours=1, id="digest",
                           replace_existing=True)
+        scheduler.add_job(
+            export_jobs.process_pending, "interval",
+            seconds=max(1, int(settings.EXPORT_POLL_SECONDS)),
+            id="export_jobs", replace_existing=True,
+            max_instances=1, coalesce=True,
+            next_run_time=datetime.now(timezone.utc),
+        )
         scheduler.start()
 
 

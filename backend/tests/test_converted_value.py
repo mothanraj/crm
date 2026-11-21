@@ -80,15 +80,12 @@ def test_missing_values_are_zero():
 def test_dashboard_history_mixes_quote_and_direct_conversions():
     db = Mock()
     rows = [
-        ("quoted", 250_000, 1, None, "Google Ads", "Puzzle Parking System", "Converted", None, 310_000),
-        ("direct", 180_000, 1, None, None, None, "Converted", None, None),
+        ("quoted", "Converted", None, 250_000, 1, 310_000, "Google Ads", "Puzzle Parking System", "Converted"),
+        ("direct", "Converted", None, 180_000, 1, None, None, None, "Converted"),
     ]
-    db.query.return_value.outerjoin.return_value.outerjoin.return_value.outerjoin.return_value.filter.return_value.all.return_value = rows
+    db.query.return_value.join.return_value.outerjoin.return_value.outerjoin.return_value.outerjoin.return_value.filter.return_value.all.return_value = rows
 
-    with patch("app.api.dashboard._history_events_by_lead", return_value={}), patch(
-        "app.api.dashboard._converted_amounts",
-        return_value={"quoted": 310_000, "direct": 180_000},
-    ):
+    with patch("app.api.dashboard._converted_amounts", return_value={"quoted": 310_000, "direct": 180_000}):
         payload = _dashboard_history_payload(db, None, None, "custom")
 
     assert payload["tiles"]["converted"] == 2

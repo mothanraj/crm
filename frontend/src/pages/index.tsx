@@ -16,6 +16,8 @@ const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44'
 
 const LEAD_PAGE_SIZE = 100;
 const LEAD_REQUEST_TIMEOUT = 60000;
+/** Above this many rows the PDF is generated as a background job. Keep in sync with backend EXPORT_SYNC_MAX_ROWS. */
+const EXPORT_SYNC_MAX_ROWS = 5000;
 
 function apiError(e: any, fallback: string) {
   const detail = e?.response?.data?.detail;
@@ -344,7 +346,7 @@ function carCountError(raw: string, productName: string) {
 }
 
 async function downloadReport(path: string, filename: string, params?: Record<string, string>) {
-  const res = await api.get(path, { responseType: 'blob', params });
+  const res = await api.get(path, { responseType: 'blob', params, timeout: 120000 });
   const ctype = String(res.headers?.['content-type'] ?? '');
   if (ctype.includes('application/json')) {
     const text = await (res.data as Blob).text();
@@ -4636,7 +4638,7 @@ export function Reports() {
 
   type ReportId = 'dashboard_history' | 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'employee' | 'monthly' | 'detailed';
   const REPORT_MENU: Array<{ id: ReportId; title: string; description: string; accent: string }> = [
-    { id: 'dashboard_history', title: 'Dashboard History Report', description: 'Dashboard tiles + source/product/category tables & charts with full progress and category history counts.', accent: 'bg-[#0f766e]' },
+    { id: 'dashboard_history', title: 'Dashboard History Report', description: 'Dashboard tiles + source/product/category tables & charts with activity counts for the selected period.', accent: 'bg-[#0f766e]' },
     { id: 'source', title: 'Lead Source Report', description: 'Leads by source with progress history (follow-up, meeting, site visit, quotation, converted) and chart.', accent: 'bg-[#1e3a5f]' },
     { id: 'product', title: 'Product Wise Report', description: 'Leads by product with progress history counts including converted.', accent: 'bg-[#0f766e]' },
     { id: 'category', title: 'Category Wise Report', description: 'A+ (Immediate), A (3-6 months), B (6-9 months), C (Planning Stage) funnel table plus chart.', accent: 'bg-[#0e7490]' },
@@ -4707,6 +4709,9 @@ export function Reports() {
   const [empErr, setEmpErr] = useState('');
   const [monthlyErr, setMonthlyErr] = useState('');
   const [detailedErr, setDetailedErr] = useState('');
+  /** Background PDF export (large reports): job id + last polled status. */
+  const [exportJobId, setExportJobId] = useState('');
+  const [exportStatus, setExportStatus] = useState<{ status: string; progress: number; error: string; filename: string } | null>(null);
 
   const apiErr = (e: any, fallback: string) => {
     const d = e?.response?.data?.detail;
@@ -4716,6 +4721,7 @@ export function Reports() {
     }
     if (e?.response?.status === 401) return 'Session expired — please log in again';
     if (e?.response?.status === 403) return 'Reports require an admin role';
+    if (e?.code === 'ECONNABORTED') return `${fallback} — request timed out; try a narrower date range`;
     if (e?.message === 'Network Error') return 'Cannot reach the server. Is the backend running?';
     return fallback;
   };
@@ -4969,6 +4975,54 @@ export function Reports() {
     } finally { setPdfBusy(false); }
   };
 
+  /** Queue a large PDF export; progress is polled and auto-downloaded when ready. */
+  const startExport = async (params: Record<string, string>, setErr: (s: string) => void) => {
+    setErr(''); setExportStatus(null); setPdfBusy(true);
+    try {
+      const { data } = await api.post('/reports/exports', { report_type: 'detailed', params });
+      setExportJobId(data.job.id);
+      setExportStatus(data.job);
+    } catch (e: any) {
+      setErr(apiErr(e, 'Could not queue the PDF export'));
+    } finally { setPdfBusy(false); }
+  };
+
+  useEffect(() => {
+    if (!exportJobId) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const { data } = await api.get(`/reports/exports/${exportJobId}`);
+        if (cancelled) return;
+        setExportStatus(data);
+        if (data.status === 'ready') {
+          setExportJobId('');
+          try {
+            await downloadReport(`/reports/exports/${exportJobId}/download`, data.filename || 'detailed-lead-report.pdf');
+            setDetailedErr('');
+          } catch (e: any) {
+            setDetailedErr(apiErr(e, 'Could not download the PDF'));
+          }
+          return;
+        }
+        if (data.status === 'failed') {
+          setExportJobId('');
+          setDetailedErr(data.error || 'PDF export failed');
+          return;
+        }
+      } catch (e: any) {
+        if (cancelled) return;
+        setExportJobId('');
+        setDetailedErr(apiErr(e, 'Could not check the PDF export'));
+        return;
+      }
+      timer = window.setTimeout(poll, 2000);
+    };
+    void poll();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [exportJobId]);
+
   const filterYearOptions = useMemo(() => {
     const current = new Date().getFullYear();
     const years: string[] = [];
@@ -5178,7 +5232,7 @@ export function Reports() {
                 {dashHistBusy && !dashHistory ? <Spinner /> : (
                   <>
                     <p className="text-xs text-graphite-500">
-                      Progress tiles count every history event (each follow-up, site visit, etc.). Pending / Converted are lead counts.
+                      Progress tiles count every work-progress activity in the period. Pending / Converted are lead counts.
                       {dashHistory?.effective_from || dashHistory?.effective_to
                         ? ` Period: ${dashHistory?.effective_from || 'All'} → ${dashHistory?.effective_to || 'All'}.`
                         : ''}
@@ -5811,7 +5865,12 @@ export function Reports() {
                 return dl('/reports/detailed-leads/export', name, p, setDetailedErr);
               },
               !detailedReport,
-              () => { if (detailedReport) void downloadPdf('detailed', detailedFilter, setDetailedErr, appliedDetailedParams); },
+              () => {
+                if (!detailedReport) return;
+                const count = Number(detailedReport.count ?? (detailedReport.rows || []).length ?? 0);
+                if (count > EXPORT_SYNC_MAX_ROWS) void startExport(appliedDetailedParams, setDetailedErr);
+                else void downloadPdf('detailed', detailedFilter, setDetailedErr, appliedDetailedParams);
+              },
             )}
             <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -5891,6 +5950,12 @@ export function Reports() {
               </div>
             </div>
             {detailedErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{detailedErr}</div>}
+            {exportStatus && (exportStatus.status === 'queued' || exportStatus.status === 'processing') && (
+              <div className="text-sm text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
+                Generating PDF for {detailedReport?.count ?? '—'} leads — {exportStatus.progress ?? 0}%.
+                This runs in the background; the file downloads automatically when ready.
+              </div>
+            )}
             {detailedReport && (
               <div className="space-y-2">
                 <div className="text-sm text-graphite-700 flex flex-wrap gap-6">

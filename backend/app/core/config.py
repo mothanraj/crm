@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     ASSIGNMENT_EMAIL_GRACE_SECONDS: int = 120
     SLA_SWEEP_MINUTES: int = 5
     OVERDUE_DIGEST_HOUR: int = 9
+    # Reports: synchronous PDF generation limit; larger exports are queued as
+    # background jobs (app.services.export_jobs) and downloaded when ready.
+    EXPORT_SYNC_MAX_ROWS: int = 5000
+    EXPORT_JOB_TTL_HOURS: int = 24
+    EXPORT_POLL_SECONDS: int = 5
 
 
 settings = Settings()

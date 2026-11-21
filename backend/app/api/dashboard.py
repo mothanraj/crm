@@ -11,6 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.deps import current_user
 from app.db.session import get_db
 from app.models import DailyRemark, DailyTileOverride, Lead, LeadActivity, LeadAssignment, LeadSource, LeadStatus, LeadStatusHistory, Notification, Product, Quotation, SiteVisit, User
@@ -226,196 +227,137 @@ def _normalize_history_category(raw: str | None) -> str | None:
     return None
 
 
-def _history_events_by_lead(db: Session, lead_ids: list) -> dict:
-    """Every progress / category touch for each lead (duplicates kept).
-
-    Prefer Work Progress activities (each save counts). When a lead has none,
-    fall back to status-history rows so older leads still show history.
-    """
-    by_lead: dict = defaultdict(list)
-    if not lead_ids:
-        return by_lead
-    for lid, outcome, review in (
-        db.query(LeadActivity.lead_id, LeadActivity.outcome, LeadActivity.customer_review)
-        .filter(
-            LeadActivity.lead_id.in_(lead_ids),
-            LeadActivity.activity_type == "Work Progress",
-        )
-        .order_by(LeadActivity.activity_at.asc())
-        .all()
-    ):
-        key = _norm_progress_bucket(outcome)
-        cat = _normalize_history_category(review)
-        if key or cat:
-            by_lead[lid].append({"progress": key, "category": cat})
-    missing = [lid for lid in lead_ids if lid not in by_lead]
-    if missing:
-        NewStatus = LeadStatus  # noqa: N806
-        for lid, st_name in (
-            db.query(LeadStatusHistory.lead_id, NewStatus.name)
-            .join(NewStatus, LeadStatusHistory.new_status_id == NewStatus.id)
-            .filter(LeadStatusHistory.lead_id.in_(missing))
-            .order_by(LeadStatusHistory.changed_at.asc())
-            .all()
-        ):
-            key = _norm_progress_bucket(st_name)
-            if key:
-                by_lead[lid].append({"progress": key, "category": None})
-    return by_lead
-
-
 def _dashboard_history_payload(
     db: Session, start: date | None, end: date | None, mode: str,
 ) -> dict:
-    """Dashboard-style report using full progress/category history for leads in range."""
-    rows_q = (
+    """Dashboard-style report counting every work-progress activity in the period.
+
+    The month/year selects the period. Progress tiles count each Work Progress
+    activity in that period across all leads (a lead's multiple activities each
+    count, like the employee Daily Report). Total Leads counts distinct leads
+    that had activity in the period; Pending / Converted are lead counts.
+    """
+    activity_day = func.date(func.timezone("Asia/Kolkata", LeadActivity.activity_at))
+    act_filters = [
+        Lead.is_active.is_(True),
+        LeadActivity.activity_type == "Work Progress",
+    ]
+    if start:
+        act_filters.append(activity_day >= start)
+    if end:
+        act_filters.append(activity_day <= end)
+
+    act_rows = (
         db.query(
-            Lead.id,
+            LeadActivity.lead_id,
+            LeadActivity.outcome,
+            LeadActivity.customer_review,
             Lead.lead_value,
             Lead.quantity_num,
-            Lead.customer_review,
+            Lead.quotation_value,
             LeadSource.name,
             Product.name,
             LeadStatus.name,
-            Lead.primary_employee_id,
-            Lead.quotation_value,
         )
+        .join(Lead, Lead.id == LeadActivity.lead_id)
         .outerjoin(LeadSource, Lead.source_id == LeadSource.id)
         .outerjoin(Product, Lead.product_id == Product.id)
         .outerjoin(LeadStatus, Lead.status_id == LeadStatus.id)
-        .filter(_date_filter(start, end))
+        .filter(*act_filters)
         .all()
     )
-    lead_ids = [r[0] for r in rows_q]
-    events = _history_events_by_lead(db, lead_ids)
 
-    progress_tiles = {
-        "in_followup": 0,
-        "meeting": 0,
-        "site_visit": 0,
-        "quote_sent": 0,
-        "converted": 0,
-        "not_interested": 0,
-    }
-    total_lead_value = 0.0
-    total_quotation_value = 0.0
-    total_cars = 0.0
-    assigned_count = 0
-    converted_ids: set = set()
-    converted_lead_value = 0.0
-
-    by_source: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_SOURCES}
-    by_product: dict[str, dict] = {name: _empty_progress_counts() for name in CANONICAL_PRODUCTS}
-    by_category: dict[str, dict] = {name: _empty_progress_counts() for name in CUSTOMER_REVIEW_ORDER}
-    category_leads: dict[str, set] = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+    progress_keys = ("in_followup", "meeting", "site_visit", "quote_sent", "converted", "not_interested")
+    progress_tiles = {k: 0 for k in progress_keys}
+    lead_ids: set = set()
     lead_values: dict = {}
+    lead_cars: dict = {}
+    lead_quotes: dict = {}
+    current_status: dict = {}
+    converted_ids: set = set()
+    category_leads: dict[str, set] = {name: set() for name in CUSTOMER_REVIEW_ORDER}
+    category_progress: dict[str, dict] = {name: {k: 0 for k in progress_keys} for name in CUSTOMER_REVIEW_ORDER}
+    src_leads: dict[str, set] = {name: set() for name in CANONICAL_SOURCES}
+    prod_leads: dict[str, set] = {name: set() for name in CANONICAL_PRODUCTS}
+    src_progress: dict[str, dict] = {}
+    prod_progress: dict[str, dict] = {}
 
-    for lid, lead_value, cars, review, src_name, prod_name, st_name, emp_id, quote_val in rows_q:
-        # Keep one value per lead so category history cannot multiply a lead's
-        # value when the same lead has multiple category history entries.
-        try:
+    for lid, outcome, review, lead_value, cars, quote_val, src_name, prod_name, st_name in act_rows:
+        key = _norm_progress_bucket(outcome)
+        cat = _normalize_history_category(review)
+        lead_ids.add(lid)
+        current_status[lid] = st_name
+        if lid not in lead_values:
             lead_values[lid] = _as_rupee(lead_value)
-        except (TypeError, ValueError):
-            lead_values[lid] = 0
+            lead_cars[lid] = cars or 0
+            lead_quotes[lid] = quote_val
+        if key:
+            progress_tiles[key] += 1
+            if cat:
+                category_progress[cat][key] += 1
+            if key == "converted":
+                converted_ids.add(lid)
         src = canonical_source(src_name)
         prod = prod_name or "Unmapped"
-        src_bucket = by_source.setdefault(src, _empty_progress_counts())
-        prod_bucket = by_product.setdefault(prod, _empty_progress_counts())
-        src_bucket["total"] += 1
-        prod_bucket["total"] += 1
+        src_leads.setdefault(src, set()).add(lid)
+        prod_leads.setdefault(prod, set()).add(lid)
+        if key:
+            src_progress.setdefault(src, {k: 0 for k in progress_keys})[key] += 1
+            prod_progress.setdefault(prod, {k: 0 for k in progress_keys})[key] += 1
+        if cat:
+            category_leads[cat].add(lid)
 
-        if emp_id is not None or st_name == STATUS_ASSIGNED:
-            assigned_count += 1
-
-        try:
-            total_lead_value += float(lead_value or 0)
-            lead_value_int = _as_rupee(lead_value)
-        except (TypeError, ValueError):
-            lead_value_int = 0
-        src_bucket["lead_value"] = src_bucket.get("lead_value", 0) + lead_value_int
-        prod_bucket["lead_value"] = prod_bucket.get("lead_value", 0) + lead_value_int
-        try:
-            total_quotation_value += float(quote_val or 0)
-        except (TypeError, ValueError):
-            pass
-        try:
-            total_cars += float(cars or 0)
-        except (TypeError, ValueError):
-            pass
-
-        lead_events = list(events.get(lid) or [])
-        if not lead_events:
-            # No history yet — count current status / category once so new leads still appear.
-            lead_events = [{
-                "progress": _norm_progress_bucket(st_name),
-                "category": _normalize_history_category(review),
-            }]
-
-        for ev in lead_events:
-            key = ev.get("progress")
-            cat = ev.get("category")
-            if key:
-                progress_tiles[key] = progress_tiles.get(key, 0) + 1
-                src_bucket[key] = src_bucket.get(key, 0) + 1
-                prod_bucket[key] = prod_bucket.get(key, 0) + 1
-                if key == "converted":
-                    converted_ids.add(lid)
-            if cat:
-                cat_bucket = by_category.setdefault(cat, _empty_progress_counts())
-                if key:
-                    cat_bucket[key] = cat_bucket.get(key, 0) + 1
-
-        # Current Converted status also counts as a converted lead for KPI value.
-        if st_name == STATUS_CONVERTED:
+    pending_ids = {lid for lid, st in current_status.items() if st == STATUS_ASSIGNED}
+    for lid, st in current_status.items():
+        if st == STATUS_CONVERTED:
             converted_ids.add(lid)
 
-        # Each lead counts once, under its current category (blank/unknown
-        # reviews collect under "Uncategorized" so totals reconcile).
-        cur_cat = _normalize_history_category(review) or "Uncategorized"
-        category_leads.setdefault(cur_cat, set()).add(lid)
-
-    converted_rows = [
-        (lid, lead_value, quote_val)
-        for lid, lead_value, _cars, _review, _source, _product, _status, _emp, quote_val in rows_q
-        if lid in converted_ids
-    ]
+    total_lead_value = sum(lead_values.values())
+    total_quotation_value = sum(float(v or 0) for v in lead_quotes.values())
+    total_cars = sum(lead_cars.values())
+    converted_rows = [(lid, lead_values.get(lid), lead_quotes.get(lid)) for lid in converted_ids]
     converted_lead_value = sum(_converted_amounts(db, converted_rows).values())
 
-    def _matrix_rows(buckets: dict, label_key: str, ordered: list[str]) -> tuple[list, dict]:
-        extras = sorted(k for k in buckets if k not in ordered and buckets[k].get("total", 0))
-        labels = list(ordered) + extras
+    def _rows_and_totals(ordered, label_key, lead_sets, progress_maps, value_fn):
         rows = []
         totals = {**_empty_progress_counts(), "lead_value": 0}
-        for label in labels:
-            data = buckets.get(label) or _empty_progress_counts()
-            row = {label_key: label, **{k: int(data.get(k, 0)) for k in _empty_progress_counts()}, "lead_value": _as_rupee(data.get("lead_value", 0))}
+        names = list(ordered) + sorted(k for k in lead_sets if k not in ordered)
+        for name in names:
+            leads = lead_sets.get(name, set())
+            prog = progress_maps.get(name, {})
+            row = {
+                label_key: name,
+                **{k: int(prog.get(k, 0) or 0) for k in progress_keys},
+                "total": len(leads),
+                "lead_value": value_fn(leads),
+            }
             rows.append(row)
             for k in totals:
                 totals[k] += row[k]
         return rows, totals
 
-    source_rows, source_totals = _matrix_rows(by_source, "source", list(CANONICAL_SOURCES))
-    product_rows, product_totals = _matrix_rows(by_product, "product", list(CANONICAL_PRODUCTS))
+    source_rows, source_totals = _rows_and_totals(
+        CANONICAL_SOURCES, "source", src_leads, src_progress,
+        lambda leads: sum(lead_values.get(lid, 0) for lid in leads),
+    )
+    product_rows, product_totals = _rows_and_totals(
+        CANONICAL_PRODUCTS, "product", prod_leads, prod_progress,
+        lambda leads: sum(lead_values.get(lid, 0) for lid in leads),
+    )
 
+    cat_names = list(CUSTOMER_REVIEW_ORDER)
+    if category_leads.get("Uncategorized"):
+        cat_names.append("Uncategorized")
+    cat_names += sorted(k for k in category_leads if k not in cat_names)
     cat_rows = []
     cat_totals = {**_empty_progress_counts(), "lead_value": 0}
-    ordered_cats = list(CUSTOMER_REVIEW_ORDER)
-    if category_leads.get("Uncategorized"):
-        ordered_cats.append("Uncategorized")
-    for cat in ordered_cats:
-        data = by_category.get(cat) or _empty_progress_counts()
+    for cat in cat_names:
+        leads = category_leads.get(cat, set())
         row = {
             "category": cat,
-            "total": len(category_leads.get(cat) or ()),
-            "in_followup": int(data.get("in_followup", 0)),
-            "meeting": int(data.get("meeting", 0)),
-            "site_visit": int(data.get("site_visit", 0)),
-            "quote_sent": int(data.get("quote_sent", 0)),
-            "converted": int(data.get("converted", 0)),
-            "not_interested": int(data.get("not_interested", 0)),
-            # Use the exact same distinct lead set as `total`. A lead with
-            # multiple A+ history entries contributes one count and one value.
-            "lead_value": sum(lead_values.get(lid, 0) for lid in (category_leads.get(cat) or ())),
+            "total": len(leads),
+            **{k: int(category_progress[cat].get(k, 0) or 0) for k in progress_keys},
+            "lead_value": sum(lead_values.get(lid, 0) for lid in leads),
         }
         cat_rows.append(row)
         for k in cat_totals:
@@ -426,14 +368,14 @@ def _dashboard_history_payload(
         "effective_from": start.isoformat() if start else None,
         "effective_to": end.isoformat() if end else None,
         "tiles": {
-            "total_leads": len(rows_q),
-            "pending": assigned_count,
-            "in_followup": int(progress_tiles["in_followup"]),
-            "meeting": int(progress_tiles["meeting"]),
-            "site_visit": int(progress_tiles["site_visit"]),
-            "quote_sent": int(progress_tiles["quote_sent"]),
+            "total_leads": len(lead_ids),
+            "pending": len(pending_ids),
+            "in_followup": progress_tiles["in_followup"],
+            "meeting": progress_tiles["meeting"],
+            "site_visit": progress_tiles["site_visit"],
+            "quote_sent": progress_tiles["quote_sent"],
             "converted": len(converted_ids),
-            "not_interested": int(progress_tiles["not_interested"]),
+            "not_interested": progress_tiles["not_interested"],
             "total_cars": int(round(total_cars)),
             "total_lead_value": round(total_lead_value),
             "total_quotation_value": round(total_quotation_value),
@@ -1927,6 +1869,12 @@ def report_pdf(
     elif report_type == "detailed":
         start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
         payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
+        if payload.get("count", 0) > settings.EXPORT_SYNC_MAX_ROWS:
+            raise HTTPException(
+                413,
+                f"This report has {payload['count']} leads — too many for an instant PDF. "
+                "Use the queued PDF export (it downloads when ready) or narrow the date range.",
+            )
         content = build_report_pdf(payload, "detailed")
         filename = "detailed-lead-report.pdf"
     else:

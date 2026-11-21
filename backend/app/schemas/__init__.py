@@ -6,6 +6,12 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 
+class ExportRequest(BaseModel):
+    """Request a background PDF export for a report (currently: detailed)."""
+    report_type: str = Field(default="detailed", pattern="^detailed$")
+    params: dict[str, str] = Field(default_factory=dict)
+
+
 class LoginIn(BaseModel):
     email: str
     password: str
