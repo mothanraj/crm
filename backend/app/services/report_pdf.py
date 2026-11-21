@@ -82,6 +82,34 @@ def _brand_logo() -> ImageReader:
         return ImageReader(str(LOGO))
 
 
+def _pdf_text(value) -> str:
+    """Make arbitrary CRM text safe for ReportLab's built-in Helvetica font.
+
+    Helvetica is WinAnsi-encoded: glyphs outside Latin-1 (emoji, CJK, symbols)
+    either render as black boxes or break the paragraph parser. Replace them
+    with '?' and cap pathological cell lengths so a single row can never be
+    taller than a page (ReportLab raises LayoutError for that).
+    """
+    raw = str(value if value not in (None, "") else "—")
+    if len(raw) > 4000:
+        raw = raw[:4000] + "... (truncated)"
+    out = []
+    for ch in raw:
+        code = ord(ch)
+        if ch in "\n\t" or 32 <= code <= 126:
+            out.append(ch)
+        elif code >= 127:
+            # WinAnsi == cp1252: keeps accents and dashes, drops emoji/CJK/etc.
+            try:
+                ch.encode("cp1252")
+                out.append(ch)
+            except UnicodeEncodeError:
+                out.append("?")
+        else:
+            out.append("?")
+    return "".join(out)
+
+
 def _inr(n) -> str:
     try:
         v = int(round(float(n or 0)))
@@ -1338,8 +1366,10 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
     logo_iw, logo_ih = logo.getSize()
     page_header = _page_header_fn(logo, logo_iw, logo_ih, title, generated, width, height, doc)
 
-    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=6, leading=7.5, alignment=1)
-    cell_left = ParagraphStyle("cell_left", fontName="Helvetica", fontSize=6, leading=7.5, alignment=0)
+    cell = ParagraphStyle("cell", fontName="Helvetica", fontSize=6, leading=7.5, alignment=1,
+                          splitLongWords=1, wordWrap=None)
+    cell_left = ParagraphStyle("cell_left", fontName="Helvetica", fontSize=6, leading=7.5, alignment=0,
+                               splitLongWords=1, wordWrap=None)
     heading = ParagraphStyle(
         "heading", fontName="Helvetica-Bold", fontSize=13,
         textColor=SLATE, spaceAfter=8, keepWithNext=True, alignment=1,
@@ -1351,7 +1381,7 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
     )
 
     def lines(text) -> str:
-        raw = str(text if text not in (None, "") else "—")
+        raw = _pdf_text(text)
         return "<br/>".join(escape(part) for part in raw.split("\n"))
 
     story = []
@@ -1386,20 +1416,20 @@ def build_detailed_leads_pdf(payload: dict) -> bytes:
     rows = [[Paragraph(h, header) for h in headers]]
     for row in payload.get("rows") or []:
         rows.append([
-            Paragraph(escape(str(row.get("enquiry_number") or "—")), cell),
-            Paragraph(escape(str(row.get("enquiry_date") or "—")), cell),
-            Paragraph(escape(str(row.get("customer_name") or "—")), cell_left),
-            Paragraph(escape(str(row.get("city") or "—")), cell),
-            Paragraph(escape(str(row.get("contact_number") or "—")), cell),
-            Paragraph(escape(str(row.get("email") or "—")), cell_left),
-            Paragraph(escape(str(row.get("cars") or "—")), cell),
-            Paragraph(escape(str(row.get("product") or "—")), cell_left),
-            Paragraph(escape(str(row.get("source") or "—")), cell),
-            Paragraph(escape(str(row.get("status") or "—")), cell),
+            Paragraph(escape(_pdf_text(row.get("enquiry_number"))), cell),
+            Paragraph(escape(_pdf_text(row.get("enquiry_date"))), cell),
+            Paragraph(escape(_pdf_text(row.get("customer_name"))), cell_left),
+            Paragraph(escape(_pdf_text(row.get("city"))), cell),
+            Paragraph(escape(_pdf_text(row.get("contact_number"))), cell),
+            Paragraph(escape(_pdf_text(row.get("email"))), cell_left),
+            Paragraph(escape(_pdf_text(row.get("cars"))), cell),
+            Paragraph(escape(_pdf_text(row.get("product"))), cell_left),
+            Paragraph(escape(_pdf_text(row.get("source"))), cell),
+            Paragraph(escape(_pdf_text(row.get("status"))), cell),
             Paragraph(lines(row.get("progress")), cell_left),
             Paragraph(lines(row.get("category")), cell_left),
             Paragraph(lines(row.get("remarks")), cell_left),
-            Paragraph(escape(str(row.get("employee") or "—")), cell),
+            Paragraph(escape(_pdf_text(row.get("employee"))), cell),
             Paragraph(_inr(row.get("lead_value")) if row.get("lead_value") not in (None, "—", "") else "—", cell),
             Paragraph(_inr(row.get("quotation_value")) if row.get("quotation_value") not in (None, "—", "") else "—", cell),
         ])

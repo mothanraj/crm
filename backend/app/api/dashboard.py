@@ -5,7 +5,7 @@ from collections import defaultdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import and_, case, func, or_, select
@@ -286,7 +286,7 @@ def _dashboard_history_payload(
         quote_history_q = quote_history_q.filter(Quotation.quotation_date >= start)
     if end:
         quote_history_q = quote_history_q.filter(Quotation.quotation_date <= end)
-    quote_history_count = int(quote_history_q.scalar() or 0)
+    quote_history_count = _as_rupee(quote_history_q.scalar())
 
     progress_tiles = {
         "in_followup": 0,
@@ -1892,13 +1892,76 @@ def source_details_export(
     )
 
 
+REPORT_TYPES = (
+    "source", "product", "category", "lead_value", "quotation",
+    "monthly", "detailed", "dashboard_history",
+)
+REPORT_FILENAMES = {
+    "source": "lead-source-report",
+    "product": "product-wise-report",
+    "category": "category-wise-report",
+    "lead_value": "lead-value-report",
+    "quotation": "quotation-report",
+    "monthly": "monthly-lead-volume",
+    "detailed": "detailed-lead-report",
+    "dashboard_history": "dashboard-history-report",
+}
+
+
+def build_report_payload(db: Session, u: User, report_type: str, params: dict) -> dict:
+    """Build the payload the PDF builder expects from stored string params.
+
+    This is the single source of truth for report data: the /reports/pdf route
+    and the background export worker both call it, so a queued PDF is always
+    the same report that the on-screen table/Excel download shows.
+    """
+    if report_type == "monthly":
+        start, end = _resolve_month_span(params.get("from_month"), params.get("to_month"))
+        return {
+            "rows": _monthly_rows(db, u, start, end),
+            "from_month": params.get("from_month"),
+            "to_month": params.get("to_month"),
+        }
+    if report_type == "detailed":
+        start, end, resolved = _resolve_detailed_range(
+            params.get("mode"), params.get("month"), params.get("week"),
+            params.get("from_date"), params.get("to_date"),
+            params.get("from_month"), params.get("to_month"), params.get("year"),
+        )
+        lead_filters = _detailed_lead_filters(
+            search=params.get("search", ""),
+            status=params.get("status", ""),
+            source=params.get("source", ""),
+            customer_review=params.get("customer_review", ""),
+            sla=params.get("sla", ""),
+            starred=params.get("starred", ""),
+            sort=params.get("sort", ""),
+        )
+        return _detailed_leads_payload(
+            db, start, end, params.get("from_month"), params.get("to_month"),
+            resolved, lead_filters,
+        )
+    start, end, resolved = _resolve_range(
+        params.get("mode", "custom"), params.get("month"), params.get("from_date"),
+        params.get("to_date"), params.get("week"), params.get("year"),
+    )
+    if report_type == "dashboard_history":
+        return _dashboard_history_payload(db, start, end, resolved)
+    if report_type == "lead_value":
+        return _lead_value_for_range(db, start, end, resolved, u)
+    if report_type == "quotation":
+        return _quotation_report_payload(db, start, end, resolved)
+    return {
+        "product": _product_details_payload,
+        "category": _category_details_payload,
+        "source": _source_details_payload,
+    }[report_type](db, start, end, resolved)
+
+
 @router.get("/reports/pdf")
 def report_pdf(
     db: Session = Depends(get_db), u: User = Depends(current_user),
-    report_type: str = Query(
-        ...,
-        pattern="^(source|product|category|lead_value|quotation|monthly|detailed|dashboard_history)$",
-    ),
+    report_type: str = Query(..., pattern="^(" + "|".join(REPORT_TYPES) + ")$"),
     mode: str = Query("custom"), month: str | None = None,
     week: str | None = None,
     year: str | None = None,
@@ -1906,57 +1969,36 @@ def report_pdf(
     from_month: str | None = None, to_month: str | None = None,
     lead_filters: dict = Depends(_detailed_lead_filters),
 ):
-    _require_reports(u)
-    from app.services.report_pdf import build_report_pdf
+    """Queue a PDF instead of rendering it inside the HTTP request.
 
-    if report_type == "monthly":
-        start, end = _resolve_month_span(from_month, to_month)
-        rows = _monthly_rows(db, u, start, end)
-        content = build_report_pdf(
-            {
-                "rows": rows,
-                "from_month": from_month,
-                "to_month": to_month,
-            },
-            "monthly",
-        )
-        filename = "monthly-lead-volume.pdf"
-    elif report_type == "detailed":
-        start, end, resolved = _resolve_detailed_range(mode, month, week, from_date, to_date, from_month, to_month)
-        payload = _detailed_leads_payload(db, start, end, from_month, to_month, resolved, lead_filters)
-        if payload.get("count", 0) > settings.EXPORT_SYNC_MAX_ROWS:
-            raise HTTPException(
-                413,
-                f"This report has {payload['count']} leads — too many for an instant PDF. "
-                "Use the queued PDF export (it downloads when ready) or narrow the date range.",
-            )
-        content = build_report_pdf(payload, "detailed")
-        filename = "detailed-lead-report.pdf"
-    else:
-        start, end, resolved = _resolve_range(mode, month, from_date, to_date, week, year)
-        if report_type == "dashboard_history":
-            payload = _dashboard_history_payload(db, start, end, resolved)
-            content = build_report_pdf(payload, "dashboard_history")
-            filename = "dashboard-history-report.pdf"
-        elif report_type == "lead_value":
-            payload = _lead_value_for_range(db, start, end, resolved, u)
-            content = build_report_pdf(payload, "lead_value")
-            filename = "lead-value-report.pdf"
-        elif report_type == "quotation":
-            payload = _quotation_report_payload(db, start, end, resolved)
-            content = build_report_pdf(payload, "quotation")
-            filename = "quotation-report.pdf"
-        else:
-            builders = {
-                "product": _product_details_payload,
-                "category": _category_details_payload,
-                "source": _source_details_payload,
-            }
-            payload_builder = builders[report_type]
-            content = build_report_pdf(payload_builder(db, start, end, resolved), report_type)
-            filename = f"{report_type}-report.pdf"
-    return StreamingResponse(BytesIO(content), media_type="application/pdf",
-                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    Rendering a 696-lead report takes ~30s; doing that synchronously makes the
+    download fail on any deploy swap, cold start or proxy hiccup. Jobs run in
+    the background and are polled/downloaded via /reports/exports/*.
+    """
+    _require_reports(u)
+    from app.services import export_jobs
+
+    params = {
+        "report_type": report_type,
+        "mode": mode or "",
+        "month": month or "",
+        "week": week or "",
+        "year": year or "",
+        "from_date": from_date or "",
+        "to_date": to_date or "",
+        "from_month": from_month or "",
+        "to_month": to_month or "",
+    }
+    for key, value in lead_filters.items():
+        if value is not None:
+            params[key] = str(value)
+    job = export_jobs.create_job(u.id, report_type, params)
+    return JSONResponse(status_code=202, content={
+        "job": job,
+        "poll_url": f"/api/reports/exports/{job['id']}",
+        "download_url": f"/api/reports/exports/{job['id']}/download",
+        "message": "PDF queued — poll the job and download when ready.",
+    })
 
 
 def _product_wise_rows(db: Session, start: date | None = None, end: date | None = None):

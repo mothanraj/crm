@@ -16,8 +16,6 @@ const COLORS = ['#65A30D', '#6E6E6E', '#B5CC18', '#3F6212', '#A3A380', '#2F9E44'
 
 const LEAD_PAGE_SIZE = 100;
 const LEAD_REQUEST_TIMEOUT = 60000;
-/** Above this many rows the PDF is generated as a background job. Keep in sync with backend EXPORT_SYNC_MAX_ROWS. */
-const EXPORT_SYNC_MAX_ROWS = 5000;
 
 function apiError(e: any, fallback: string) {
   const detail = e?.response?.data?.detail;
@@ -4712,6 +4710,8 @@ export function Reports() {
   /** Background PDF export (large reports): job id + last polled status. */
   const [exportJobId, setExportJobId] = useState('');
   const [exportStatus, setExportStatus] = useState<{ status: string; progress: number; error: string; filename: string } | null>(null);
+  /** Error setter of the tab that queued the export, so results show on that tab. */
+  const exportErrSetter = useRef<((s: string) => void) | null>(null);
 
   const apiErr = (e: any, fallback: string) => {
     const d = e?.response?.data?.detail;
@@ -4723,6 +4723,8 @@ export function Reports() {
     if (e?.response?.status === 403) return 'Reports require an admin role';
     if (e?.code === 'ECONNABORTED') return `${fallback} — request timed out; try a narrower date range`;
     if (e?.message === 'Network Error') return 'Cannot reach the server. Is the backend running?';
+    // downloadReport throws Error(backend detail) for JSON error bodies — keep it.
+    if (typeof e?.message === 'string' && e.message.trim() && !/^Request failed with status code/.test(e.message)) return e.message;
     return fallback;
   };
 
@@ -4922,64 +4924,14 @@ export function Reports() {
     }
   };
 
-  const downloadPdf = async (
-    kind: 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed' | 'dashboard_history',
-    f: ReportFilter | { fromMonth: string; toMonth: string },
-    setErr: (s: string) => void,
-    /** Sends exactly these params (date + lead filters of the last Apply) instead of re-deriving them. */
-    overrideParams?: Record<string, string>,
-  ) => {
-    setPdfBusy(true); setErr('');
-    const names = {
-      source: 'lead-source-report.pdf',
-      product: 'product-wise-report.pdf',
-      category: 'category-wise-report.pdf',
-      lead_value: 'lead-value-report.pdf',
-      quotation: 'quotation-report.pdf',
-      monthly: 'monthly-lead-volume.pdf',
-      detailed: 'detailed-lead-report.pdf',
-      dashboard_history: 'dashboard-history-report.pdf',
-    };
-    try {
-      const params = overrideParams
-        ? { ...overrideParams, report_type: kind }
-        : kind === 'monthly'
-          ? { ...monthlyParams(f as { fromMonth: string; toMonth: string }), report_type: kind }
-          : { ...toParams(f as ReportFilter), report_type: kind };
-      if (overrideParams) {
-        // Params come from the last successful Apply — already validated.
-      } else if (kind === 'monthly') {
-        const mf = f as { fromMonth: string; toMonth: string };
-        if (mf.fromMonth && mf.toMonth && mf.fromMonth > mf.toMonth) {
-          setErr('From month must be on or before To month.');
-          setPdfBusy(false);
-          return;
-        }
-      } else {
-        const v = validate(f as ReportFilter);
-        if (v) { setErr(v); setPdfBusy(false); return; }
-      }
-      await downloadReport('/reports/pdf', names[kind], params);
-    } catch (e: any) {
-      const response = e?.response?.data;
-      if (response instanceof Blob) {
-        try {
-          const parsed = JSON.parse(await response.text());
-          setErr(typeof parsed?.detail === 'string' ? parsed.detail : 'PDF download failed');
-        } catch {
-          setErr(apiErr(e, 'PDF download failed'));
-        }
-      } else {
-        setErr(apiErr(e, 'PDF download failed'));
-      }
-    } finally { setPdfBusy(false); }
-  };
+  type ReportKind = 'source' | 'product' | 'category' | 'lead_value' | 'quotation' | 'monthly' | 'detailed' | 'dashboard_history';
 
-  /** Queue a large PDF export; progress is polled and auto-downloaded when ready. */
-  const startExport = async (params: Record<string, string>, setErr: (s: string) => void) => {
+  /** Queue a report PDF in the background; progress is polled and auto-downloaded. */
+  const startExport = async (kind: ReportKind, params: Record<string, string>, setErr: (s: string) => void) => {
     setErr(''); setExportStatus(null); setPdfBusy(true);
+    exportErrSetter.current = setErr;
     try {
-      const { data } = await api.post('/reports/exports', { report_type: 'detailed', params });
+      const { data } = await api.post('/reports/exports', { report_type: kind, params });
       setExportJobId(data.job.id);
       setExportStatus(data.job);
     } catch (e: any) {
@@ -4987,10 +4939,36 @@ export function Reports() {
     } finally { setPdfBusy(false); }
   };
 
+  const downloadPdf = async (
+    kind: ReportKind,
+    f: ReportFilter | { fromMonth: string; toMonth: string },
+    setErr: (s: string) => void,
+    /** Sends exactly these params (date + lead filters of the last Apply) instead of re-deriving them. */
+    overrideParams?: Record<string, string>,
+  ) => {
+    const params = overrideParams
+      ? { ...overrideParams }
+      : kind === 'monthly'
+        ? monthlyParams(f as { fromMonth: string; toMonth: string })
+        : toParams(f as ReportFilter);
+    if (kind === 'monthly') {
+      const mf = f as { fromMonth: string; toMonth: string };
+      if (mf.fromMonth && mf.toMonth && mf.fromMonth > mf.toMonth) {
+        setErr('From month must be on or before To month.');
+        return;
+      }
+    } else if (!overrideParams) {
+      const v = validate(f as ReportFilter);
+      if (v) { setErr(v); return; }
+    }
+    await startExport(kind, params, setErr);
+  };
+
   useEffect(() => {
     if (!exportJobId) return;
     let cancelled = false;
     let timer: number | undefined;
+    const reportErr = (message: string) => exportErrSetter.current?.(message);
     const poll = async () => {
       try {
         const { data } = await api.get(`/reports/exports/${exportJobId}`);
@@ -4999,22 +4977,23 @@ export function Reports() {
         if (data.status === 'ready') {
           setExportJobId('');
           try {
-            await downloadReport(`/reports/exports/${exportJobId}/download`, data.filename || 'detailed-lead-report.pdf');
-            setDetailedErr('');
+            await downloadReport(`/reports/exports/${exportJobId}/download`, data.filename || 'report.pdf');
+            reportErr('');
+            setExportStatus(null);
           } catch (e: any) {
-            setDetailedErr(apiErr(e, 'Could not download the PDF'));
+            reportErr(apiErr(e, 'Could not download the PDF'));
           }
           return;
         }
         if (data.status === 'failed') {
           setExportJobId('');
-          setDetailedErr(data.error || 'PDF export failed');
+          reportErr(data.error || 'PDF export failed');
           return;
         }
       } catch (e: any) {
         if (cancelled) return;
         setExportJobId('');
-        setDetailedErr(apiErr(e, 'Could not check the PDF export'));
+        reportErr(apiErr(e, 'Could not check the PDF export'));
         return;
       }
       timer = window.setTimeout(poll, 2000);
@@ -5176,6 +5155,13 @@ export function Reports() {
           </button>
         }
       />
+
+      {exportStatus && (exportStatus.status === 'queued' || exportStatus.status === 'processing') && (
+        <div className="text-sm text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
+          Generating {exportStatus.filename || 'PDF'} in the background — {exportStatus.progress ?? 0}%.
+          The file downloads automatically when ready; you can keep using the CRM.
+        </div>
+      )}
 
       {activeReport === 'dashboard_history' && (() => {
         const t = dashHistory?.tiles || {};
@@ -5867,9 +5853,7 @@ export function Reports() {
               !detailedReport,
               () => {
                 if (!detailedReport) return;
-                const count = Number(detailedReport.count ?? (detailedReport.rows || []).length ?? 0);
-                if (count > EXPORT_SYNC_MAX_ROWS) void startExport(appliedDetailedParams, setDetailedErr);
-                else void downloadPdf('detailed', detailedFilter, setDetailedErr, appliedDetailedParams);
+                void downloadPdf('detailed', detailedFilter, setDetailedErr, appliedDetailedParams);
               },
             )}
             <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
@@ -5950,12 +5934,6 @@ export function Reports() {
               </div>
             </div>
             {detailedErr && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{detailedErr}</div>}
-            {exportStatus && (exportStatus.status === 'queued' || exportStatus.status === 'processing') && (
-              <div className="text-sm text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
-                Generating PDF for {detailedReport?.count ?? '—'} leads — {exportStatus.progress ?? 0}%.
-                This runs in the background; the file downloads automatically when ready.
-              </div>
-            )}
             {detailedReport && (
               <div className="space-y-2">
                 <div className="text-sm text-graphite-700 flex flex-wrap gap-6">

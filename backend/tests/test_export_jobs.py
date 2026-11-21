@@ -1,10 +1,14 @@
 """Background export job tests (filesystem job store)."""
 import json
-from pathlib import Path
+import os
+import time
+from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
 from app.core.config import settings
+from app.schemas import ExportRequest
 from app.services import export_jobs
 
 
@@ -14,9 +18,22 @@ def job_root(tmp_path, monkeypatch):
     return tmp_path / "exports"
 
 
-def test_job_lifecycle_creates_pdf(job_root):
-    job = export_jobs.create_job("user-1", "detailed", {"mode": "month", "month": "2026-11"})
+@pytest.fixture()
+def fake_render(monkeypatch):
+    """Avoid a real DB: the worker only needs an owner and a payload."""
+    db = Mock()
+    db.get.return_value = object()  # export owner lookup
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        "app.api.dashboard.build_report_payload",
+        lambda _db, _u, _kind, _params: {"rows": [], "count": 0, "filters": {}},
+    )
+
+
+def test_job_lifecycle_creates_pdf(job_root, fake_render):
+    job = export_jobs.create_job(str(uuid4()), "detailed", {"mode": "month", "month": "2026-11"})
     assert job["status"] == export_jobs.QUEUED
+    assert job["filename"].startswith("detailed-lead-report-")
     assert export_jobs.get_job(job["id"])["status"] == export_jobs.QUEUED
 
     export_jobs.process_pending()
@@ -30,14 +47,15 @@ def test_job_lifecycle_creates_pdf(job_root):
 
 
 def test_job_is_private_to_owner(job_root):
-    job = export_jobs.create_job("user-1", "detailed", {})
-    assert export_jobs.get_job(job["id"], "user-1") is not None
-    assert export_jobs.get_job(job["id"], "someone-else") is None
+    owner = str(uuid4())
+    job = export_jobs.create_job(owner, "detailed", {})
+    assert export_jobs.get_job(job["id"], owner) is not None
+    assert export_jobs.get_job(job["id"], str(uuid4())) is None
     assert export_jobs.get_job("not-a-uuid") is None
 
 
 def test_failed_job_records_error(job_root, monkeypatch):
-    job = export_jobs.create_job("user-1", "detailed", {})
+    job = export_jobs.create_job(str(uuid4()), "detailed", {})
 
     def boom(meta, db, progress):
         raise RuntimeError("render exploded")
@@ -51,14 +69,27 @@ def test_failed_job_records_error(job_root, monkeypatch):
 
 
 def test_cleanup_removes_expired_files(job_root, monkeypatch):
-    import time
-
-    job = export_jobs.create_job("user-1", "detailed", {})
+    job = export_jobs.create_job(str(uuid4()), "detailed", {})
     meta = job_root / f"{job['id']}.json"
     old = time.time() - 25 * 3600
-    import os
-
     os.utime(meta, (old, old))
     export_jobs.cleanup_old()
     assert not meta.exists()
     assert export_jobs.get_job(job["id"]) is None
+
+
+@pytest.mark.parametrize("kind, prefix", [
+    ("source", "lead-source-report"),
+    ("product", "product-wise-report"),
+    ("category", "category-wise-report"),
+    ("lead_value", "lead-value-report"),
+    ("quotation", "quotation-report"),
+    ("monthly", "monthly-lead-volume"),
+    ("detailed", "detailed-lead-report"),
+    ("dashboard_history", "dashboard-history-report"),
+])
+def test_all_report_types_can_be_queued(job_root, kind, prefix):
+    assert ExportRequest(report_type=kind).report_type == kind
+    job = export_jobs.create_job(str(uuid4()), kind, {})
+    assert job["report_type"] == kind
+    assert job["filename"].startswith(prefix + "-")

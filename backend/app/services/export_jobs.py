@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from uuid import UUID
 
 from app.core.config import settings
 
@@ -33,6 +34,16 @@ FAILED = "failed"
 _PUBLIC_FIELDS = (
     "id", "report_type", "status", "progress", "error", "filename", "created_at",
 )
+_FILENAMES = {
+    "source": "lead-source-report",
+    "product": "product-wise-report",
+    "category": "category-wise-report",
+    "lead_value": "lead-value-report",
+    "quotation": "quotation-report",
+    "monthly": "monthly-lead-volume",
+    "detailed": "detailed-lead-report",
+    "dashboard_history": "dashboard-history-report",
+}
 
 
 def _root() -> Path:
@@ -78,7 +89,7 @@ def create_job(user_id, report_type: str, params: dict | None = None) -> dict:
         "status": QUEUED,
         "progress": 10,
         "error": "",
-        "filename": f"detailed-lead-report-{job_id[:8]}.pdf",
+        "filename": f"{_FILENAMES.get(report_type, 'report')}-{job_id[:8]}.pdf",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _atomic_write_json(_meta_path(job_id), meta)
@@ -146,36 +157,22 @@ def _set_progress(job_id: str, **fields) -> None:
 
 
 def _render(meta: dict, db, progress: Callable[[int], None]) -> bytes:
-    """Build the PDF for a job using the same code path as the live report."""
-    from app.api.dashboard import (
-        _detailed_lead_filters,
-        _detailed_leads_payload,
-        _resolve_detailed_range,
-    )
+    """Build the PDF for a job using the same payload builder as the routes."""
+    from app.api.dashboard import REPORT_TYPES, build_report_payload
+    from app.models import User
     from app.services.report_pdf import build_report_pdf
 
     params = meta.get("params") or {}
-    start, end, resolved = _resolve_detailed_range(
-        params.get("mode"), params.get("month"), params.get("week"),
-        params.get("from_date"), params.get("to_date"),
-        params.get("from_month"), params.get("to_month"), params.get("year"),
-    )
-    lead_filters = _detailed_lead_filters(
-        search=params.get("search", ""),
-        status=params.get("status", ""),
-        source=params.get("source", ""),
-        customer_review=params.get("customer_review", ""),
-        sla=params.get("sla", ""),
-        starred=params.get("starred", ""),
-        sort=params.get("sort", ""),
-    )
-    progress(40)
-    payload = _detailed_leads_payload(
-        db, start, end, params.get("from_month"), params.get("to_month"),
-        resolved, lead_filters,
-    )
+    report_type = str(meta.get("report_type") or "detailed")
+    if report_type not in REPORT_TYPES:
+        raise ValueError(f"Unknown report type: {report_type}")
+    progress(30)
+    user = db.get(User, UUID(str(meta.get("user_id") or "")))
+    if user is None:
+        raise RuntimeError("Export job owner not found")
+    payload = build_report_payload(db, user, report_type, params)
     progress(70)
-    content = build_report_pdf(payload, "detailed")
+    content = build_report_pdf(payload, report_type)
     progress(95)
     return content
 

@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 
 
 class ExportRequest(BaseModel):
-    """Request a background PDF export for a report (currently: detailed)."""
-    report_type: str = Field(default="detailed", pattern="^detailed$")
+    """Request a background PDF export for any supported report."""
+    report_type: str = Field(
+        default="detailed",
+        pattern="^(source|product|category|lead_value|quotation|monthly|detailed|dashboard_history)$",
+    )
     params: dict[str, str] = Field(default_factory=dict)
 
 

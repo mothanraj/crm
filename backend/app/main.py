@@ -1,10 +1,11 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.api import admin_maintenance, analytics, auth, dashboard, employees, exports, importer, leads, stream
 from app.core.config import settings
@@ -21,6 +22,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lead CRM", lifespan=lifespan)
+log = logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception):
+    """Return a structured JSON error so downloads can show the real cause.
+
+    Starlette's default 500 is plain text ("Internal Server Error"), which the
+    frontend's blob handler could not parse and reported as a generic failure.
+    """
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
+
+
 app.add_middleware(CORSMiddleware, allow_origins=origins,
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth.router)
